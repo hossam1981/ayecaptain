@@ -27,9 +27,11 @@ html,body{margin:0;height:100%;background:var(--ink);font-family:"Barlow Semi Co
 button{font-family:inherit;font-size:inherit;border:0;background:none;color:inherit;cursor:pointer;padding:0}
 
 /* top strip */
-#top{position:fixed;top:0;left:0;right:0;padding:calc(var(--sat) + 8px) 10px 8px;z-index:600;display:flex;align-items:flex-start;gap:8px;pointer-events:none}
+#top{position:fixed;top:0;left:0;right:0;padding:calc(var(--sat) + 8px) 10px 8px;z-index:600;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 #top>*{pointer-events:auto}
-#speed{background:var(--ink);color:var(--paper);border-radius:14px;padding:6px 14px 8px;min-width:104px;line-height:1}
+#topRow{display:flex;align-items:flex-start;gap:8px;pointer-events:none}
+#topRow>*{pointer-events:auto}
+#speed{background:var(--ink);color:var(--paper);border-radius:14px;padding:6px 14px 8px;min-width:104px;max-width:60vw;line-height:1}
 #speed .n{font-size:44px;font-weight:700;letter-spacing:-1px}
 #speed .u{font-size:13px;opacity:.75;margin-left:4px}
 #speed .h{font-size:14px;opacity:.85;margin-top:2px}
@@ -42,7 +44,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 #side{position:fixed;right:10px;top:calc(var(--sat) + 74px);z-index:600;display:flex;flex-direction:column;gap:10px}
 
 /* alert banner */
-#alert{position:fixed;left:10px;right:10px;top:calc(var(--sat) + 74px);z-index:590;display:none;border-radius:12px;padding:10px 12px;color:#fff;background:var(--amber);font-weight:700;font-size:15px;line-height:1.2;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:calc(100% - 76px)}
+#alert{align-self:flex-start;display:none;border-radius:12px;padding:10px 12px;color:#fff;background:var(--amber);font-weight:700;font-size:15px;line-height:1.2;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:calc(100% - 62px)}
 #alert.warn{background:var(--red)}
 #alert.show{display:block}
 #alert small{display:block;font-weight:500;opacity:.9;margin-top:4px;max-height:0;overflow:hidden;transition:max-height .25s}
@@ -87,14 +89,13 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .legend{display:flex;gap:12px;font-size:13px;opacity:.85;margin-top:6px}
 
 /* go-to HUD */
-#nav{position:fixed;left:10px;right:66px;top:calc(var(--sat) + 74px);z-index:595;display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:10px 12px;line-height:1.1}
+#nav{align-self:stretch;max-width:calc(100% - 62px);display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:10px 12px;line-height:1.1}
 #nav.show{display:flex;align-items:center;gap:12px}
 #nav .big{font-size:26px;font-weight:700}
 #nav .big small{font-size:13px;font-weight:500;opacity:.7;margin-left:2px}
 #nav .lbl{font-size:12px;opacity:.7}
 #nav .stop{margin-left:auto;background:rgba(255,255,255,.14);border-radius:9px;padding:7px 10px;font-weight:700;font-size:14px}
 #nav .cmp{width:34px;height:34px;flex:none}
-#alert.pushed{top:calc(var(--sat) + 140px)}
 
 /* boat-limit warning */
 #boatwarn{display:none;margin:0 14px 10px;padding:9px 12px;border-radius:10px;background:var(--red);color:#fff;font-weight:700;font-size:15px}
@@ -121,6 +122,19 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .wp{width:14px;height:14px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
 .leaflet-control-attribution{font-size:9px;opacity:.7}
 @media (prefers-reduced-motion:reduce){.boat svg{transition:none}#sheet{transition:none}}
+
+/* desktop / wide browser */
+@media (min-width:820px){
+  #top{right:auto;max-width:600px}
+  #nav{max-width:none}
+  #alert{max-width:520px}
+  #routebar{left:auto;right:12px;max-width:560px;bottom:calc(var(--sab) + 16px)}
+  #sheet{left:12px;right:auto;width:390px;bottom:12px;border-radius:20px;max-height:calc(100vh - 24px);
+         transform:translateY(calc(100% - 150px))}
+  #sheet.open{transform:translateY(0)}
+  #pmodal{align-items:center;justify-content:center;padding:24px}
+  #pform{max-width:480px;border-radius:20px}
+}
 </style>
 </head>
 <body>
@@ -128,21 +142,23 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 <canvas id="fx"></canvas>
 
 <div id="top">
-  <div id="speed"><span class="n">0.0</span><span class="u">kn</span><div class="h">— · waiting for GPS</div></div>
-  <div id="layers">
-    <button data-l="map" class="on">Map</button>
-    <button data-l="chart">Chart</button>
-    <button data-l="sat">Sat</button>
-    <button data-l="dark">Dark</button>
+  <div id="topRow">
+    <div id="speed"><span class="n">0.0</span><span class="u">kn</span><div class="h">— · waiting for GPS</div></div>
+    <div id="layers">
+      <button data-l="map" class="on">Map</button>
+      <button data-l="chart">Chart</button>
+      <button data-l="sat">Sat</button>
+      <button data-l="dark">Dark</button>
+    </div>
   </div>
+  <div id="nav">
+    <svg class="cmp" id="navCmp" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5"/><path d="M12 3l5 14-5-3-5 3z" fill="#F2A93B"/></svg>
+    <div><div class="big" id="navDist">—<small>nm</small></div><div class="lbl" id="navBrg">next point</div></div>
+    <div><div class="big" id="navEta">—</div><div class="lbl" id="navEtaL">to final point</div></div>
+    <button class="stop" id="navStop">Done</button>
+  </div>
+  <div id="alert"><span id="alertText"></span><small id="alertBody"></small></div>
 </div>
-<div id="nav">
-  <svg class="cmp" id="navCmp" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5"/><path d="M12 3l5 14-5-3-5 3z" fill="#F2A93B"/></svg>
-  <div><div class="big" id="navDist">—<small>nm</small></div><div class="lbl" id="navBrg">next point</div></div>
-  <div><div class="big" id="navEta">—</div><div class="lbl" id="navEtaL">to final point</div></div>
-  <button class="stop" id="navStop">Done</button>
-</div>
-<div id="alert"><span id="alertText"></span><small id="alertBody"></small></div>
 <div id="side">
   <button class="round on" id="follow" title="Follow my boat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
   <button class="round" id="gotoBtn" title="Go to a point"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
@@ -212,7 +228,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
       <div><label>Use defaults for</label><button id="pAuto" style="width:100%;padding:10px;border:1.5px solid rgba(15,42,68,.25);border-radius:10px;font-size:15px;font-weight:700;color:var(--sea)">This size &amp; type</button></div>
     </div>
     <h2 style="font-size:17px;margin-top:16px">Map</h2>
-    <label>CARTO map key (free at carto.com/basemaps/apikey) — leave blank to use the Esri map</label><input id="pKey" placeholder="paste key">
+    <label>CARTO map key — optional, gives the cleanest labels (free at carto.com/basemaps/apikey). Saved on this device; leave blank to use the Esri street map.</label><input id="pKey" placeholder="paste key">
     <button class="save" id="pSave">Save boat</button>
   </div>
 </div>
@@ -265,36 +281,46 @@ if (!store.get('boat')) setTimeout(openProfile, 1500);
 // ---------- map & layers ----------
 const home = store.get('lastPos') || {lat:40.44, lng:-74.13}; // Raritan Bay default
 const map = L.map('map', {zoomControl:false, attributionControl:true}).setView([home.lat, home.lng], 13);
-// CARTO Voyager is the default look. It needs a free key since Aug 2026 (carto.com/basemaps/apikey).
-// Paste it in Edit boat -> Map key, or hardcode it here. Without a key the app falls back to Esri (no watermark).
+if (matchMedia('(pointer:fine)').matches) L.control.zoom({position:'bottomright'}).addTo(map); // mouse users get +/- buttons
+
+// Optional CARTO key: gives the cleanest street + place labels (free at carto.com/basemaps/apikey).
+// It is remembered on this device (Edit boat -> Map key). To make every device use it with no setup,
+// paste it between the quotes below once and redeploy.
 const CARTO_KEY = '';
 const cartoKey = () => (store.get('cartoKey') || CARTO_KEY).trim();
 const carto = style => L.tileLayer(`https://{s}.basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}{r}.png?key=${cartoKey()}`, {subdomains:'abcd', maxZoom:20, attribution:'© OpenStreetMap © CARTO'});
-const esriLight = () => L.layerGroup([
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:13, maxZoom:19, attribution:'Esri, GEBCO, NOAA'}),
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:13, maxZoom:19, opacity:.8})]);
+
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+const esriTile = (svc, o) => L.tileLayer(ESRI + svc + '/MapServer/tile/{z}/{y}/{x}', Object.assign({maxZoom:19}, o||{}));
+// labelled street base: roads, address ranges, town & township names, parks — like Google Maps
+const streets = () => esriTile('World_Street_Map', {maxNativeZoom:19, attribution:'Esri, HERE, Garmin, USGS, NGA'});
+// road + place-name labels to lay over the satellite view
+const overlayLabels = () => L.layerGroup([
+  esriTile('Reference/World_Transportation', {maxNativeZoom:19}),
+  esriTile('Reference/World_Boundaries_and_Places', {maxNativeZoom:19})]);
 const esriDark = () => L.layerGroup([
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:16, maxZoom:19, attribution:'Esri'}),
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:16, maxZoom:19, opacity:.7})]);
+  esriTile('Canvas/World_Dark_Gray_Base', {maxNativeZoom:16, attribution:'Esri'}),
+  esriTile('Canvas/World_Dark_Gray_Reference', {maxNativeZoom:16, opacity:.9})]);
 let base = {};
 function buildBase(){
   Object.values(base).forEach(l => map.removeLayer(l));
   base = {
-    light: cartoKey() ? carto('voyager_nolabels') : esriLight(),
-    sat:   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19, attribution:'Esri'}),
-    dark:  cartoKey() ? carto('dark_nolabels') : esriDark()
+    light: cartoKey() ? carto('voyager') : streets(),
+    sat:   esriTile('World_Imagery', {attribution:'Esri'}),
+    dark:  cartoKey() ? carto('dark_all') : esriDark()
   };
 }
 buildBase();
 const noaa = L.tileLayer('https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}', {zoomOffset:-2, minZoom:2, maxNativeZoom:18, maxZoom:19, opacity:1, attribution:'NOAA ENC'});
+const satLbl = overlayLabels();
 let mode = store.get('mode') || 'map';
 function setMode(m){
   mode = m; store.set('mode', m);
   Object.values(base).forEach(l => map.removeLayer(l));
-  map.removeLayer(noaa);
+  map.removeLayer(noaa); map.removeLayer(satLbl);
   if (m==='map')   { base.light.addTo(map); }
   if (m==='chart') { base.light.addTo(map); noaa.setOpacity(1).addTo(map); }
-  if (m==='sat')   { base.sat.addTo(map);   noaa.setOpacity(.55).addTo(map); }
+  if (m==='sat')   { base.sat.addTo(map);   satLbl.addTo(map); noaa.setOpacity(.5).addTo(map); }
   if (m==='dark')  { base.dark.addTo(map);  noaa.setOpacity(.6).addTo(map); }
   document.querySelectorAll('#layers button').forEach(b => b.classList.toggle('on', b.dataset.l===m));
 }
