@@ -616,6 +616,8 @@ const routeLine = L.polyline([], {color:'#F2A93B', weight:5, opacity:.95, dashAr
 const legLine   = L.polyline([], {color:'#D93A2B', weight:4, opacity:.9, dashArray:'1 12', lineCap:'round'}).addTo(map);
 const wpLayer = L.layerGroup().addTo(map);
 const cruise = () => curSpeed > 1.5 ? curSpeed : (P.cruise || 20);
+// where the boat icon actually is: the live fix, or the last-known / default spot before GPS locks on
+const boatPos = () => lastFix || home;
 const fmtMin = m => m >= 60 ? `${Math.floor(m/60)}h ${Math.round(m%60)}m` : `${Math.max(1,Math.round(m))} min`;
 
 $('#gotoBtn').onclick = () => {
@@ -638,7 +640,7 @@ function draw(){
   $('#gotoBtn').classList.toggle('on', picking || has);
   if (!has){ legLine.setLatLngs([]); return; }
   // total leg-by-leg from the boat through every point
-  let total = 0; if (lastFix) total += haversine(lastFix, wps[legIdx]);
+  let total = haversine(boatPos(), wps[legIdx]);
   for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
   const nm = total/NM, mins = nm/cruise()*60;
   $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
@@ -648,13 +650,13 @@ function draw(){
   updateNav();
 }
 function updateNav(){
-  if (!wps.length || !lastFix) return;
-  const tgt = wps[legIdx], d = haversine(lastFix, tgt), brg = bearing(lastFix, tgt);
-  legLine.setLatLngs([lastFix, tgt]);
+  if (!wps.length) return;
+  const from = boatPos(), tgt = wps[legIdx], d = haversine(from, tgt), brg = bearing(from, tgt);
+  legLine.setLatLngs([from, tgt]);
   $('#navDist').innerHTML = d < 370 ? `${Math.round(d*3.28)}<small>ft</small>` : `${(d/NM).toFixed(d/NM<10?2:1)}<small>nm</small>`;
   $('#navBrg').textContent = `steer ${Math.round(brg).toString().padStart(3,'0')}° ${dirName(brg)} · point ${legIdx+1} of ${wps.length}`;
   $('#navCmp').querySelector('path').setAttribute('transform', `rotate(${brg-heading} 12 12)`);
-  if (d < 40){
+  if (d < 40 && lastFix){   // only auto-advance on a real position fix, not the fallback
     if (navigator.vibrate) navigator.vibrate([200,100,200]);
     if (legIdx < wps.length-1){ legIdx++; draw(); } else $('#navBrg').textContent = 'you have arrived';
   }
