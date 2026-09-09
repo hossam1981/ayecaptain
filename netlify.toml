@@ -1,0 +1,3 @@
+[build]
+  publish = "."
+  # Static PWA — no build step

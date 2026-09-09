@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Bayside</title>
+<meta name="theme-color" content="#0F2A44">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0F2A44; --paper:#F4F8FA; --sea:#2E6F9E; --red:#D93A2B; --green:#1F8A5B; --amber:#F2A93B;
+  --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--ink);font-family:"Barlow Semi Condensed",system-ui,sans-serif;color:var(--ink);overflow:hidden;touch-action:manipulation}
+#map{position:fixed;inset:0;background:#cfe0ea}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:450}
+.leaflet-container{font-family:inherit}
+button{font-family:inherit;font-size:inherit;border:0;background:none;color:inherit;cursor:pointer;padding:0}
+
+/* top strip */
+#top{position:fixed;top:0;left:0;right:0;padding:calc(var(--sat) + 8px) 10px 8px;z-index:600;display:flex;align-items:flex-start;gap:8px;pointer-events:none}
+#top>*{pointer-events:auto}
+#speed{background:var(--ink);color:var(--paper);border-radius:14px;padding:6px 14px 8px;min-width:104px;line-height:1}
+#speed .n{font-size:44px;font-weight:700;letter-spacing:-1px}
+#speed .u{font-size:13px;opacity:.75;margin-left:4px}
+#speed .h{font-size:14px;opacity:.85;margin-top:2px}
+#layers{margin-left:auto;display:flex;background:var(--paper);border-radius:12px;padding:3px;box-shadow:0 2px 8px rgba(15,42,68,.25)}
+#layers button{padding:8px 9px;border-radius:9px;font-weight:700;font-size:14px;color:var(--sea)}
+#layers button.on{background:var(--ink);color:var(--paper)}
+.round{width:46px;height:46px;border-radius:50%;background:var(--paper);box-shadow:0 2px 8px rgba(15,42,68,.25);display:grid;place-items:center;color:var(--sea)}
+.round.on{background:var(--sea);color:var(--paper)}
+.round svg{width:22px;height:22px}
+#side{position:fixed;right:10px;top:calc(var(--sat) + 74px);z-index:600;display:flex;flex-direction:column;gap:10px}
+
+/* alert banner */
+#alert{position:fixed;left:10px;right:10px;top:calc(var(--sat) + 74px);z-index:590;display:none;border-radius:12px;padding:10px 12px;color:#fff;background:var(--amber);font-weight:700;font-size:15px;line-height:1.2;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:calc(100% - 76px)}
+#alert.warn{background:var(--red)}
+#alert.show{display:block}
+#alert small{display:block;font-weight:500;opacity:.9;margin-top:4px;max-height:0;overflow:hidden;transition:max-height .25s}
+#alert.open small{max-height:220px;overflow:auto}
+
+/* route bar */
+#routebar{position:fixed;left:10px;right:10px;bottom:calc(var(--sab) + 148px);z-index:600;display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:10px 12px;align-items:center;gap:10px;font-size:15px}
+#routebar.show{display:flex}
+#routebar .stat{font-weight:700;font-size:18px}
+#routebar .stat span{font-weight:500;opacity:.7;font-size:13px}
+#routebar button{margin-left:auto;background:rgba(255,255,255,.14);border-radius:9px;padding:7px 10px;font-weight:700}
+#routebar button+button{margin-left:0}
+
+/* bottom sheet */
+#sheet{position:fixed;left:0;right:0;bottom:0;z-index:610;background:var(--paper);border-radius:20px 20px 0 0;box-shadow:0 -4px 20px rgba(15,42,68,.3);transform:translateY(calc(100% - 140px - var(--sab)));transition:transform .28s cubic-bezier(.2,.8,.2,1);max-height:82vh;display:flex;flex-direction:column}
+#sheet.open{transform:translateY(0)}
+#grab{height:26px;display:grid;place-items:center;flex:none}
+#grab i{width:40px;height:5px;border-radius:3px;background:rgba(15,42,68,.25);display:block}
+#now{display:grid;grid-template-columns:repeat(4,1fr);padding:0 14px 10px;gap:6px;flex:none}
+.cell{line-height:1.05}
+.cell b{display:block;font-size:26px;font-weight:700}
+.cell b small{font-size:13px;font-weight:500;opacity:.7;margin-left:2px}
+.cell span{display:block;font-size:12px;opacity:.7;margin-top:3px}
+.arrow{display:inline-block;width:14px;height:14px;vertical-align:-1px;margin-right:2px}
+#body{overflow:auto;padding:0 14px calc(var(--sab) + 16px);flex:1}
+.section{margin-top:14px}
+.section h3{margin:0 0 8px;font-size:15px;font-weight:700;color:var(--sea)}
+#days{display:flex;gap:6px;overflow:auto;padding-bottom:6px}
+#days button{padding:7px 12px;border-radius:20px;background:rgba(46,111,158,.12);font-weight:700;font-size:14px;white-space:nowrap}
+#days button.on{background:var(--ink);color:var(--paper)}
+#hours{width:100%;border-collapse:collapse;font-size:15px}
+#hours td{padding:9px 4px;border-bottom:1px solid rgba(15,42,68,.1);white-space:nowrap}
+#hours td:first-child{color:var(--sea);font-weight:700}
+#hours td.sc{width:14px;padding-right:0}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.dot.g{background:var(--green)}.dot.a{background:var(--amber)}.dot.r{background:var(--red)}
+#tide{width:100%;height:120px;display:block}
+#tidemeta{font-size:14px;opacity:.85;margin-top:4px}
+#src{font-size:12px;opacity:.55;margin-top:18px;line-height:1.4}
+#install{display:none;margin-top:12px;background:var(--ink);color:var(--paper);border-radius:12px;padding:12px;font-weight:700;width:100%;font-size:16px}
+#install.show{display:block}
+.legend{display:flex;gap:12px;font-size:13px;opacity:.85;margin-top:6px}
+
+/* go-to HUD */
+#nav{position:fixed;left:10px;right:66px;top:calc(var(--sat) + 74px);z-index:595;display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:10px 12px;line-height:1.1}
+#nav.show{display:flex;align-items:center;gap:12px}
+#nav .big{font-size:26px;font-weight:700}
+#nav .big small{font-size:13px;font-weight:500;opacity:.7;margin-left:2px}
+#nav .lbl{font-size:12px;opacity:.7}
+#nav .stop{margin-left:auto;background:rgba(255,255,255,.14);border-radius:9px;padding:7px 10px;font-weight:700;font-size:14px}
+#nav .cmp{width:34px;height:34px;flex:none}
+#alert.pushed{top:calc(var(--sat) + 140px)}
+
+/* boat-limit warning */
+#boatwarn{display:none;margin:0 14px 10px;padding:9px 12px;border-radius:10px;background:var(--red);color:#fff;font-weight:700;font-size:15px}
+#boatwarn.a{background:var(--amber)}
+#boatwarn.show{display:block}
+
+/* profile modal */
+#pmodal{position:fixed;inset:0;z-index:700;background:rgba(15,42,68,.55);display:none;align-items:flex-end}
+#pmodal.show{display:flex}
+#pform{background:var(--paper);width:100%;border-radius:20px 20px 0 0;padding:18px 16px calc(var(--sab) + 18px);max-height:88vh;overflow:auto}
+#pform h2{margin:0 0 4px;font-size:22px}
+#pform p{margin:0 0 14px;font-size:14px;opacity:.75}
+#pform label{display:block;font-size:13px;color:var(--sea);font-weight:700;margin:10px 0 4px}
+#pform input,#pform select{width:100%;font:inherit;font-size:17px;padding:10px;border:1.5px solid rgba(15,42,68,.25);border-radius:10px;background:#fff;color:var(--ink)}
+#pform .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#pform .save{margin-top:16px;width:100%;background:var(--ink);color:var(--paper);border-radius:12px;padding:13px;font-weight:700;font-size:17px}
+#boatline{font-size:14px;color:var(--sea);font-weight:700;padding:0 14px 6px;display:flex;align-items:center;gap:8px}
+#boatline button{margin-left:auto;text-decoration:underline;font-weight:500;color:var(--sea)}
+.dest{width:22px;height:22px;border-radius:50%;background:var(--red);border:4px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.5)}
+
+/* boat */
+.boat{width:0;height:0;position:relative}
+.boat svg{position:absolute;left:-30px;top:-70px;width:60px;height:110px;transform-origin:30px 40px;transition:transform .4s linear;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+.wp{width:14px;height:14px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.leaflet-control-attribution{font-size:9px;opacity:.7}
+@media (prefers-reduced-motion:reduce){.boat svg{transition:none}#sheet{transition:none}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<canvas id="fx"></canvas>
+
+<div id="top">
+  <div id="speed"><span class="n">0.0</span><span class="u">kn</span><div class="h">— · waiting for GPS</div></div>
+  <div id="layers">
+    <button data-l="map" class="on">Map</button>
+    <button data-l="chart">Chart</button>
+    <button data-l="sat">Sat</button>
+    <button data-l="dark">Dark</button>
+  </div>
+</div>
+<div id="nav">
+  <svg class="cmp" id="navCmp" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5"/><path d="M12 3l5 14-5-3-5 3z" fill="#F2A93B"/></svg>
+  <div><div class="big" id="navDist">—<small>nm</small></div><div class="lbl" id="navBrg">next point</div></div>
+  <div><div class="big" id="navEta">—</div><div class="lbl" id="navEtaL">to final point</div></div>
+  <button class="stop" id="navStop">Done</button>
+</div>
+<div id="alert"><span id="alertText"></span><small id="alertBody"></small></div>
+<div id="side">
+  <button class="round on" id="follow" title="Follow my boat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
+  <button class="round" id="gotoBtn" title="Go to a point"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+  <button class="round" id="fxBtn" title="Weather animation on/off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 8h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 18h7"/></svg></button>
+</div>
+
+<div id="routebar">
+  <div class="stat" id="rDist">0 <span>points</span></div>
+  <div class="stat" id="rEta">tap map <span>to add</span></div>
+  <button id="rUndo">Undo</button>
+  <button id="rGpx">GPX</button>
+  <button id="rClear">Clear</button>
+</div>
+
+<div id="sheet">
+  <div id="grab"><i></i></div>
+  <div id="boatline"><span id="boatName">Set up your boat</span><button id="editBoat">Edit</button></div>
+  <div id="boatwarn"></div>
+  <div id="now">
+    <div class="cell"><b id="wSpd">—<small>kn</small></b><span id="wDir">Wind</span></div>
+    <div class="cell"><b id="wGst">—<small>kn</small></b><span>Gust</span></div>
+    <div class="cell"><b id="wWav">—<small>ft</small></b><span id="wPer">Waves</span></div>
+    <div class="cell"><b id="wTide">—</b><span id="wTideNext">Tide</span></div>
+  </div>
+  <div id="body">
+    <div id="now2" class="legend"><span id="wTmp">—°F air</span><span id="wSea">—°F water</span><span id="wSun">Sunset —</span><span id="wRain">Rain —</span></div>
+    <div class="section">
+      <h3>Best time to boat</h3>
+      <div id="days"></div>
+      <table id="hours"></table>
+      <div class="legend"><span><i class="dot g"></i> Calm</span><span><i class="dot a"></i> Fair</span><span><i class="dot r"></i> Rough</span></div>
+    </div>
+    <div class="section">
+      <h3 id="tideTitle">Tide</h3>
+      <canvas id="tide"></canvas>
+      <div id="tidemeta">Finding nearest tide station…</div>
+    </div>
+    <div class="section">
+      <h3>Route file</h3>
+      <input type="file" id="gpxIn" accept=".gpx,application/gpx+xml">
+    </div>
+    <button id="install">Add Bayside to home screen</button>
+    <div id="src">Charts: NOAA ENC (not for navigation). Weather &amp; waves: Open-Meteo. Tides: NOAA CO-OPS. Alerts: National Weather Service. Data is a forecast, your eyes are the chart.</div>
+  </div>
+</div>
+
+<div id="pmodal">
+  <div id="pform">
+    <h2>Your boat</h2>
+    <p>Bayside warns you when the forecast is beyond what this boat handles comfortably.</p>
+    <label>Boat name</label><input id="pName" placeholder="Scarab 165 HO">
+    <div class="row">
+      <div><label>Length (ft)</label><input id="pLen" type="number" inputmode="decimal" placeholder="16.5"></div>
+      <div><label>Type</label><select id="pType"><option value="jet">Jet boat / PWC</option><option value="bowrider">Bowrider / runabout</option><option value="center">Center console</option><option value="cruiser">Cabin cruiser</option><option value="sail">Sailboat</option></select></div>
+    </div>
+    <div class="row">
+      <div><label>Cruise speed (kn)</label><input id="pCruise" type="number" inputmode="decimal" placeholder="25"></div>
+      <div><label>Draft (ft)</label><input id="pDraft" type="number" inputmode="decimal" placeholder="1.5"></div>
+    </div>
+    <h2 style="font-size:17px;margin-top:16px">Comfort limits</h2>
+    <div class="row">
+      <div><label>Max wind (kn)</label><input id="pWind" type="number" inputmode="decimal" placeholder="12"></div>
+      <div><label>Max gust (kn)</label><input id="pGust" type="number" inputmode="decimal" placeholder="18"></div>
+    </div>
+    <div class="row">
+      <div><label>Max wave (ft)</label><input id="pWave" type="number" inputmode="decimal" placeholder="1.5"></div>
+      <div><label>Use defaults for</label><button id="pAuto" style="width:100%;padding:10px;border:1.5px solid rgba(15,42,68,.25);border-radius:10px;font-size:15px;font-weight:700;color:var(--sea)">This size &amp; type</button></div>
+    </div>
+    <h2 style="font-size:17px;margin-top:16px">Map</h2>
+    <label>CARTO map key (free at carto.com/basemaps/apikey) — leave blank to use the Esri map</label><input id="pKey" placeholder="paste key">
+    <button class="save" id="pSave">Save boat</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ---------- helpers ----------
+const $ = s => document.querySelector(s);
+const KN = 1.94384;              // m/s -> knots
+const NM = 1852;                 // m per nautical mile
+const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+const dirName = d => DIRS[Math.round(((d%360)+360)%360/22.5)%16];
+const fmtT = d => new Date(d).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+const fmtH = d => new Date(d).toLocaleTimeString([], {hour:'numeric'});
+const arrow = deg => `<svg class="arrow" viewBox="0 0 24 24" style="transform:rotate(${deg}deg)"><path d="M12 2l6 10h-4v10h-4V12H6z" fill="currentColor"/></svg>`;
+const store = {
+  get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+function haversine(a,b){ const R=6371000,toR=x=>x*Math.PI/180; const dLat=toR(b.lat-a.lat),dLon=toR(b.lng-a.lng); const s=Math.sin(dLat/2)**2+Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
+function bearing(a,b){ const toR=x=>x*Math.PI/180; const y=Math.sin(toR(b.lng-a.lng))*Math.cos(toR(b.lat)); const x=Math.cos(toR(a.lat))*Math.sin(toR(b.lat))-Math.sin(toR(a.lat))*Math.cos(toR(b.lat))*Math.cos(toR(b.lng-a.lng)); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
+
+// ---------- boat profile ----------
+const DEFAULTS = {jet:[12,18,1.5,25], bowrider:[13,19,1.8,24], center:[16,22,2.5,25], cruiser:[18,25,3,18], sail:[22,28,4,6]};
+function defaultsFor(type, len){
+  let [w,g,v,c] = DEFAULTS[type] || DEFAULTS.bowrider;
+  const f = len ? Math.max(.7, Math.min(1.4, len/20)) : 1;   // bigger boat, more tolerance
+  return {wind:Math.round(w*f), gust:Math.round(g*f), wave:+(v*f).toFixed(1), cruise:c};
+}
+let P = store.get('boat') || {name:'', len:'', type:'jet', cruise:25, draft:1.5, wind:12, gust:18, wave:1.5};
+if (!(P.wind>=3)) P.wind=12; if (!(P.gust>=3)) P.gust=18; if (!(P.wave>=0.3)) P.wave=1.5;
+function applyProfile(){
+  $('#boatName').textContent = P.name ? `${P.name}${P.len?' · '+P.len+' ft':''} · limits ${P.wind} kn / ${P.wave} ft` : 'Set up your boat';
+  if (WX) { renderNow(); renderHours(); }
+}
+function openProfile(){
+  ['Name','Len','Cruise','Draft','Wind','Gust','Wave'].forEach(k => $('#p'+k).value = P[k.toLowerCase()] ?? '');
+  $('#pType').value = P.type; $('#pKey').value = store.get('cartoKey') || ''; $('#pmodal').classList.add('show');
+}
+$('#editBoat').onclick = openProfile;
+$('#pAuto').onclick = () => { const d = defaultsFor($('#pType').value, +$('#pLen').value); $('#pWind').value=d.wind; $('#pGust').value=d.gust; $('#pWave').value=d.wave; $('#pCruise').value=d.cruise; };
+$('#pSave').onclick = () => {
+  P = {name:$('#pName').value.trim(), len:+$('#pLen').value||'', type:$('#pType').value, cruise:+$('#pCruise').value||20, draft:+$('#pDraft').value||1.5,
+       wind:+$('#pWind').value||12, gust:+$('#pGust').value||18, wave:+$('#pWave').value||1.5};
+  store.set('boat', P); store.set('cartoKey', $('#pKey').value.trim()); buildBase(); setMode(mode); $('#pmodal').classList.remove('show'); applyProfile();
+};
+$('#pmodal').onclick = e => { if (e.target.id==='pmodal') $('#pmodal').classList.remove('show'); };
+if (!store.get('boat')) setTimeout(openProfile, 1500);
+
+// ---------- map & layers ----------
+const home = store.get('lastPos') || {lat:40.44, lng:-74.13}; // Raritan Bay default
+const map = L.map('map', {zoomControl:false, attributionControl:true}).setView([home.lat, home.lng], 13);
+// CARTO Voyager is the default look. It needs a free key since Aug 2026 (carto.com/basemaps/apikey).
+// Paste it in Edit boat -> Map key, or hardcode it here. Without a key the app falls back to Esri (no watermark).
+const CARTO_KEY = '';
+const cartoKey = () => (store.get('cartoKey') || CARTO_KEY).trim();
+const carto = style => L.tileLayer(`https://{s}.basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}{r}.png?key=${cartoKey()}`, {subdomains:'abcd', maxZoom:20, attribution:'© OpenStreetMap © CARTO'});
+const esriLight = () => L.layerGroup([
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:13, maxZoom:19, attribution:'Esri, GEBCO, NOAA'}),
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:13, maxZoom:19, opacity:.8})]);
+const esriDark = () => L.layerGroup([
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:16, maxZoom:19, attribution:'Esri'}),
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:16, maxZoom:19, opacity:.7})]);
+let base = {};
+function buildBase(){
+  Object.values(base).forEach(l => map.removeLayer(l));
+  base = {
+    light: cartoKey() ? carto('voyager_nolabels') : esriLight(),
+    sat:   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19, attribution:'Esri'}),
+    dark:  cartoKey() ? carto('dark_nolabels') : esriDark()
+  };
+}
+buildBase();
+const noaa = L.tileLayer('https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}', {zoomOffset:-2, minZoom:2, maxNativeZoom:18, maxZoom:19, opacity:1, attribution:'NOAA ENC'});
+let mode = store.get('mode') || 'map';
+function setMode(m){
+  mode = m; store.set('mode', m);
+  Object.values(base).forEach(l => map.removeLayer(l));
+  map.removeLayer(noaa);
+  if (m==='map')   { base.light.addTo(map); }
+  if (m==='chart') { base.light.addTo(map); noaa.setOpacity(1).addTo(map); }
+  if (m==='sat')   { base.sat.addTo(map);   noaa.setOpacity(.55).addTo(map); }
+  if (m==='dark')  { base.dark.addTo(map);  noaa.setOpacity(.6).addTo(map); }
+  document.querySelectorAll('#layers button').forEach(b => b.classList.toggle('on', b.dataset.l===m));
+}
+setMode(mode);
+document.querySelectorAll('#layers button').forEach(b => b.onclick = () => setMode(b.dataset.l));
+
+// ---------- boat ----------
+const boatSVG = `<svg viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
+  <g opacity=".55" stroke="#fff" stroke-linecap="round" fill="none">
+    <path d="M27 62 L14 108" stroke-width="3"/><path d="M33 62 L46 108" stroke-width="3"/>
+    <path d="M24 66 L9 108" stroke-width="1.5" opacity=".6"/><path d="M36 66 L51 108" stroke-width="1.5" opacity=".6"/>
+  </g>
+  <ellipse cx="30" cy="66" rx="9" ry="7" fill="#fff" opacity=".75"/>
+  <path d="M30 4 C38 14 40 28 40 42 C40 52 38 58 36 62 L24 62 C22 58 20 52 20 42 C20 28 22 14 30 4 Z" fill="#F4F8FA" stroke="#0F2A44" stroke-width="1.4"/>
+  <path d="M30 14 C34 20 35 27 35 32 L25 32 C25 27 26 20 30 14 Z" fill="#0F2A44" opacity=".9"/>
+  <rect x="24" y="36" width="12" height="7" rx="2.5" fill="#0F2A44" opacity=".85"/>
+  <rect x="25" y="47" width="10" height="5" rx="2" fill="#0F2A44" opacity=".7"/>
+  <rect x="26" y="55" width="8" height="4" rx="2" fill="#0F2A44" opacity=".6"/>
+</svg>`;
+const boatIcon = L.divIcon({className:'boat', html:boatSVG, iconSize:[0,0]});
+const boat = L.marker([home.lat, home.lng], {icon:boatIcon, zIndexOffset:1000, interactive:false}).addTo(map);
+const trail = L.polyline([], {color:'#fff', weight:4, opacity:.55, lineCap:'round'}).addTo(map);
+const accRing = L.circle([home.lat, home.lng], {radius:0, color:'#2E6F9E', weight:1, fillColor:'#2E6F9E', fillOpacity:.12, interactive:false}).addTo(map);
+let heading = 0, lastFix = null, follow = true, trailPts = [], curSpeed = 0;
+function setHeading(h){ heading = h; const s = boat.getElement()?.querySelector('svg'); if (s) s.style.transform = `rotate(${h}deg)`; }
+boat.on('add', () => setHeading(heading));
+
+$('#follow').onclick = () => { follow = !follow; $('#follow').classList.toggle('on', follow); if (follow && lastFix) map.panTo(lastFix); };
+map.on('dragstart', () => { follow = false; $('#follow').classList.remove('on'); });
+
+// ---------- GPS ----------
+let wxTimer = null, wxPos = null;
+function onFix(p){
+  const c = p.coords, here = {lat:c.latitude, lng:c.longitude};
+  const spd = (c.speed!=null && c.speed>=0) ? c.speed*KN : 0;
+  let h = c.heading;
+  if ((h==null || isNaN(h)) && lastFix && haversine(lastFix, here) > 3) h = bearing(lastFix, here);
+  if (h!=null && !isNaN(h)) setHeading(h);
+  boat.setLatLng(here);
+  trailPts.push({...here, t:Date.now()});
+  trailPts = trailPts.filter(x => Date.now()-x.t < 10*60*1000);
+  trail.setLatLngs(trailPts.map(x => [x.lat, x.lng]));
+  if (follow) map.panTo(here, {animate:true});
+  accRing.setLatLng(here).setRadius(c.accuracy || 0);
+  curSpeed = spd;
+  $('#speed .n').textContent = spd.toFixed(1);
+  $('#speed .h').textContent = c.accuracy > 60
+    ? `weak GPS ±${Math.round(c.accuracy)} m — need sky view`
+    : `${Math.round(heading).toString().padStart(3,'0')}° ${dirName(heading)} · ±${Math.round(c.accuracy)} m`;
+  lastFix = here; store.set('lastPos', here);
+  if (wps.length) draw();
+  if (!wxPos || haversine(wxPos, here) > 3000){ wxPos = here; loadAll(here); }
+}
+function onErr(e){ $('#speed .h').textContent = e.code===1 ? 'GPS blocked — allow location' : 'GPS unavailable'; if (!wxPos){ wxPos = home; loadAll(home); } }
+let gpsWatch = null, gpsTries = 0;
+function startGPS(){
+  if (!navigator.geolocation){ onErr({code:0}); return; }
+  if (gpsWatch!=null) navigator.geolocation.clearWatch(gpsWatch);
+  gpsWatch = navigator.geolocation.watchPosition(onFix, e => {
+    gpsTries++;
+    if (e.code===1){ onErr(e); return; }                       // blocked: stop
+    $('#speed .h').textContent = gpsTries<3 ? 'searching for GPS…' : 'weak GPS — go outside, keep app open';
+    // quick coarse fix so the map and weather load while GPS warms up
+    navigator.geolocation.getCurrentPosition(onFix, ()=>{ if (!wxPos){ wxPos=home; loadAll(home); } }, {enableHighAccuracy:false, maximumAge:60000, timeout:8000});
+    setTimeout(startGPS, 5000);
+  }, {enableHighAccuracy:true, maximumAge:2000, timeout:20000});
+}
+startGPS();
+setInterval(() => wxPos && loadAll(wxPos), 20*60*1000); // refresh every 20 min
+
+// ---------- weather (Open-Meteo) ----------
+let WX = null, MAR = null, dayIdx = 0;
+async function loadAll(pos){
+  loadWeather(pos); loadTides(pos); loadAlerts(pos);
+}
+async function loadWeather(pos){
+  try{
+    const q = `latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=5&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch`;
+    const [w, m] = await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?${q}&current=temperature_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=sunrise,sunset`).then(r=>r.json()),
+      fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=5&length_unit=imperial&temperature_unit=fahrenheit&current=wave_height,wave_period,wave_direction,sea_surface_temperature&hourly=wave_height,wave_period,sea_surface_temperature`).then(r=>r.json()).catch(()=>null)
+    ]);
+    WX = w; MAR = m && !m.error ? m : null;
+    renderNow(); renderDays(); renderHours();
+  }catch(e){ console.warn('weather', e); }
+}
+function wxIcon(code, hour){
+  if (code===0) return '☀️'; if (code<=2) return '🌤️'; if (code===3) return '☁️';
+  if (code===45||code===48) return '🌫️'; if (code<=57) return '🌦️'; if (code<=67) return '🌧️';
+  if (code<=77) return '🌨️'; if (code<=82) return '🌧️'; return '⛈️';
+}
+function score(wind, wave, rainP, gust){
+  // red = over your boat's limit, amber = within 25% of it or likely rain
+  if (wind > P.wind || (gust!=null && gust > P.gust) || (wave!=null && wave > P.wave)) return 'r';
+  if (wind > P.wind*.75 || (gust!=null && gust > P.gust*.75) || (wave!=null && wave > P.wave*.75) || rainP >= 50) return 'a';
+  return 'g';
+}
+function boatWarning(c, mc){
+  const el = $('#boatwarn'), name = P.name || 'your boat', over = [], near = [];
+  const chk = (v, lim, lbl) => { if (v==null) return; if (v > lim) over.push(lbl(v)); else if (v > lim*.75) near.push(lbl(v)); };
+  chk(c.wind_speed_10m, P.wind, v=>`wind ${Math.round(v)} kn`);
+  chk(c.wind_gusts_10m, P.gust, v=>`gusts ${Math.round(v)} kn`);
+  chk(mc?.wave_height, P.wave, v=>`waves ${v.toFixed(1)} ft`);
+  if (over.length){ el.className='show'; el.textContent = `Too rough for ${name} right now: ${over.join(', ')}`; }
+  else if (near.length){ el.className='show a'; el.textContent = `Near ${name}'s limit: ${near.join(', ')}`; }
+  else el.className='';
+  fx.setBoat(over.length ? 'r' : near.length ? 'a' : null);
+}
+function renderNow(){
+  const c = WX.current, mc = MAR?.current;
+  $('#wSpd').innerHTML = `${Math.round(c.wind_speed_10m)}<small>kn</small>`;
+  $('#wDir').innerHTML = `${arrow(c.wind_direction_10m+180)} ${dirName(c.wind_direction_10m)} wind`;
+  $('#wGst').innerHTML = `${Math.round(c.wind_gusts_10m)}<small>kn</small>`;
+  $('#wWav').innerHTML = mc && mc.wave_height!=null ? `${mc.wave_height.toFixed(1)}<small>ft</small>` : '—';
+  $('#wPer').textContent = mc && mc.wave_period!=null ? `Waves · ${Math.round(mc.wave_period)} s` : 'Waves';
+  $('#wTmp').textContent = `${Math.round(c.temperature_2m)}°F air`;
+  $('#wSea').textContent = mc && mc.sea_surface_temperature!=null ? `${Math.round(mc.sea_surface_temperature)}°F water` : 'water —';
+  $('#wSun').textContent = `Sunset ${fmtT(WX.daily.sunset[0])}`;
+  const i = nowIdx(); $('#wRain').textContent = `Rain ${WX.hourly.precipitation_probability[i] ?? 0}%`;
+  fx.setWeather({wind:c.wind_speed_10m, dir:c.wind_direction_10m, code:c.weather_code, precip:c.precipitation});
+  boatWarning(c, mc);
+}
+function nowIdx(){ const t = Date.now(); let best=0; WX.hourly.time.forEach((s,i)=>{ if (new Date(s).getTime()<=t) best=i; }); return best; }
+function renderDays(){
+  const d = $('#days'); d.innerHTML = '';
+  WX.daily.time.forEach((s,i) => {
+    const b = document.createElement('button');
+    b.textContent = i===0 ? 'Today' : new Date(s+'T12:00').toLocaleDateString([], {weekday:'short'});
+    b.classList.toggle('on', i===dayIdx); b.onclick = () => { dayIdx=i; renderDays(); renderHours(); };
+    d.appendChild(b);
+  });
+}
+function renderHours(){
+  const t = $('#hours'); t.innerHTML = '';
+  const day = WX.daily.time[dayIdx];
+  WX.hourly.time.forEach((s,i) => {
+    if (!s.startsWith(day)) return;
+    const hr = new Date(s).getHours(); if (hr<5 || hr>21) return;
+    if (dayIdx===0 && new Date(s).getTime() < Date.now()-3600e3) return;
+    const wave = MAR?.hourly?.wave_height?.[i] ?? null;
+    const sc = score(WX.hourly.wind_speed_10m[i], wave, WX.hourly.precipitation_probability[i], WX.hourly.wind_gusts_10m[i]);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${fmtH(s)}</td><td class="sc"><i class="dot ${sc}"></i></td><td>${wxIcon(WX.hourly.weather_code[i])} ${Math.round(WX.hourly.temperature_2m[i])}°</td>
+      <td>${arrow(WX.hourly.wind_direction_10m[i]+180)} ${Math.round(WX.hourly.wind_speed_10m[i])} ${dirName(WX.hourly.wind_direction_10m[i])}</td>
+      <td>g ${Math.round(WX.hourly.wind_gusts_10m[i])}</td>
+      <td>${wave!=null ? wave.toFixed(1)+' ft' : '—'}</td>
+      <td>${WX.hourly.precipitation_probability[i] ?? 0}%</td>`;
+    t.appendChild(tr);
+  });
+}
+
+// ---------- tides (NOAA CO-OPS) ----------
+const FALLBACK = [{id:'8531680',name:'Sandy Hook, NJ',lat:40.467,lng:-74.009},{id:'8518750',name:'The Battery, NY',lat:40.7006,lng:-74.0142}];
+const NEARBY = [
+  {id:'8531680',name:'Sandy Hook, NJ',lat:40.467,lng:-74.009},{id:'8531545',name:'Keansburg, NJ',lat:40.448,lng:-74.137},
+  {id:'8531511',name:'Perth Amboy, NJ',lat:40.508,lng:-74.265},{id:'8518750',name:'The Battery, NY',lat:40.7006,lng:-74.0142},
+  {id:'8517741',name:'Great Kills Harbor, NY',lat:40.539,lng:-74.140},{id:'8531300',name:'Keyport, NJ',lat:40.440,lng:-74.200}
+];
+async function stations(){
+  let list = store.get('stations');
+  if (list && Date.now()-list.t < 30*864e5) return list.s;
+  try{
+    const ctl = new AbortController(); setTimeout(()=>ctl.abort(), 8000);
+    const r = await fetch('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions&units=english', {signal:ctl.signal}).then(r=>r.json());
+    const s = r.stations.map(x => ({id:x.id, name:`${x.name}, ${x.state||''}`, lat:x.lat, lng:x.lng}));
+    store.set('stations', {t:Date.now(), s}); return s;
+  }catch(e){ return NEARBY; }
+}
+async function loadTides(pos){
+  const list = (await stations()).map(s => ({...s, d:haversine(pos,{lat:s.lat,lng:s.lng})})).sort((a,b)=>a.d-b.d).slice(0,4);
+  const d = new Date(); d.setHours(d.getHours()-6);
+  const bd = d.toISOString().slice(0,10).replace(/-/g,'');
+  for (const st of list){
+    try{
+      const q = `begin_date=${bd}&range=42&datum=MLLW&station=${st.id}&time_zone=lst_ldt&units=english&format=json&application=bayside&product=predictions`;
+      const hilo = await fetch(`https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?${q}&interval=hilo`).then(r=>r.json());
+      if (!hilo.predictions || !hilo.predictions.length) continue;
+      let curve = await fetch(`https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?${q}&interval=30`).then(r=>r.json()).catch(()=>null);
+      if (!curve || !curve.predictions){ curve = {predictions: cosineCurve(hilo.predictions)}; }
+      $('#tideTitle').textContent = `Tide · ${st.name.replace(/, $/,'')} (${(st.d/NM).toFixed(1)} nm)`;
+      renderTide(curve.predictions, hilo.predictions); return;
+    }catch(e){ console.warn('tide', st.id, e); }
+  }
+  $('#tidemeta').textContent = 'Tide data unavailable right now.';
+}
+// subordinate stations only give highs/lows; draw a smooth curve between them
+function localStr(t){ const d=new Date(t), z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; }
+function cosineCurve(hl){
+  const out = [];
+  for (let i=0;i<hl.length-1;i++){
+    const a = hl[i], b = hl[i+1], t0 = new Date(a.t.replace(' ','T')).getTime(), t1 = new Date(b.t.replace(' ','T')).getTime();
+    for (let t=t0; t<t1; t+=30*60000){ const f=(1-Math.cos(Math.PI*(t-t0)/(t1-t0)))/2; out.push({t:localStr(t), v:(+a.v+(+b.v-+a.v)*f).toFixed(2)}); }
+  }
+  return out;
+}
+function renderTide(curve, hilo){
+  const now = Date.now();
+  const pts = curve.map(p => ({t:new Date(p.t.replace(' ','T')).getTime(), v:+p.v}));
+  const hl = hilo.map(p => ({t:new Date(p.t.replace(' ','T')).getTime(), v:+p.v, type:p.type}));
+  let cur = pts.reduce((a,p) => Math.abs(p.t-now) < Math.abs(a.t-now) ? p : a, pts[0]);
+  const nxt = hl.find(p => p.t > now), i = pts.indexOf(cur);
+  const rising = pts[i+1] && pts[i+1].v > cur.v;
+  $('#wTide').innerHTML = `${rising?'▲':'▼'} ${cur.v.toFixed(1)}<small>ft</small>`;
+  $('#wTideNext').textContent = nxt ? `${nxt.type==='H'?'High':'Low'} ${fmtT(nxt.t)}` : (rising?'Rising':'Falling');
+  $('#tidemeta').innerHTML = hl.filter(p=>p.t>now).slice(0,4).map(p=>`<b>${p.type==='H'?'High':'Low'}</b> ${fmtT(p.t)} ${p.v.toFixed(1)} ft`).join(' &nbsp;·&nbsp; ');
+  // draw curve
+  const cv = $('#tide'), r = cv.getBoundingClientRect(); cv.width = r.width*devicePixelRatio; cv.height = 120*devicePixelRatio;
+  const g = cv.getContext('2d'); g.scale(devicePixelRatio, devicePixelRatio);
+  const W = r.width, H = 120, t0 = pts[0].t, t1 = pts[pts.length-1].t;
+  const vs = pts.map(p=>p.v), vmin = Math.min(...vs)-.3, vmax = Math.max(...vs)+.3;
+  const X = t => (t-t0)/(t1-t0)*W, Y = v => H-14-(v-vmin)/(vmax-vmin)*(H-34);
+  g.clearRect(0,0,W,H);
+  g.beginPath(); pts.forEach((p,k) => k ? g.lineTo(X(p.t),Y(p.v)) : g.moveTo(X(p.t),Y(p.v)));
+  g.lineTo(W,H); g.lineTo(0,H); g.closePath(); g.fillStyle='rgba(46,111,158,.15)'; g.fill();
+  g.beginPath(); pts.forEach((p,k) => k ? g.lineTo(X(p.t),Y(p.v)) : g.moveTo(X(p.t),Y(p.v)));
+  g.strokeStyle='#2E6F9E'; g.lineWidth=2.5; g.stroke();
+  g.fillStyle='#0F2A44'; g.font='700 12px Barlow Semi Condensed, sans-serif'; g.textAlign='center';
+  hl.forEach(p => { g.fillText(`${p.type} ${fmtT(p.t)}`, X(p.t), p.type==='H' ? Y(p.v)-6 : Y(p.v)+16); });
+  g.strokeStyle='#D93A2B'; g.lineWidth=2; g.beginPath(); g.moveTo(X(now),0); g.lineTo(X(now),H); g.stroke();
+}
+
+// ---------- alerts (NWS) ----------
+async function loadAlerts(pos){
+  try{
+    const r = await fetch(`https://api.weather.gov/alerts/active?point=${pos.lat.toFixed(4)},${pos.lng.toFixed(4)}`, {headers:{Accept:'application/geo+json'}}).then(r=>r.json());
+    const a = (r.features||[]).map(f=>f.properties).sort((x,y)=>(x.severity==='Severe'||x.severity==='Extreme')? -1 : 1)[0];
+    const el = $('#alert');
+    if (!a){ el.classList.remove('show'); fx.setAlert(null); return; }
+    const warn = /Warning/i.test(a.event) || a.severity==='Severe' || a.severity==='Extreme';
+    el.className = 'show' + (warn?' warn':'');
+    $('#alertText').textContent = `${a.event} · until ${a.ends ? fmtT(a.ends) : 'further notice'}`;
+    $('#alertBody').textContent = a.headline + (a.description ? '\n\n' + a.description : '');
+    el.onclick = () => el.classList.toggle('open');
+    fx.setAlert(a.event);
+  }catch(e){ console.warn('alerts', e); }
+}
+
+// ---------- weather animation ----------
+const fx = (() => {
+  const cv = $('#fx'), g = cv.getContext('2d');
+  let on = !matchMedia('(prefers-reduced-motion: reduce)').matches, W, H, parts = [], drops = [], wx = {wind:0, dir:0, code:0, precip:0}, alert = null, boatLvl = null, flash = 0, raf;
+  function size(){ W = cv.width = innerWidth*devicePixelRatio; H = cv.height = innerHeight*devicePixelRatio; }
+  addEventListener('resize', size); size();
+  function reset(){
+    const n = Math.min(900, 120 + Math.round(wx.wind*40));
+    parts = Array.from({length:n}, () => ({x:Math.random()*W, y:Math.random()*H, a:Math.random()*80}));
+    drops = [];
+  }
+  const raining = () => wx.precip > 0 || (wx.code>=51 && wx.code<=67) || (wx.code>=80 && wx.code<=82) || wx.code>=95;
+  function frame(){
+    if (!on){ g.clearRect(0,0,W,H); return; }
+    // fade previous frame for trails
+    g.globalCompositeOperation = 'destination-in'; g.fillStyle = 'rgba(0,0,0,.92)'; g.fillRect(0,0,W,H);
+    g.globalCompositeOperation = 'source-over';
+    // wind particles: dir is FROM, so travel toward dir+180
+    const rad = (wx.dir+180)*Math.PI/180, sp = (0.4 + wx.wind*0.22)*devicePixelRatio;
+    const vx = Math.sin(rad)*sp, vy = -Math.cos(rad)*sp;
+    g.strokeStyle = (mode==='map'||mode==='chart') ? 'rgba(15,42,68,.55)' : 'rgba(255,255,255,.7)'; g.lineWidth = 1.2*devicePixelRatio; g.lineCap='round';
+    g.beginPath();
+    for (const p of parts){
+      const nx = p.x+vx, ny = p.y+vy;
+      g.moveTo(p.x,p.y); g.lineTo(nx,ny);
+      p.x = nx; p.y = ny; p.a++;
+      if (p.a > 90 || p.x<0||p.x>W||p.y<0||p.y>H){ p.x=Math.random()*W; p.y=Math.random()*H; p.a=0; }
+    }
+    g.stroke();
+    // rain
+    if (raining()){
+      const want = wx.code>=95 ? 260 : wx.code>=63 ? 180 : 90;
+      while (drops.length < want) drops.push({x:Math.random()*W, y:Math.random()*H, l:(10+Math.random()*14)*devicePixelRatio, v:(9+Math.random()*6)*devicePixelRatio});
+      g.strokeStyle = 'rgba(120,170,220,.75)'; g.lineWidth = 1.4*devicePixelRatio; g.beginPath();
+      for (const d of drops){ const dx = vx*0.3; g.moveTo(d.x,d.y); g.lineTo(d.x+dx, d.y+d.l); d.y += d.v; d.x += dx; if (d.y>H){ d.y=-d.l; d.x=Math.random()*W; } }
+      g.stroke();
+      if (wx.code>=95 && Math.random()<0.006) flash = 1;
+    } else drops = [];
+    if (wx.code===45 || wx.code===48){ g.fillStyle='rgba(235,240,245,.35)'; g.fillRect(0,0,W,H); }
+    if (flash>0){ g.fillStyle=`rgba(255,255,255,${flash*.6})`; g.fillRect(0,0,W,H); flash -= .08; }
+    const lvl = alert ? 'r' : boatLvl;
+    if (lvl){ const pulse = (Math.sin(Date.now()/500)+1)/2; g.lineWidth = 6*devicePixelRatio; g.strokeStyle = lvl==='r' ? `rgba(217,58,43,${.25+pulse*.35})` : `rgba(242,169,59,${.25+pulse*.35})`; g.strokeRect(0,0,W,H); }
+    raf = requestAnimationFrame(frame);
+  }
+  function start(){ cancelAnimationFrame(raf); if (on){ reset(); frame(); } else g.clearRect(0,0,W,H); }
+  $('#fxBtn').classList.toggle('on', on);
+  $('#fxBtn').onclick = () => { on = !on; $('#fxBtn').classList.toggle('on', on); start(); };
+  document.addEventListener('visibilitychange', () => document.hidden ? cancelAnimationFrame(raf) : start());
+  start();
+  return { setWeather(w){ wx = w; reset(); }, setAlert(a){ alert = a; }, setBoat(l){ boatLvl = l; } };
+})();
+
+// ---------- navigation: waypoints, next leg, total ETA ----------
+let picking = false, wps = [], legIdx = 0;
+const routeLine = L.polyline([], {color:'#F2A93B', weight:5, opacity:.95, dashArray:'2 10', lineCap:'round'}).addTo(map);
+const legLine   = L.polyline([], {color:'#D93A2B', weight:4, opacity:.9, dashArray:'1 12', lineCap:'round'}).addTo(map);
+const wpLayer = L.layerGroup().addTo(map);
+const cruise = () => curSpeed > 1.5 ? curSpeed : (P.cruise || 20);
+const fmtMin = m => m >= 60 ? `${Math.floor(m/60)}h ${Math.round(m%60)}m` : `${Math.max(1,Math.round(m))} min`;
+
+$('#gotoBtn').onclick = () => {
+  picking = !picking; $('#gotoBtn').classList.toggle('on', picking || wps.length>0);
+  if (picking){ $('#speed .h').textContent = 'tap the map to add points'; $('#sheet').classList.remove('open'); }
+  $('#routebar').classList.toggle('show', picking || wps.length>0);
+};
+map.on('click', e => { if (!picking) return; wps.push(e.latlng); legIdx = Math.min(legIdx, wps.length-1); draw(); });
+$('#navStop').onclick = () => { picking = false; $('#routebar').classList.remove('show'); $('#gotoBtn').classList.toggle('on', wps.length>0); };
+$('#rUndo').onclick = () => { wps.pop(); legIdx = Math.min(legIdx, Math.max(0,wps.length-1)); draw(); };
+$('#rClear').onclick = () => { wps = []; legIdx = 0; picking = false; draw(); };
+
+function draw(){
+  wpLayer.clearLayers();
+  wps.forEach((p,i) => L.marker(p, {icon:L.divIcon({className: i===wps.length-1 ? 'dest' : 'wp', iconSize: i===wps.length-1 ? [22,22] : [14,14]}), interactive:false}).addTo(wpLayer));
+  routeLine.setLatLngs(wps);
+  const has = wps.length>0;
+  $('#nav').classList.toggle('show', has); $('#alert').classList.toggle('pushed', has);
+  $('#routebar').classList.toggle('show', picking || has);
+  $('#gotoBtn').classList.toggle('on', picking || has);
+  if (!has){ legLine.setLatLngs([]); return; }
+  // total leg-by-leg from the boat through every point
+  let total = 0; if (lastFix) total += haversine(lastFix, wps[legIdx]);
+  for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
+  const nm = total/NM, mins = nm/cruise()*60;
+  $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
+  $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}</span>`;
+  $('#navEta').textContent = fmtMin(mins);
+  $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}`;
+  updateNav();
+}
+function updateNav(){
+  if (!wps.length || !lastFix) return;
+  const tgt = wps[legIdx], d = haversine(lastFix, tgt), brg = bearing(lastFix, tgt);
+  legLine.setLatLngs([lastFix, tgt]);
+  $('#navDist').innerHTML = d < 370 ? `${Math.round(d*3.28)}<small>ft</small>` : `${(d/NM).toFixed(d/NM<10?2:1)}<small>nm</small>`;
+  $('#navBrg').textContent = `steer ${Math.round(brg).toString().padStart(3,'0')}° ${dirName(brg)} · point ${legIdx+1} of ${wps.length}`;
+  $('#navCmp').querySelector('path').setAttribute('transform', `rotate(${brg-heading} 12 12)`);
+  if (d < 40){
+    if (navigator.vibrate) navigator.vibrate([200,100,200]);
+    if (legIdx < wps.length-1){ legIdx++; draw(); } else $('#navBrg').textContent = 'you have arrived';
+  }
+}
+function drawRoute(){ draw(); }
+$('#rGpx').onclick = () => {
+  if (!wps.length) return;
+  const gpx = `<?xml version="1.0"?><gpx version="1.1" creator="Bayside" xmlns="http://www.topografix.com/GPX/1/1"><rte><name>Bayside route ${new Date().toISOString().slice(0,10)}</name>${wps.map((p,i)=>`<rtept lat="${p.lat}" lon="${p.lng}"><name>WP${i+1}</name></rtept>`).join('')}</rte></gpx>`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([gpx],{type:'application/gpx+xml'})); a.download = 'bayside-route.gpx'; a.click();
+};
+$('#gpxIn').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const doc = new DOMParser().parseFromString(await f.text(), 'text/xml');
+  wps = [...doc.querySelectorAll('rtept, trkpt, wpt')].map(n => L.latLng(+n.getAttribute('lat'), +n.getAttribute('lon')));
+  legIdx = 0; draw();
+  if (wps.length){ follow=false; $('#follow').classList.remove('on'); map.fitBounds(routeLine.getBounds(), {padding:[40,160]}); }
+  $('#sheet').classList.remove('open');
+};
+applyProfile();
+
+// ---------- sheet & install ----------
+$('#grab').onclick = () => $('#sheet').classList.toggle('open');
+let ty=null; $('#sheet').addEventListener('touchstart', e => ty = e.touches[0].clientY, {passive:true});
+$('#sheet').addEventListener('touchend', e => { if (ty==null) return; const dy = e.changedTouches[0].clientY - ty; if (dy < -40) $('#sheet').classList.add('open'); if (dy > 40 && $('#body').scrollTop < 5) $('#sheet').classList.remove('open'); ty=null; });
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; $('#install').classList.add('show'); });
+$('#install').onclick = async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice; deferred=null; $('#install').classList.remove('show'); };
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
