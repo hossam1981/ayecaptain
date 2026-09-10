@@ -668,34 +668,47 @@ function renderTide(curve, hilo){
   for (let t=Math.ceil(t0/432e5)*432e5; t<t1; t+=432e5)   // 12-hour ticks (readable on a phone)
     xl += `<text x="${X(t).toFixed(1)}" y="${H-7}" text-anchor="middle">${new Date(t).toLocaleTimeString([], {hour:'numeric'}).replace(' ','')}</text>`;
 
-  // faint horizontal ocean ripples in the lower chart band
-  let waves='';
-  [[base-4,3.4,.09],[base-15,3,.06],[base-27,2.4,.05]].forEach(([wy,amp,op]) => {
-    let d=`M${mL} ${wy}`; const seg=(W-mL-mR)/5;
-    for (let k=0;k<5;k++){ const cx1=mL+seg*(k+.5), x2=mL+seg*(k+1);
-      d += ` Q${cx1.toFixed(0)} ${(wy+(k%2?amp:-amp)).toFixed(1)} ${x2.toFixed(0)} ${wy}`; }
-    waves += `<path d="${d}" fill="none" stroke="#28B7FF" stroke-width="1" opacity="${op}" filter="url(#waveBlur)"/>`;
-  });
+  // --- background water texture: faint irregular ripples across the lower half (NOT the tide line) ---
+  let ripples='';
+  const rTop = mT + (H-mT-mB)*0.46;
+  for (let r=0;r<7;r++){
+    const ry = rTop + (base-rTop)*(r+0.5)/7;
+    const amp = 1.5 + (r%3)*1.1, op = (0.05 + r*0.011).toFixed(3), sw = (1 + (r%3)*0.4).toFixed(2), segs = 4 + (r%3);
+    let d = `M${mL} ${ry.toFixed(1)}`;
+    for (let k=0;k<segs;k++){
+      const x2 = mL + (W-mL-mR)*(k+1)/segs, cxq = mL + (W-mL-mR)*(k+0.5)/segs;
+      const wob = (k%2 ? amp : -amp) * (0.7 + ((r+k)%3)*0.22);
+      d += ` Q${cxq.toFixed(0)} ${(ry+wob).toFixed(1)} ${x2.toFixed(0)} ${(ry + (k===segs-1?0:Math.sin(r+k)*0.7)).toFixed(1)}`;
+    }
+    ripples += `<path d="${d}" fill="none" stroke="#2B7194" stroke-width="${sw}" opacity="${op}"${r%2?' filter="url(#softBlur)"':''}/>`;
+  }
 
-  // a sunrise / sunset SCENE (glow + horizon streak + rays + sun + cloud silhouette), sitting on the baseline behind the curve
-  function sunScene(sx, set){
-    const cy = base - 1;
-    const body = set?'sunSet':'sunRise', glow = set?'glowSet':'glowRise', hor = set?'horizSet':'horizRise', ray = set?'#FF9D3D':'#FFD34E';
-    const rays = [[0,-15,0,-23],[-9,-12,-15,-19],[9,-12,15,-19],[-15,-6,-25,-9],[15,-6,25,-9],[-17,1,-28,1],[17,1,28,1]]
-      .map(r=>`<line x1="${(sx+r[0]).toFixed(1)}" y1="${(cy+r[1]).toFixed(1)}" x2="${(sx+r[2]).toFixed(1)}" y2="${(cy+r[3]).toFixed(1)}"/>`).join('');
-    return `<ellipse cx="${sx}" cy="${cy}" rx="46" ry="22" fill="url(#${glow})" filter="url(#blurGlow)"/>`
-      + `<rect x="${(sx-50).toFixed(1)}" y="${(cy-1).toFixed(1)}" width="100" height="3" rx="1.5" fill="url(#${hor})"/>`
-      + `<g stroke="${ray}" stroke-width="1.8" stroke-linecap="round" opacity=".7" filter="url(#rayBlur)">${rays}</g>`
-      + `<circle cx="${sx}" cy="${(cy-3).toFixed(1)}" r="8.5" fill="url(#${body})"/>`
-      + `<g fill="#173149" opacity=".22"><ellipse cx="${(sx-13).toFixed(1)}" cy="${(cy-2).toFixed(1)}" rx="13" ry="5.5"/>`
-      + `<ellipse cx="${(sx+7).toFixed(1)}" cy="${(cy-5).toFixed(1)}" rx="15" ry="6.5"/><ellipse cx="${(sx+22).toFixed(1)}" cy="${(cy-1).toFixed(1)}" rx="11" ry="5"/></g>`;
+  // tide height at any instant (linear between the 30-min prediction points)
+  const tideAt = t => {
+    if (t<=pts[0].t) return pts[0].v;
+    if (t>=pts[pts.length-1].t) return pts[pts.length-1].v;
+    for (let k=1;k<pts.length;k++) if (pts[k].t>=t){ const a=pts[k-1],b=pts[k]; return a.v+(b.v-a.v)*(t-a.t)/(b.t-a.t); }
+    return pts[pts.length-1].v;
+  };
+  // a sunrise/sunset SCENE that sits ON the tide curve (behind it): upper half over the dark sky,
+  // lower half swallowed by the translucent water fill. Reuses the supplied gradients/filters.
+  function sunScene(cx, cy, set){
+    const disk=set?'sunsetDisk':'sunriseDisk', atmo=set?'sunsetAtmosphere':'sunriseAtmosphere', hor=set?'sunsetHorizon':'sunriseHorizon';
+    const rc=set?'#FF8B36':'#FFD34E', ro=set?'.55':'.63', r=13;
+    const rays=[[0,-21,0,-30],[-12,-18,-18,-25],[12,-18,18,-25],[-20,-10,-29,-14],[20,-10,29,-14]]
+      .map(a=>`<line x1="${(cx+a[0]).toFixed(1)}" y1="${(cy+a[1]).toFixed(1)}" x2="${(cx+a[2]).toFixed(1)}" y2="${(cy+a[3]).toFixed(1)}"/>`).join('');
+    return `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="52" ry="24" fill="url(#${atmo})" filter="url(#largeBlur)"/>`
+      + `<rect x="${(cx-62).toFixed(1)}" y="${(cy-2).toFixed(1)}" width="124" height="4.5" rx="2.5" fill="url(#${hor})" filter="url(#softBlur)"/>`
+      + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" fill="url(#${disk})"/>`
+      + `<g stroke="${rc}" stroke-width="2" stroke-linecap="round" opacity="${ro}" filter="url(#softBlur)">${rays}</g>`;
   }
   let suns='';
   if (WX && WX.daily){
-    const inWin = a => (a||[]).map(s=>new Date(s).getTime()).filter(t=>t>t0+2e6 && t<t1-2e6);
-    const rise = inWin(WX.daily.sunrise)[0], set = inWin(WX.daily.sunset)[0];   // first of each in view
-    if (set!=null)  suns += sunScene(+X(set).toFixed(1), true);
-    if (rise!=null) suns += sunScene(+X(rise).toFixed(1), false);
+    const inWin = a => (a||[]).map(s=>new Date(s).getTime()).filter(t=>t>t0+3e6 && t<t1-3e6);
+    const rise = inWin(WX.daily.sunrise)[0], set = inWin(WX.daily.sunset)[0];
+    // sit ~12px below the curve at that moment so the curve arcs over the sun's top third
+    if (rise!=null) suns += sunScene(X(rise), Y(tideAt(rise)) + 12, false);
+    if (set!=null)  suns += sunScene(X(set),  Y(tideAt(set))  + 12, true);
   }
 
   let pg='', lastLx=-99;
@@ -717,23 +730,25 @@ function renderTide(curve, hilo){
   $('#tideSvg').innerHTML =
     `<defs>`
     + `<linearGradient id="tideBg" x1="0" y1="0" x2=".4" y2="1"><stop offset="0" stop-color="#0B2A44"/><stop offset="1" stop-color="#061A2D"/></linearGradient>`
-    + `<linearGradient id="waterFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#28B7FF" stop-opacity=".42"/><stop offset=".55" stop-color="#1177B0" stop-opacity=".2"/><stop offset="1" stop-color="#0A3653" stop-opacity=".04"/></linearGradient>`
-    + `<radialGradient id="sunRise"><stop offset="0" stop-color="#FFF7B2"/><stop offset="45%" stop-color="#FFD34E"/><stop offset="100%" stop-color="#F6A623"/></radialGradient>`
-    + `<radialGradient id="sunSet"><stop offset="0" stop-color="#FFE7C0"/><stop offset="45%" stop-color="#FF9D3D"/><stop offset="100%" stop-color="#E8531C"/></radialGradient>`
-    + `<radialGradient id="glowRise"><stop offset="0" stop-color="#FFC94A" stop-opacity=".6"/><stop offset="45%" stop-color="#F6A623" stop-opacity=".22"/><stop offset="100%" stop-color="#F6A623" stop-opacity="0"/></radialGradient>`
-    + `<radialGradient id="glowSet"><stop offset="0" stop-color="#FF8A4A" stop-opacity=".6"/><stop offset="45%" stop-color="#E8531C" stop-opacity=".22"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></radialGradient>`
-    + `<linearGradient id="horizRise" x1="0" x2="1"><stop offset="0" stop-color="#F6A623" stop-opacity="0"/><stop offset="50%" stop-color="#FFD34E" stop-opacity=".6"/><stop offset="100%" stop-color="#F6A623" stop-opacity="0"/></linearGradient>`
-    + `<linearGradient id="horizSet" x1="0" x2="1"><stop offset="0" stop-color="#E8531C" stop-opacity="0"/><stop offset="50%" stop-color="#FF9D3D" stop-opacity=".6"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></linearGradient>`
-    + `<filter id="blurGlow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="7"/></filter>`
-    + `<filter id="waveBlur"><feGaussianBlur stdDeviation="1.1"/></filter>`
-    + `<filter id="rayBlur"><feGaussianBlur stdDeviation=".5"/></filter>`
-    + `<filter id="glowG" x="-140%" y="-140%" width="380%" height="380%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+    + `<radialGradient id="sunriseDisk"><stop offset="0%" stop-color="#FFF9C7"/><stop offset="48%" stop-color="#FFD34E"/><stop offset="100%" stop-color="#F5A623"/></radialGradient>`
+    + `<radialGradient id="sunriseAtmosphere"><stop offset="0%" stop-color="#FFD34E" stop-opacity=".58"/><stop offset="32%" stop-color="#F5A623" stop-opacity=".28"/><stop offset="68%" stop-color="#F5A623" stop-opacity=".08"/><stop offset="100%" stop-color="#F5A623" stop-opacity="0"/></radialGradient>`
+    + `<radialGradient id="sunsetDisk"><stop offset="0%" stop-color="#FFD98A"/><stop offset="48%" stop-color="#FF8B36"/><stop offset="100%" stop-color="#E8531C"/></radialGradient>`
+    + `<radialGradient id="sunsetAtmosphere"><stop offset="0%" stop-color="#FF9A3D" stop-opacity=".62"/><stop offset="35%" stop-color="#E8531C" stop-opacity=".27"/><stop offset="70%" stop-color="#E8531C" stop-opacity=".07"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></radialGradient>`
+    + `<linearGradient id="sunriseHorizon"><stop offset="0%" stop-color="#F5A623" stop-opacity="0"/><stop offset="35%" stop-color="#FFD34E" stop-opacity=".26"/><stop offset="50%" stop-color="#FFE784" stop-opacity=".65"/><stop offset="65%" stop-color="#FFD34E" stop-opacity=".26"/><stop offset="100%" stop-color="#F5A623" stop-opacity="0"/></linearGradient>`
+    + `<linearGradient id="sunsetHorizon"><stop offset="0%" stop-color="#E8531C" stop-opacity="0"/><stop offset="35%" stop-color="#FF7A2E" stop-opacity=".28"/><stop offset="50%" stop-color="#FFB15A" stop-opacity=".60"/><stop offset="65%" stop-color="#FF7A2E" stop-opacity=".28"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></linearGradient>`
+    + `<linearGradient id="tideWater" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#33B8FF" stop-opacity=".35"/><stop offset="52%" stop-color="#1476A8" stop-opacity=".16"/><stop offset="100%" stop-color="#06273F" stop-opacity=".02"/></linearGradient>`
+    + `<filter id="largeBlur" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="14"/></filter>`
+    + `<filter id="softBlur" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4"/></filter>`
+    + `<filter id="curveGlow" x="-20%" y="-40%" width="140%" height="180%"><feGaussianBlur stdDeviation="3.2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+    + `<filter id="glowG" x="-140%" y="-140%" width="380%" height="380%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
     + `<filter id="glowR" x="-140%" y="-140%" width="380%" height="380%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
-    + `<clipPath id="plotClip"><rect x="0" y="${(mT-10).toFixed(0)}" width="${W}" height="${(base-mT+12).toFixed(0)}" rx="6"/></clipPath></defs>`
+    + `<clipPath id="plotClip"><rect x="0" y="${(mT-20).toFixed(0)}" width="${W}" height="${(base-mT+22).toFixed(0)}" rx="6"/></clipPath></defs>`
+    // 1 background · 2 grid · 3 ripples · 4-7 sun scenes  (all clipped to the plot)
     + `<rect x="0" y="0" width="${W}" height="${H}" rx="12" fill="url(#tideBg)"/>`
-    + `<g clip-path="url(#plotClip)"><g class="grid">${grid}</g>${waves}${suns}</g>`
-    + `<path d="${area}" fill="url(#waterFill)"/>`
-    + `<path d="${line}" fill="none" stroke="#2DB7FF" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<g clip-path="url(#plotClip)"><g class="grid">${grid}</g>${ripples}${suns}</g>`
+    // 9 water fill · 10 cyan curve (soft glow) · 11 dots · 12 labels + Now
+    + `<path d="${area}" fill="url(#tideWater)"/>`
+    + `<path d="${line}" fill="none" stroke="#2DB7FF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" filter="url(#curveGlow)"/>`
     + `<g class="yl">${yl}</g>${axTitle}<g class="xl">${xl}</g>${pg}${nowG}`;
 
   // ---- next 4 events ----
