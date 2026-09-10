@@ -443,10 +443,10 @@ async function loadAll(pos){
 }
 async function loadWeather(pos){
   try{
-    const q = `latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=5&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch`;
+    const q = `latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=7&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch`;
     const [w, m] = await Promise.all([
       fetch(`https://api.open-meteo.com/v1/forecast?${q}&current=temperature_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=sunrise,sunset`).then(r=>r.json()),
-      fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=5&length_unit=imperial&temperature_unit=fahrenheit&current=wave_height,wave_period,wave_direction,sea_surface_temperature&hourly=wave_height,wave_period,sea_surface_temperature`).then(r=>r.json()).catch(()=>null)
+      fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=7&length_unit=imperial&temperature_unit=fahrenheit&current=wave_height,wave_period,wave_direction,sea_surface_temperature&hourly=wave_height,wave_period,sea_surface_temperature`).then(r=>r.json()).catch(()=>null)
     ]);
     WX = w; MAR = m && !m.error ? m : null;
     renderNow(); renderDays(); renderHours();
@@ -513,10 +513,12 @@ function renderDays(){
 function renderHours(){
   const t = $('#hours'); t.innerHTML = '';
   const day = WX.daily.time[dayIdx];
+  let n = 0;
   WX.hourly.time.forEach((s,i) => {
     if (!s.startsWith(day)) return;
     const hr = new Date(s).getHours(); if (hr<5 || hr>21) return;
     if (dayIdx===0 && new Date(s).getTime() < Date.now()-3600e3) return;
+    n++;
     const wave = MAR?.hourly?.wave_height?.[i] ?? null;
     const sc = score(WX.hourly.wind_speed_10m[i], wave, WX.hourly.precipitation_probability[i], WX.hourly.wind_gusts_10m[i]);
     const tr = document.createElement('tr');
@@ -527,6 +529,11 @@ function renderHours(){
       <td>${WX.hourly.precipitation_probability[i] ?? 0}%</td>`;
     t.appendChild(tr);
   });
+  if (!n){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="7" style="opacity:.6;font-weight:600;padding:12px 4px">No daylight hours left ${dayIdx===0 ? 'today' : 'that day'} — pick another day above.</td>`;
+    t.appendChild(tr);
+  }
 }
 
 // ---------- tides (NOAA CO-OPS) ----------
