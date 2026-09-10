@@ -856,12 +856,13 @@ function renderRoute(){
   const path = [boatPos(), ...wps];
   for (let i=0;i<path.length-1;i++){
     const a = path[i], b = path[i+1];
-    const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = i===legIdx ? 6 : 5;
+    const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = i===legIdx ? 5 : 4;
     for (let k=0;k<N;k++){
       const t0=k/N, t1=(k+1)/N;
       const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
       const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
-      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.95, lineCap:'round', interactive:false}).addTo(routeSegs);
+      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.6,
+        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
     }
   }
   wps.forEach((p,i) => {
