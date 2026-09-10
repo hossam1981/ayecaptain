@@ -683,32 +683,30 @@ function renderTide(curve, hilo){
     ripples += `<path d="${d}" fill="none" stroke="#2B7194" stroke-width="${sw}" opacity="${op}"${r%2?' filter="url(#softBlur)"':''}/>`;
   }
 
-  // tide height at any instant (linear between the 30-min prediction points)
-  const tideAt = t => {
-    if (t<=pts[0].t) return pts[0].v;
-    if (t>=pts[pts.length-1].t) return pts[pts.length-1].v;
-    for (let k=1;k<pts.length;k++) if (pts[k].t>=t){ const a=pts[k-1],b=pts[k]; return a.v+(b.v-a.v)*(t-a.t)/(b.t-a.t); }
-    return pts[pts.length-1].v;
-  };
-  // a sunrise/sunset SCENE that sits ON the tide curve (behind it): upper half over the dark sky,
-  // lower half swallowed by the translucent water fill. Reuses the supplied gradients/filters.
-  function sunScene(cx, cy, set){
+  // a fixed "sea horizon" level = mean tide height; both suns sit half-sunk on it
+  const meanV = vs.reduce((a,b)=>a+b,0)/vs.length;
+  const horizonY = Y(meanV);
+  const horizonLine = `<line x1="${mL}" y1="${horizonY.toFixed(1)}" x2="${W-mR}" y2="${horizonY.toFixed(1)}" stroke="#2B7194" stroke-width="1" opacity=".16"/>`;
+
+  // a sunrise/sunset SCENE sitting ON the horizon: upper ~55% of the disk shows, lower half dissolves into navy haze
+  function sunScene(cx, set){
+    const cy = horizonY, r = 13;
     const disk=set?'sunsetDisk':'sunriseDisk', atmo=set?'sunsetAtmosphere':'sunriseAtmosphere', hor=set?'sunsetHorizon':'sunriseHorizon';
-    const rc=set?'#FF8B36':'#FFD34E', ro=set?'.55':'.63', r=13;
-    const rays=[[0,-21,0,-30],[-12,-18,-18,-25],[12,-18,18,-25],[-20,-10,-29,-14],[20,-10,29,-14]]
+    const rc=set?'#FF8B36':'#FFD34E', ro=set?'.55':'.63';
+    const rays=[[0,-r-3,0,-r-14],[-r*0.9,-r*0.55,-r*1.5,-r*1.4],[r*0.9,-r*0.55,r*1.5,-r*1.4],[-r*1.5,-r*0.15,-r*2.4,-r*0.55],[r*1.5,-r*0.15,r*2.4,-r*0.55]]
       .map(a=>`<line x1="${(cx+a[0]).toFixed(1)}" y1="${(cy+a[1]).toFixed(1)}" x2="${(cx+a[2]).toFixed(1)}" y2="${(cy+a[3]).toFixed(1)}"/>`).join('');
-    return `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="52" ry="24" fill="url(#${atmo})" filter="url(#largeBlur)"/>`
-      + `<rect x="${(cx-62).toFixed(1)}" y="${(cy-2).toFixed(1)}" width="124" height="4.5" rx="2.5" fill="url(#${hor})" filter="url(#softBlur)"/>`
+    return `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="54" ry="25" fill="url(#${atmo})" filter="url(#largeBlur)"/>`
+      + `<rect x="${(cx-62).toFixed(1)}" y="${(cy-2.5).toFixed(1)}" width="124" height="5" rx="2.5" fill="url(#${hor})" filter="url(#softBlur)"/>`
       + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" fill="url(#${disk})"/>`
-      + `<g stroke="${rc}" stroke-width="2" stroke-linecap="round" opacity="${ro}" filter="url(#softBlur)">${rays}</g>`;
+      + `<g stroke="${rc}" stroke-width="2" stroke-linecap="round" opacity="${ro}" filter="url(#softBlur)">${rays}</g>`
+      + `<rect x="${(cx-30).toFixed(1)}" y="${(cy+3).toFixed(1)}" width="60" height="${(base-cy).toFixed(1)}" fill="url(#submergeHaze)" filter="url(#softBlur)"/>`;
   }
   let suns='';
   if (WX && WX.daily){
     const inWin = a => (a||[]).map(s=>new Date(s).getTime()).filter(t=>t>t0+3e6 && t<t1-3e6);
     const rise = inWin(WX.daily.sunrise)[0], set = inWin(WX.daily.sunset)[0];
-    // sit ~12px below the curve at that moment so the curve arcs over the sun's top third
-    if (rise!=null) suns += sunScene(X(rise), Y(tideAt(rise)) + 12, false);
-    if (set!=null)  suns += sunScene(X(set),  Y(tideAt(set))  + 12, true);
+    if (rise!=null) suns += sunScene(X(rise), false);
+    if (set!=null)  suns += sunScene(X(set),  true);
   }
 
   let pg='', lastLx=-99;
@@ -737,6 +735,7 @@ function renderTide(curve, hilo){
     + `<linearGradient id="sunriseHorizon"><stop offset="0%" stop-color="#F5A623" stop-opacity="0"/><stop offset="35%" stop-color="#FFD34E" stop-opacity=".26"/><stop offset="50%" stop-color="#FFE784" stop-opacity=".65"/><stop offset="65%" stop-color="#FFD34E" stop-opacity=".26"/><stop offset="100%" stop-color="#F5A623" stop-opacity="0"/></linearGradient>`
     + `<linearGradient id="sunsetHorizon"><stop offset="0%" stop-color="#E8531C" stop-opacity="0"/><stop offset="35%" stop-color="#FF7A2E" stop-opacity=".28"/><stop offset="50%" stop-color="#FFB15A" stop-opacity=".60"/><stop offset="65%" stop-color="#FF7A2E" stop-opacity=".28"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></linearGradient>`
     + `<linearGradient id="tideWater" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#33B8FF" stop-opacity=".35"/><stop offset="52%" stop-color="#1476A8" stop-opacity=".16"/><stop offset="100%" stop-color="#06273F" stop-opacity=".02"/></linearGradient>`
+    + `<linearGradient id="submergeHaze" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#061A2D" stop-opacity="0"/><stop offset="55%" stop-color="#061A2D" stop-opacity=".6"/><stop offset="100%" stop-color="#061A2D" stop-opacity=".92"/></linearGradient>`
     + `<filter id="largeBlur" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="14"/></filter>`
     + `<filter id="softBlur" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4"/></filter>`
     + `<filter id="curveGlow" x="-20%" y="-40%" width="140%" height="180%"><feGaussianBlur stdDeviation="3.2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
@@ -745,7 +744,7 @@ function renderTide(curve, hilo){
     + `<clipPath id="plotClip"><rect x="0" y="${(mT-20).toFixed(0)}" width="${W}" height="${(base-mT+22).toFixed(0)}" rx="6"/></clipPath></defs>`
     // 1 background · 2 grid · 3 ripples · 4-7 sun scenes  (all clipped to the plot)
     + `<rect x="0" y="0" width="${W}" height="${H}" rx="12" fill="url(#tideBg)"/>`
-    + `<g clip-path="url(#plotClip)"><g class="grid">${grid}</g>${ripples}${suns}</g>`
+    + `<g clip-path="url(#plotClip)"><g class="grid">${grid}</g>${ripples}${horizonLine}${suns}</g>`
     // 9 water fill · 10 cyan curve (soft glow) · 11 dots · 12 labels + Now
     + `<path d="${area}" fill="url(#tideWater)"/>`
     + `<path d="${line}" fill="none" stroke="#2DB7FF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" filter="url(#curveGlow)"/>`
