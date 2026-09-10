@@ -118,7 +118,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 
 /* boat */
 .boat{width:0;height:0;position:relative}
-.boat svg{position:absolute;left:-30px;top:-70px;width:60px;height:110px;transform-origin:30px 40px;transition:transform .4s linear;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+.boat svg{position:absolute;left:-30px;top:-40px;width:60px;height:110px;transform-origin:30px 40px;transition:transform .4s linear;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
 .wp{width:14px;height:14px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
 .pin{filter:drop-shadow(0 4px 4px rgba(15,42,68,.3))}
 .leaflet-control-attribution{font-size:9px;opacity:.7}
@@ -347,15 +347,10 @@ setMode(mode);
 document.querySelectorAll('#layers button').forEach(b => b.onclick = () => setMode(b.dataset.l));
 
 // ---------- boat ----------
-// lava-orange + white, top-down, bow up (see Higgsfield ref A). Dynamic stern spray is drawn on the #fx canvas.
+// user-supplied top-down boat (white hull, orange trim, outboard aft). Bow points up (svg -y).
+// Marker/GPS point sits at svg (30,40) ~= the helm; prop tip lands near svg y 78 -> see STERN_OFF in drawSpray.
 const boatSVG = `<svg viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
-  <path d="M30 3 C39 15 41 30 41 44 C41 54 39 60 37 64 L23 64 C21 60 19 54 19 44 C19 30 21 15 30 3 Z" fill="#F4F8FA" stroke="#E8531C" stroke-width="2.6" stroke-linejoin="round"/>
-  <path d="M30 15 C35 22 36 30 36 35 L24 35 C24 30 25 22 30 15 Z" fill="#E8531C"/>
-  <rect x="24.5" y="39" width="11" height="7.5" rx="2.6" fill="#E8531C"/>
-  <rect x="23.6" y="49" width="5.6" height="6.4" rx="2" fill="#E8531C"/>
-  <rect x="30.8" y="49" width="5.6" height="6.4" rx="2" fill="#E8531C"/>
-  <rect x="25.5" y="63.5" width="9" height="7.5" rx="2.6" fill="#E8531C"/>
-  <rect x="28.5" y="70" width="3" height="4" rx="1" fill="#E8531C"/>
+  <image href="icons/boat.png" x="14.5" y="4" width="31" height="76" preserveAspectRatio="xMidYMid meet"/>
 </svg>`;
 const boatIcon = L.divIcon({className:'boat', html:boatSVG, iconSize:[0,0]});
 const boat = L.marker([home.lat, home.lng], {icon:boatIcon, zIndexOffset:1000, interactive:false}).addTo(map);
@@ -624,6 +619,7 @@ const fx = (() => {
   }
 
   // churning spray + wake behind the transom while the boat is moving
+  const STERN_OFF = 40;   // px from the marker/helm back to the prop, matches the boat art
   function drawSpray(){
     let bx, by;
     try{ const cp = map.latLngToContainerPoint(boat.getLatLng()); bx = cp.x*dpr; by = cp.y*dpr; }catch(e){ return; }
@@ -631,7 +627,7 @@ const fx = (() => {
     const bxu = -fx1, byu = -fy1;                                              // astern
     const sf = Math.min(1, curSpeed/16);
     if (on && curSpeed > 1.4){
-      const sxp = bx + bxu*24*dpr, syp = by + byu*24*dpr;
+      const sxp = bx + bxu*STERN_OFF*dpr, syp = by + byu*STERN_OFF*dpr;
       for (let i=0, n=1+Math.round(sf*4); i<n; i++){
         const fan = (Math.random()-.5)*(0.5 + sf*0.9), ca = Math.cos(fan), sa = Math.sin(fan);
         const dx = bxu*ca - byu*sa, dy = bxu*sa + byu*ca;
