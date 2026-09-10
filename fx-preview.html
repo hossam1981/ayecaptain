@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bayside FX preview</title>
+<style>
+:root{--ink:#0F2A44;--paper:#F4F8FA;--sea:#2E6F9E;--red:#D93A2B;--amber:#F2A93B}
+*{box-sizing:border-box;font-family:"Barlow Semi Condensed",system-ui,sans-serif}
+html,body{margin:0;height:100%;background:var(--ink);overflow:hidden}
+#wrap{position:fixed;inset:0;display:flex}
+#stage{position:relative;flex:1;overflow:hidden;background:linear-gradient(#b9d3df,#a9c7d6)}
+#land{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#fx{position:absolute;inset:0;width:100%;height:100%}
+.chip{position:absolute;background:var(--ink);color:var(--paper);border-radius:12px;padding:6px 12px;line-height:1;z-index:5}
+#speed{top:12px;left:12px}
+#speed b{font-size:34px;font-weight:700}#speed span{font-size:12px;opacity:.7}
+#speed div{font-size:12px;opacity:.8;margin-top:3px}
+#layers{top:12px;right:12px;background:var(--paper);color:var(--sea);display:flex;gap:4px;padding:4px}
+#layers i{padding:6px 8px;border-radius:8px;font-style:normal;font-weight:700;font-size:13px}
+#layers i.on{background:var(--ink);color:var(--paper)}
+#boat{position:absolute;left:50%;top:52%;width:46px;height:82px;transform:translate(-50%,-50%);z-index:4;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+#reads{position:absolute;left:12px;bottom:12px;z-index:5;background:rgba(15,42,68,.82);color:#fff;border-radius:12px;padding:10px 12px;font-size:13px;line-height:1.5;backdrop-filter:blur(3px)}
+#reads b{font-size:15px}
+#panel{width:330px;background:var(--paper);color:var(--ink);padding:16px 16px 22px;overflow:auto}
+#panel h1{font-size:16px;margin:0 0 2px}
+#panel p.sub{margin:0 0 14px;font-size:12px;opacity:.65}
+#panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--sea);margin:16px 0 6px}
+.row{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:13px}
+.row label{flex:0 0 92px;font-weight:700}
+.row input[type=range]{flex:1;accent-color:var(--sea)}
+.row output{flex:0 0 56px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+select{width:100%;font:inherit;padding:8px;border:1.5px solid rgba(15,42,68,.25);border-radius:9px;background:#fff}
+.presets{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.presets button{border:0;background:rgba(46,111,158,.14);color:var(--sea);font-weight:700;font-size:13px;padding:8px 10px;border-radius:9px;cursor:pointer}
+.presets button:hover{background:var(--ink);color:#fff}
+.note{font-size:12px;opacity:.7;margin-top:14px;line-height:1.5}
+.tag{display:inline-block;background:rgba(46,111,158,.14);color:var(--sea);border-radius:6px;padding:1px 6px;font-weight:700;font-size:11px}
+@media(max-width:760px){#wrap{flex-direction:column}#panel{width:100%;height:46%}}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <svg id="land" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+      <path d="M0,1000 L0,760 C120,720 210,740 300,700 C360,675 380,610 470,600 C560,590 600,660 720,650 C820,642 900,690 1000,680 L1000,1000 Z" fill="#e7e3d3"/>
+      <path d="M0,760 C120,720 210,740 300,700 C360,675 380,610 470,600 C560,590 600,660 720,650 C820,642 900,690 1000,680" fill="none" stroke="#c9c3ac" stroke-width="3"/>
+      <path d="M60,1000 C120,900 90,860 170,820 C240,786 250,900 340,880" fill="none" stroke="#e0a89a" stroke-width="4"/>
+      <path d="M470,1000 C470,900 520,880 540,800 C556,740 640,760 660,690" fill="none" stroke="#e0a89a" stroke-width="4"/>
+      <text x="250" y="850" fill="#7d8a72" font-size="24" font-family="sans-serif">Keansburg</text>
+      <text x="640" y="600" fill="#5f7f9e" font-size="22" font-family="sans-serif">Raritan Bay</text>
+    </svg>
+    <canvas id="fx"></canvas>
+    <div class="chip" id="speed"><b id="rSpd">0.0</b><span>kn</span><div id="rHdg">SW wind · gusting</div></div>
+    <div class="chip" id="layers"><i class="on">Map</i><i>Chart</i><i>Sat</i><i>Dark</i></div>
+    <svg id="boat" viewBox="0 0 60 110"><path d="M30 4 C38 14 40 28 40 42 C40 52 38 58 36 62 L24 62 C22 58 20 52 20 42 C20 28 22 14 30 4 Z" fill="#F4F8FA" stroke="#0F2A44" stroke-width="1.6"/><path d="M30 14 C34 20 35 27 35 32 L25 32 C25 27 26 20 30 14 Z" fill="#0F2A44"/><rect x="24" y="36" width="12" height="7" rx="2.5" fill="#0F2A44"/><rect x="25" y="47" width="10" height="5" rx="2" fill="#0F2A44" opacity=".8"/></svg>
+    <div id="reads"></div>
+  </div>
+
+  <div id="panel">
+    <h1>Bayside — enhanced weather FX</h1>
+    <p class="sub">Live canvas prototype. Drag the sliders; the animation eases to each value the way it would after a forecast refresh.</p>
+
+    <div class="presets">
+      <button data-p="calm">Calm morning</button>
+      <button data-p="breeze">Building breeze</button>
+      <button data-p="sca">Small craft advisory</button>
+      <button data-p="storm">Thunderstorm</button>
+      <button data-p="snow">Snow</button>
+      <button data-p="fog">Fog</button>
+    </div>
+
+    <h2>Wind <span class="tag">reactive now</span></h2>
+    <div class="row"><label>Wind</label><input id="wind" type="range" min="0" max="40" step="1" value="8"><output id="windO"></output></div>
+    <div class="row"><label>Gust</label><input id="gust" type="range" min="0" max="55" step="1" value="12"><output id="gustO"></output></div>
+    <div class="row"><label>From (°)</label><input id="dir" type="range" min="0" max="359" step="5" value="225"><output id="dirO"></output></div>
+
+    <h2>Swell / waves <span class="tag">new</span></h2>
+    <div class="row"><label>Height</label><input id="waveH" type="range" min="0" max="6" step="0.1" value="0.6"><output id="waveHO"></output></div>
+    <div class="row"><label>Period</label><input id="waveT" type="range" min="2" max="14" step="0.5" value="5"><output id="waveTO"></output></div>
+    <div class="row"><label>From (°)</label><input id="waveDir" type="range" min="0" max="359" step="5" value="200"><output id="waveDirO"></output></div>
+
+    <h2>Rain <span class="tag">proportional</span></h2>
+    <div class="row"><label>Rate mm/h</label><input id="rain" type="range" min="0" max="6" step="0.1" value="0"><output id="rainO"></output></div>
+    <div class="row"><label>Sky</label>
+      <select id="code">
+        <option value="0">Clear</option>
+        <option value="3">Overcast</option>
+        <option value="45">Fog</option>
+        <option value="53">Drizzle</option>
+        <option value="63">Rain</option>
+        <option value="65">Heavy rain</option>
+        <option value="81">Showers</option>
+        <option value="95">Thunderstorm</option>
+        <option value="73">Snow</option>
+      </select>
+    </div>
+
+    <p class="note"><b>What's new vs. today:</b> rolling swell bands driven by wave height / period / direction; gusts surge the streaks every few seconds instead of a flat wind; rain scales with the actual rate, not 3 fixed steps; values ease in over ~2&nbsp;s; snow and a glassy “calm” state added. Border pulses amber/red when it’s beyond a typical small‑boat comfort limit.</p>
+  </div>
+</div>
+
+<script>
+const $=s=>document.getElementById(s);
+const cv=$('fx'), g=cv.getContext('2d');
+let dpr=Math.min(devicePixelRatio||1,2), W,H;
+function size(){ const r=cv.getBoundingClientRect(); W=cv.width=r.width*dpr; H=cv.height=r.height*dpr; }
+addEventListener('resize',size); size();
+
+const target={wind:8,gust:12,dir:225,waveH:.6,waveT:5,waveDir:200,rain:0,code:0};
+const cur={...target};
+function pull(){
+  for(const k of ['wind','gust','waveH','waveT','rain']) target[k]=+$(k).value;
+  for(const k of ['dir','waveDir']) target[k]=+$(k).value;
+  target.code=+$('code').value;
+  for(const k of ['wind','gust','waveH','waveT','dir','waveDir','rain']) $(k+'O').textContent =
+    (k==='dir'||k==='waveDir')? target[k]+'°' : (k==='waveH'?target[k].toFixed(1)+' ft': k==='waveT'?target[k].toFixed(1)+' s': k==='rain'?target[k].toFixed(1):Math.round(target[k])+' kn');
+}
+['wind','gust','dir','waveH','waveT','waveDir','rain','code'].forEach(id=>$(id).addEventListener('input',pull));
+pull(); Object.assign(cur,target);
+
+const PRE={
+  calm:{wind:3,gust:5,dir:210,waveH:.4,waveT:4,waveDir:200,rain:0,code:0},
+  breeze:{wind:14,gust:20,dir:230,waveH:1.4,waveT:5,waveDir:215,rain:0,code:3},
+  sca:{wind:24,gust:33,dir:250,waveH:3.2,waveT:6,waveDir:240,rain:0.4,code:63},
+  storm:{wind:28,gust:44,dir:190,waveH:4.4,waveT:6.5,waveDir:195,rain:4.5,code:95},
+  snow:{wind:12,gust:18,dir:315,waveH:1,waveT:4.5,waveDir:300,rain:0,code:73},
+  fog:{wind:4,gust:7,dir:120,waveH:.6,waveT:5,waveDir:140,rain:0,code:45}
+};
+document.querySelectorAll('.presets button').forEach(b=>b.onclick=()=>{
+  const p=PRE[b.dataset.p]; for(const k in p){ const el=$(k==='rain'?'rain':k); if(el){ el.value=p[k]; } }
+  $('code').value=p.code; pull();
+});
+
+let parts=[],drops=[],flakes=[],flash=0,gustCd=0,gustLvl=0,swell=0,raf;
+function raining(){ return cur.rain>0.03 || (cur.code>=51&&cur.code<=67)||(cur.code>=80&&cur.code<=82)||cur.code>=95; }
+function snowing(){ return cur.code>=71&&cur.code<=77; }
+function easeAng(a,b,k){ let d=((b-a+540)%360)-180; return (a+d*k+360)%360; }
+
+function drawSwell(t){
+  if(cur.waveH<0.15) return;
+  const per=Math.max(2,cur.waveT);
+  const ang=Math.atan2(Math.sin((cur.waveDir+180)*Math.PI/180),-Math.cos((cur.waveDir+180)*Math.PI/180));
+  const wl=(46+per*20)*dpr, speed=wl/(per*60);
+  swell=(swell+speed)%wl;
+  const amp=Math.min(.5,.05+cur.waveH*.085), lw=Math.max(1.2,cur.waveH*.8)*dpr;
+  const diag=Math.hypot(W,H);
+  g.save(); g.translate(W/2,H/2); g.rotate(ang+Math.PI/2);
+  const wob=cur.waveH*1.3*dpr, step=26*dpr;
+  g.lineCap='round';
+  for(let pass=0;pass<2;pass++){
+    g.strokeStyle= pass? `rgba(15,42,68,${amp*.45})` : `rgba(255,255,255,${amp})`;
+    g.lineWidth= pass? lw*.7 : lw;
+    g.beginPath();
+    for(let d=-diag; d<diag; d+=wl){
+      const base=d+swell+(pass?wl*.5:0);
+      g.moveTo(-diag, base+Math.sin(-diag/(95*dpr)+t/900)*wob);
+      for(let x=-diag; x<=diag; x+=step) g.lineTo(x, base+Math.sin(x/(95*dpr)+t/900)*wob);
+    }
+    g.stroke();
+  }
+  g.restore();
+}
+
+function frame(t){
+  const k=.03;
+  for(const key of ['wind','gust','waveH','waveT','rain']) cur[key]+=(target[key]-cur[key])*k;
+  cur.dir=easeAng(cur.dir,target.dir,k); cur.waveDir=easeAng(cur.waveDir,target.waveDir,k); cur.code=target.code;
+
+  gustCd-=1/60;
+  if(gustCd<=0 && cur.gust>cur.wind+1){ gustCd=4+Math.random()*4; gustLvl=1; }
+  gustLvl*=.972;
+  const eff=cur.wind+(cur.gust-cur.wind)*Math.max(0,gustLvl);
+
+  g.globalCompositeOperation='destination-in'; g.fillStyle='rgba(0,0,0,.88)'; g.fillRect(0,0,W,H);
+  g.globalCompositeOperation='source-over';
+
+  drawSwell(t);
+
+  // wind streaks
+  const rad=(cur.dir+180)*Math.PI/180, sp=(0.4+eff*0.22)*dpr, vx=Math.sin(rad)*sp, vy=-Math.cos(rad)*sp;
+  const want=Math.min(1100,120+Math.round(eff*40));
+  while(parts.length<want) parts.push({x:Math.random()*W,y:Math.random()*H,a:Math.random()*90});
+  if(parts.length>want+120) parts.length=want;
+  g.strokeStyle='rgba(15,42,68,.5)'; g.lineWidth=1.1*dpr; g.lineCap='round'; g.beginPath();
+  for(const p of parts){ const nx=p.x+vx,ny=p.y+vy; g.moveTo(p.x,p.y); g.lineTo(nx,ny); p.x=nx;p.y=ny;p.a++;
+    if(p.a>92||p.x<0||p.x>W||p.y<0||p.y>H){p.x=Math.random()*W;p.y=Math.random()*H;p.a=0;} }
+  g.stroke();
+
+  // rain proportional
+  if(raining()){
+    const floor=cur.code>=95?150:cur.code>=63?110:cur.code>=51?45:0;
+    const want=Math.min(430,Math.max(floor,cur.rain*85, cur.rain>0?40:0));
+    while(drops.length<want) drops.push({x:Math.random()*W,y:Math.random()*H,l:(9+Math.random()*15)*dpr,v:(9+Math.random()*6)*dpr});
+    if(drops.length>want) drops.length=Math.round(want);
+    const a=Math.min(.85,.32+want/620);
+    g.strokeStyle=`rgba(120,170,220,${a})`; g.lineWidth=1.3*dpr; g.beginPath();
+    const dx=vx*.35;
+    for(const d of drops){ g.moveTo(d.x,d.y); g.lineTo(d.x+dx,d.y+d.l); d.y+=d.v; d.x+=dx; if(d.y>H){d.y=-d.l;d.x=Math.random()*W;} }
+    g.stroke();
+    if(cur.code>=95&&Math.random()<0.008) flash=1;
+  } else drops.length=0;
+
+  // snow
+  if(snowing()){
+    const want=140;
+    while(flakes.length<want) flakes.push({x:Math.random()*W,y:Math.random()*H,r:(1.3+Math.random()*2.2)*dpr,v:(1.1+Math.random()*1.6)*dpr,ph:Math.random()*6});
+    g.fillStyle='rgba(255,255,255,.9)';
+    for(const f of flakes){ f.ph+=.03; f.y+=f.v; f.x+=Math.sin(f.ph)*.6*dpr+vx*.15; if(f.y>H){f.y=-4;f.x=Math.random()*W;}
+      g.beginPath(); g.arc(f.x,f.y,f.r,0,7); g.fill(); }
+  } else flakes.length=0;
+
+  if(cur.code===45||cur.code===48){ g.fillStyle='rgba(235,240,245,.33)'; g.fillRect(0,0,W,H); }
+  if(flash>0){ g.fillStyle=`rgba(255,255,255,${flash*.55})`; g.fillRect(0,0,W,H); flash-=.08; }
+
+  // calm sheen
+  if(eff<3 && cur.waveH<1 && !raining() && !snowing()){
+    const gr=g.createLinearGradient(0,0,W,H); gr.addColorStop(0,'rgba(255,255,255,.05)'); gr.addColorStop(.5,'rgba(255,255,255,.16)'); gr.addColorStop(1,'rgba(255,255,255,.04)');
+    g.fillStyle=gr; g.fillRect(0,0,W,H);
+  }
+
+  // comfort border
+  const lvl=(cur.code>=95||eff>25||cur.waveH>3.5)?'r':(eff>16||cur.waveH>2||cur.gust>22)?'a':null;
+  if(lvl){ const pl=(Math.sin(t/500)+1)/2; g.lineWidth=6*dpr;
+    g.strokeStyle=lvl==='r'?`rgba(217,58,43,${.25+pl*.35})`:`rgba(242,169,59,${.25+pl*.35})`;
+    g.strokeRect(0,0,W,H); }
+
+  // HUD + readouts
+  const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const dn=d=>DIRS[Math.round(((d%360)+360)%360/22.5)%16];
+  $('rSpd').textContent=eff.toFixed(1);
+  $('rHdg').textContent=`${dn(cur.dir)} wind${gustLvl>.15?' · gusting '+Math.round(eff)+' kn':''}`;
+  $('reads').innerHTML=`<b>${Math.round(cur.wind)} kn</b> wind · G ${Math.round(cur.gust)} &nbsp;|&nbsp; `+
+    `swell <b>${cur.waveH.toFixed(1)} ft</b> @ ${cur.waveT.toFixed(0)} s ${dn(cur.waveDir)} &nbsp;|&nbsp; `+
+    `rain <b>${raining()?cur.rain.toFixed(1)+' mm/h':'—'}</b>` + (lvl?` &nbsp;|&nbsp; <b style="color:${lvl==='r'?'#ff8a7d':'#ffcf87'}">${lvl==='r'?'too rough':'near limit'}</b>`:'');
+
+  raf=requestAnimationFrame(frame);
+}
+raf=requestAnimationFrame(frame);
+</script>
+</body>
+</html>

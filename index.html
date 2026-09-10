@@ -120,8 +120,18 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .boat{width:0;height:0;position:relative}
 .boat svg{position:absolute;left:-30px;top:-70px;width:60px;height:110px;transform-origin:30px 40px;transition:transform .4s linear;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
 .wp{width:14px;height:14px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.pin{filter:drop-shadow(0 4px 4px rgba(15,42,68,.3))}
 .leaflet-control-attribution{font-size:9px;opacity:.7}
-@media (prefers-reduced-motion:reduce){.boat svg{transition:none}#sheet{transition:none}}
+
+/* sun marker (edge-pinned to its real compass bearing) */
+#sun{position:fixed;z-index:588;width:40px;height:40px;margin:-20px 0 0 -20px;pointer-events:auto;cursor:pointer;display:none;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.3));transition:opacity .8s ease,left .8s ease,top .8s ease}
+#sun.low{filter:drop-shadow(0 1px 3px rgba(0,0,0,.35)) saturate(1.35) hue-rotate(-12deg) brightness(.9)}
+#suntip{position:fixed;z-index:589;display:none;background:var(--ink);color:var(--paper);border-radius:12px;
+  padding:10px 12px;font-size:13px;line-height:1.55;max-width:230px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+#suntip.show{display:block}
+#suntip b{font-weight:700}#suntip span{opacity:.7}
+@media (prefers-reduced-motion:reduce){.boat svg{transition:none}#sheet{transition:none}#sun{transition:none}}
 
 /* desktop / wide browser */
 @media (min-width:820px){
@@ -164,6 +174,8 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
   <button class="round" id="gotoBtn" title="Go to a point"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
   <button class="round" id="fxBtn" title="Weather animation on/off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 8h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 18h7"/></svg></button>
 </div>
+<img id="sun" alt="Sun position">
+<div id="suntip"></div>
 
 <div id="routebar">
   <div class="stat" id="rDist">0 <span>points</span></div>
@@ -229,6 +241,8 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
     </div>
     <h2 style="font-size:17px;margin-top:16px">Map</h2>
     <label>CARTO map key — optional, gives the cleanest labels (free at carto.com/basemaps/apikey). Saved on this device; leave blank to use the Esri street map.</label><input id="pKey" placeholder="paste key">
+    <label>Weather animation</label>
+    <select id="pFX"><option value="classic">Classic — wind &amp; rain</option><option value="rich">Rich — rolling swell, gust surges, rain that scales with the rate</option></select>
     <button class="save" id="pSave">Save boat</button>
   </div>
 </div>
@@ -266,14 +280,19 @@ function applyProfile(){
 }
 function openProfile(){
   ['Name','Len','Cruise','Draft','Wind','Gust','Wave'].forEach(k => $('#p'+k).value = P[k.toLowerCase()] ?? '');
-  $('#pType').value = P.type; $('#pKey').value = store.get('cartoKey') || ''; $('#pmodal').classList.add('show');
+  $('#pType').value = P.type; $('#pKey').value = store.get('cartoKey') || '';
+  $('#pFX').value = store.get('fxDetail') || 'classic';
+  $('#pmodal').classList.add('show');
 }
 $('#editBoat').onclick = openProfile;
 $('#pAuto').onclick = () => { const d = defaultsFor($('#pType').value, +$('#pLen').value); $('#pWind').value=d.wind; $('#pGust').value=d.gust; $('#pWave').value=d.wave; $('#pCruise').value=d.cruise; };
 $('#pSave').onclick = () => {
   P = {name:$('#pName').value.trim(), len:+$('#pLen').value||'', type:$('#pType').value, cruise:+$('#pCruise').value||20, draft:+$('#pDraft').value||1.5,
        wind:+$('#pWind').value||12, gust:+$('#pGust').value||18, wave:+$('#pWave').value||1.5};
-  store.set('boat', P); store.set('cartoKey', $('#pKey').value.trim()); buildBase(); setMode(mode); $('#pmodal').classList.remove('show'); applyProfile();
+  store.set('boat', P); store.set('cartoKey', $('#pKey').value.trim());
+  store.set('fxDetail', $('#pFX').value); fx.setDetail($('#pFX').value);
+  buildBase(); setMode(mode); $('#pmodal').classList.remove('show'); applyProfile();
+  if (wps.length){ for (const k in wxAt) delete wxAt[k]; draw(); }   // limits changed → re-grade the route
 };
 $('#pmodal').onclick = e => { if (e.target.id==='pmodal') $('#pmodal').classList.remove('show'); };
 if (!store.get('boat')) setTimeout(openProfile, 1500);
@@ -328,17 +347,15 @@ setMode(mode);
 document.querySelectorAll('#layers button').forEach(b => b.onclick = () => setMode(b.dataset.l));
 
 // ---------- boat ----------
+// lava-orange + white, top-down, bow up (see Higgsfield ref A). Dynamic stern spray is drawn on the #fx canvas.
 const boatSVG = `<svg viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
-  <g opacity=".55" stroke="#fff" stroke-linecap="round" fill="none">
-    <path d="M27 62 L14 108" stroke-width="3"/><path d="M33 62 L46 108" stroke-width="3"/>
-    <path d="M24 66 L9 108" stroke-width="1.5" opacity=".6"/><path d="M36 66 L51 108" stroke-width="1.5" opacity=".6"/>
-  </g>
-  <ellipse cx="30" cy="66" rx="9" ry="7" fill="#fff" opacity=".75"/>
-  <path d="M30 4 C38 14 40 28 40 42 C40 52 38 58 36 62 L24 62 C22 58 20 52 20 42 C20 28 22 14 30 4 Z" fill="#F4F8FA" stroke="#0F2A44" stroke-width="1.4"/>
-  <path d="M30 14 C34 20 35 27 35 32 L25 32 C25 27 26 20 30 14 Z" fill="#0F2A44" opacity=".9"/>
-  <rect x="24" y="36" width="12" height="7" rx="2.5" fill="#0F2A44" opacity=".85"/>
-  <rect x="25" y="47" width="10" height="5" rx="2" fill="#0F2A44" opacity=".7"/>
-  <rect x="26" y="55" width="8" height="4" rx="2" fill="#0F2A44" opacity=".6"/>
+  <path d="M30 3 C39 15 41 30 41 44 C41 54 39 60 37 64 L23 64 C21 60 19 54 19 44 C19 30 21 15 30 3 Z" fill="#F4F8FA" stroke="#E8531C" stroke-width="2.6" stroke-linejoin="round"/>
+  <path d="M30 15 C35 22 36 30 36 35 L24 35 C24 30 25 22 30 15 Z" fill="#E8531C"/>
+  <rect x="24.5" y="39" width="11" height="7.5" rx="2.6" fill="#E8531C"/>
+  <rect x="23.6" y="49" width="5.6" height="6.4" rx="2" fill="#E8531C"/>
+  <rect x="30.8" y="49" width="5.6" height="6.4" rx="2" fill="#E8531C"/>
+  <rect x="25.5" y="63.5" width="9" height="7.5" rx="2.6" fill="#E8531C"/>
+  <rect x="28.5" y="70" width="3" height="4" rx="1" fill="#E8531C"/>
 </svg>`;
 const boatIcon = L.divIcon({className:'boat', html:boatSVG, iconSize:[0,0]});
 const boat = L.marker([home.lat, home.lng], {icon:boatIcon, zIndexOffset:1000, interactive:false}).addTo(map);
@@ -371,6 +388,7 @@ function onFix(p){
     ? `weak GPS ±${Math.round(c.accuracy)} m — need sky view`
     : `${Math.round(heading).toString().padStart(3,'0')}° ${dirName(heading)} · ±${Math.round(c.accuracy)} m`;
   lastFix = here; store.set('lastPos', here);
+  updateSun();
   if (wps.length) draw();
   if (!wxPos || haversine(wxPos, here) > 3000){ wxPos = here; loadAll(here); }
 }
@@ -440,8 +458,10 @@ function renderNow(){
   $('#wSea').textContent = mc && mc.sea_surface_temperature!=null ? `${Math.round(mc.sea_surface_temperature)}°F water` : 'water —';
   $('#wSun').textContent = `Sunset ${fmtT(WX.daily.sunset[0])}`;
   const i = nowIdx(); $('#wRain').textContent = `Rain ${WX.hourly.precipitation_probability[i] ?? 0}%`;
-  fx.setWeather({wind:c.wind_speed_10m, dir:c.wind_direction_10m, code:c.weather_code, precip:c.precipitation});
+  fx.setWeather({wind:c.wind_speed_10m, gust:c.wind_gusts_10m, dir:c.wind_direction_10m, code:c.weather_code, precip:c.precipitation,
+    waveH:mc?.wave_height, waveT:mc?.wave_period, waveDir:mc?.wave_direction ?? c.wind_direction_10m});
   boatWarning(c, mc);
+  updateSun();
 }
 function nowIdx(){ const t = Date.now(); let best=0; WX.hourly.time.forEach((s,i)=>{ if (new Date(s).getTime()<=t) best=i; }); return best; }
 function renderDays(){
@@ -561,59 +581,223 @@ async function loadAlerts(pos){
 // ---------- weather animation ----------
 const fx = (() => {
   const cv = $('#fx'), g = cv.getContext('2d');
-  let on = !matchMedia('(prefers-reduced-motion: reduce)').matches, W, H, parts = [], drops = [], wx = {wind:0, dir:0, code:0, precip:0}, alert = null, boatLvl = null, flash = 0, raf;
-  function size(){ W = cv.width = innerWidth*devicePixelRatio; H = cv.height = innerHeight*devicePixelRatio; }
+  const DPR = () => Math.min(devicePixelRatio || 1, 2.5);
+  let on = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let detail = 'classic';
+  let W, H, dpr = DPR();
+  let parts = [], drops = [], spray = [], flakes = [];
+  let wx = {wind:0, gust:0, dir:0, code:0, precip:0, waveH:0, waveT:6, waveDir:0};
+  let alert = null, boatLvl = null, flash = 0, raf;
+  let gustCd = 0, gustLvl = 0, swellPh = 0, tms = 0;
+  function size(){ dpr = DPR(); W = cv.width = innerWidth*dpr; H = cv.height = innerHeight*dpr; }
   addEventListener('resize', size); size();
   function reset(){
-    const n = Math.min(900, 120 + Math.round(wx.wind*40));
+    const n = Math.min(1000, 120 + Math.round(wx.wind*40));
     parts = Array.from({length:n}, () => ({x:Math.random()*W, y:Math.random()*H, a:Math.random()*80}));
     drops = [];
   }
   const raining = () => wx.precip > 0 || (wx.code>=51 && wx.code<=67) || (wx.code>=80 && wx.code<=82) || wx.code>=95;
-  function frame(){
+  const snowing = () => wx.code>=71 && wx.code<=77;
+
+  // rolling swell bands — from wave height / period / direction (rich only)
+  function drawSwell(){
+    if (detail!=='rich' || !(wx.waveH > 0.3)) return;
+    const per = Math.max(2.5, wx.waveT || 6);
+    const b = (wx.waveDir + 180)*Math.PI/180, tx = Math.sin(b), ty = -Math.cos(b);
+    const wl = (46 + per*20)*dpr;
+    swellPh = (swellPh + wl/(per*60)) % wl;
+    const amp = Math.min(.42, .05 + wx.waveH*.08), lw = Math.max(1.2, wx.waveH*.8)*dpr, wob = Math.min(9, wx.waveH*1.3)*dpr;
+    const diag = Math.hypot(W,H), step = 34*dpr;
+    g.save(); g.translate(W/2,H/2); g.rotate(Math.atan2(-tx, ty)); g.lineCap='round';
+    for (let pass=0; pass<2; pass++){
+      g.strokeStyle = pass ? `rgba(15,42,68,${amp*.4})` : `rgba(255,255,255,${amp})`;
+      g.lineWidth = pass ? lw*.7 : lw;
+      g.beginPath();
+      for (let d=-diag; d<diag; d+=wl){
+        const base = d + swellPh + (pass ? wl*.5 : 0);
+        let first = true;
+        for (let x=-diag; x<=diag; x+=step){ const y = base + Math.sin(x/(95*dpr) + tms/900)*wob; first ? (g.moveTo(x,y), first=false) : g.lineTo(x,y); }
+      }
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  // churning spray + wake behind the transom while the boat is moving
+  function drawSpray(){
+    let bx, by;
+    try{ const cp = map.latLngToContainerPoint(boat.getLatLng()); bx = cp.x*dpr; by = cp.y*dpr; }catch(e){ return; }
+    const hr = heading*Math.PI/180, fx1 = Math.sin(hr), fy1 = -Math.cos(hr);   // travel dir on screen
+    const bxu = -fx1, byu = -fy1;                                              // astern
+    const sf = Math.min(1, curSpeed/16);
+    if (on && curSpeed > 1.4){
+      const sxp = bx + bxu*24*dpr, syp = by + byu*24*dpr;
+      for (let i=0, n=1+Math.round(sf*4); i<n; i++){
+        const fan = (Math.random()-.5)*(0.5 + sf*0.9), ca = Math.cos(fan), sa = Math.sin(fan);
+        const dx = bxu*ca - byu*sa, dy = bxu*sa + byu*ca;
+        const s = (1.2 + sf*3.6 + Math.random()*1.5)*dpr;
+        spray.push({x:sxp+(Math.random()-.5)*6*dpr, y:syp+(Math.random()-.5)*6*dpr, vx:dx*s, vy:dy*s, r:(1.6+Math.random()*2.4)*dpr, life:1});
+      }
+    }
+    if (spray.length > 170) spray.splice(0, spray.length-170);
+    for (const p of spray){
+      p.x += p.vx; p.y += p.vy; p.vx *= .93; p.vy *= .93; p.vy += .04*dpr; p.r += .12*dpr; p.life -= .028;
+      if (p.life <= 0) continue;
+      g.fillStyle = `rgba(255,255,255,${Math.min(.8, p.life*.9)})`;
+      g.beginPath(); g.arc(p.x, p.y, p.r, 0, 7); g.fill();
+    }
+    spray = spray.filter(p => p.life > 0);
+  }
+
+  function frame(ts){
+    tms = ts || 0;
     if (!on){ g.clearRect(0,0,W,H); return; }
-    // fade previous frame for trails
-    g.globalCompositeOperation = 'destination-in'; g.fillStyle = 'rgba(0,0,0,.92)'; g.fillRect(0,0,W,H);
+    g.globalCompositeOperation = 'destination-in'; g.fillStyle = 'rgba(0,0,0,.9)'; g.fillRect(0,0,W,H);
     g.globalCompositeOperation = 'source-over';
-    // wind particles: dir is FROM, so travel toward dir+180
-    const rad = (wx.dir+180)*Math.PI/180, sp = (0.4 + wx.wind*0.22)*devicePixelRatio;
+
+    drawSwell();
+
+    // gust surge (rich): every few seconds the wind briefly ramps toward the gust value
+    gustCd -= 1/60;
+    if (detail==='rich' && gustCd<=0 && wx.gust > wx.wind+1){ gustCd = 4 + Math.random()*4; gustLvl = 1; }
+    gustLvl *= .972;
+    const eff = wx.wind + (detail==='rich' ? (wx.gust - wx.wind)*Math.max(0, gustLvl) : 0);
+
+    // wind streaks — dir is FROM, so travel toward dir+180
+    const rad = (wx.dir+180)*Math.PI/180, sp = (0.4 + eff*0.22)*dpr;
     const vx = Math.sin(rad)*sp, vy = -Math.cos(rad)*sp;
-    g.strokeStyle = (mode==='map'||mode==='chart') ? 'rgba(15,42,68,.55)' : 'rgba(255,255,255,.7)'; g.lineWidth = 1.2*devicePixelRatio; g.lineCap='round';
-    g.beginPath();
+    const want = Math.min(1000, 120 + Math.round(eff*40));
+    while (parts.length < want) parts.push({x:Math.random()*W, y:Math.random()*H, a:Math.random()*90});
+    if (parts.length > want+140) parts.length = want;
+    g.strokeStyle = (mode==='map'||mode==='chart') ? 'rgba(15,42,68,.5)' : 'rgba(255,255,255,.7)';
+    g.lineWidth = 1.2*dpr; g.lineCap='round'; g.beginPath();
     for (const p of parts){
-      const nx = p.x+vx, ny = p.y+vy;
-      g.moveTo(p.x,p.y); g.lineTo(nx,ny);
+      const nx = p.x+vx, ny = p.y+vy; g.moveTo(p.x,p.y); g.lineTo(nx,ny);
       p.x = nx; p.y = ny; p.a++;
       if (p.a > 90 || p.x<0||p.x>W||p.y<0||p.y>H){ p.x=Math.random()*W; p.y=Math.random()*H; p.a=0; }
     }
     g.stroke();
-    // rain
+
+    // rain — rich: scales with the actual rate; classic: 3 code tiers
     if (raining()){
-      const want = wx.code>=95 ? 260 : wx.code>=63 ? 180 : 90;
-      while (drops.length < want) drops.push({x:Math.random()*W, y:Math.random()*H, l:(10+Math.random()*14)*devicePixelRatio, v:(9+Math.random()*6)*devicePixelRatio});
-      g.strokeStyle = 'rgba(120,170,220,.75)'; g.lineWidth = 1.4*devicePixelRatio; g.beginPath();
-      for (const d of drops){ const dx = vx*0.3; g.moveTo(d.x,d.y); g.lineTo(d.x+dx, d.y+d.l); d.y += d.v; d.x += dx; if (d.y>H){ d.y=-d.l; d.x=Math.random()*W; } }
+      let want2;
+      if (detail==='rich'){
+        const floor = wx.code>=95 ? 150 : wx.code>=63 ? 110 : wx.code>=51 ? 45 : 0;
+        want2 = Math.min(440, Math.max(floor, wx.precip*1800, wx.precip>0 ? 40 : 0));   // precip in inches
+      } else {
+        want2 = wx.code>=95 ? 260 : wx.code>=63 ? 180 : 90;
+      }
+      while (drops.length < want2) drops.push({x:Math.random()*W, y:Math.random()*H, l:(10+Math.random()*14)*dpr, v:(9+Math.random()*6)*dpr});
+      if (drops.length > want2) drops.length = Math.round(want2);
+      const a = Math.min(.85, .3 + want2/620);
+      g.strokeStyle = `rgba(120,170,220,${a})`; g.lineWidth = 1.4*dpr; g.beginPath();
+      const dx = vx*0.32;
+      for (const d of drops){ g.moveTo(d.x,d.y); g.lineTo(d.x+dx, d.y+d.l); d.y += d.v; d.x += dx; if (d.y>H){ d.y=-d.l; d.x=Math.random()*W; } }
       g.stroke();
-      if (wx.code>=95 && Math.random()<0.006) flash = 1;
+      if (wx.code>=95 && Math.random()<0.007) flash = 1;
     } else drops = [];
-    if (wx.code===45 || wx.code===48){ g.fillStyle='rgba(235,240,245,.35)'; g.fillRect(0,0,W,H); }
-    if (flash>0){ g.fillStyle=`rgba(255,255,255,${flash*.6})`; g.fillRect(0,0,W,H); flash -= .08; }
+
+    // snow
+    if (snowing()){
+      while (flakes.length < 150) flakes.push({x:Math.random()*W, y:Math.random()*H, r:(1.3+Math.random()*2.2)*dpr, v:(1+Math.random()*1.5)*dpr, ph:Math.random()*6});
+      g.fillStyle = 'rgba(255,255,255,.9)';
+      for (const f of flakes){ f.ph += .03; f.y += f.v; f.x += Math.sin(f.ph)*.6*dpr + vx*.15; if (f.y>H){ f.y=-4; f.x=Math.random()*W; } g.beginPath(); g.arc(f.x,f.y,f.r,0,7); g.fill(); }
+    } else flakes = [];
+
+    if (wx.code===45 || wx.code===48){ g.fillStyle='rgba(235,240,245,.33)'; g.fillRect(0,0,W,H); }
+    if (flash>0){ g.fillStyle=`rgba(255,255,255,${flash*.55})`; g.fillRect(0,0,W,H); flash -= .08; }
+
+    drawSpray();
+
     const lvl = alert ? 'r' : boatLvl;
-    if (lvl){ const pulse = (Math.sin(Date.now()/500)+1)/2; g.lineWidth = 6*devicePixelRatio; g.strokeStyle = lvl==='r' ? `rgba(217,58,43,${.25+pulse*.35})` : `rgba(242,169,59,${.25+pulse*.35})`; g.strokeRect(0,0,W,H); }
+    if (lvl){ const pulse = (Math.sin(tms/500)+1)/2; g.lineWidth = 6*dpr; g.strokeStyle = lvl==='r' ? `rgba(217,58,43,${.25+pulse*.35})` : `rgba(242,169,59,${.25+pulse*.35})`; g.strokeRect(0,0,W,H); }
     raf = requestAnimationFrame(frame);
   }
-  function start(){ cancelAnimationFrame(raf); if (on){ reset(); frame(); } else g.clearRect(0,0,W,H); }
+  function start(){ cancelAnimationFrame(raf); if (on){ reset(); raf = requestAnimationFrame(frame); } else g.clearRect(0,0,W,H); }
   $('#fxBtn').classList.toggle('on', on);
   $('#fxBtn').onclick = () => { on = !on; $('#fxBtn').classList.toggle('on', on); start(); };
   document.addEventListener('visibilitychange', () => document.hidden ? cancelAnimationFrame(raf) : start());
   start();
-  return { setWeather(w){ wx = w; reset(); }, setAlert(a){ alert = a; }, setBoat(l){ boatLvl = l; } };
+  return {
+    setWeather(w){ wx = Object.assign({wind:0,gust:0,dir:0,code:0,precip:0,waveH:0,waveT:6,waveDir:0}, w||{}); reset(); },
+    setAlert(a){ alert = a; }, setBoat(l){ boatLvl = l; },
+    setDetail(d){ detail = d==='rich' ? 'rich' : 'classic'; }
+  };
 })();
+fx.setDetail(store.get('fxDetail') || 'classic');
+
+// ---------- sun: real sky position, pinned to the map edge on its compass bearing ----------
+// crisp inline sun — gold disc, layered beams, warm core; tints/dims through dusk via the .low filter
+const SUN_SVG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+  '<defs><radialGradient id="sd" cx="50%" cy="45%" r="55%">' +
+  '<stop offset="0" stop-color="#FFF7DE"/><stop offset="0.5" stop-color="#FFD34E"/><stop offset="1" stop-color="#F0A00E"/>' +
+  '</radialGradient></defs>' +
+  '<path fill="#FBBF1C" opacity="0.5" d="M32 0 L38 20 L58 6 L45 26 L64 32 L45 38 L58 58 L38 44 L32 64 L26 44 L6 58 L19 38 L0 32 L19 26 L6 6 L26 20 Z"/>' +
+  '<path fill="#F7B10E" d="M32 3 L36.98 19.99 L53.2 10.8 L44.01 27.02 L62 32 L44.01 36.98 L53.2 53.2 L36.98 44.01 L32 61 L27.02 44.01 L10.8 53.2 L19.99 36.98 L2 32 L19.99 27.02 L10.8 10.8 L27.02 19.99 Z"/>' +
+  '<circle cx="32" cy="32" r="15" fill="url(#sd)" stroke="#E8951C" stroke-width="1.4"/>' +
+  '<circle cx="29" cy="29" r="6" fill="#FFF7DE" opacity="0.85"/>' +
+  '</svg>');
+$('#sun').src = SUN_SVG;
+
+function solarPos(lat, lon, date){
+  const rad = Math.PI/180, deg = 180/Math.PI, now = date || new Date();
+  const n = now.getTime()/86400000 + 2440587.5 - 2451545.0;      // days since J2000
+  const L = (280.460 + 0.9856474*n) % 360;
+  const g0 = ((357.528 + 0.9856003*n) % 360) * rad;
+  const lam = (L + 1.915*Math.sin(g0) + 0.020*Math.sin(2*g0)) * rad;
+  const eps = (23.439 - 0.0000004*n) * rad;
+  const ra = Math.atan2(Math.cos(eps)*Math.sin(lam), Math.cos(lam));
+  const dec = Math.asin(Math.sin(eps)*Math.sin(lam));
+  const gmst = (((18.697374558 + 24.06570982441908*n) % 24) + 24) % 24;
+  const lst = ((gmst*15 + lon) % 360) * rad;
+  const ha = lst - ra, la = lat*rad;
+  const el = Math.asin(Math.sin(la)*Math.sin(dec) + Math.cos(la)*Math.cos(dec)*Math.cos(ha)) * deg;
+  let az = Math.atan2(Math.sin(ha), Math.cos(ha)*Math.sin(la) - Math.tan(dec)*Math.cos(la)) * deg + 180;
+  az = (az % 360 + 360) % 360;
+  return {az, el};
+}
+function sunEdge(az){
+  const w = innerWidth, h = innerHeight, cx = w/2, cy = h/2, m = 42;
+  const a = az*Math.PI/180, dx = Math.sin(a), dy = -Math.cos(a);
+  let s = Infinity;
+  if (dx > 1e-6) s = Math.min(s, (w-m-cx)/dx); else if (dx < -1e-6) s = Math.min(s, (m-cx)/dx);
+  if (dy > 1e-6) s = Math.min(s, (h-m-cy)/dy); else if (dy < -1e-6) s = Math.min(s, (m-cy)/dy);
+  return {x: cx + dx*s, y: cy + dy*s};
+}
+function updateSun(){
+  const p = wxPos || lastFix || home, sun = $('#sun');
+  const {az, el} = solarPos(p.lat, p.lng, new Date());
+  const op = el > 8 ? 1 : el > 0 ? 0.5 + el/16 : el > -6 ? 0.3*(el+6)/6 : 0;   // fade through dusk, gone at night
+  if (op <= 0.02){ sun.style.display = 'none'; $('#suntip').classList.remove('show'); return; }
+  const {x, y} = sunEdge(az);
+  sun.style.display = 'block';
+  sun.style.left = x + 'px'; sun.style.top = y + 'px'; sun.style.opacity = op.toFixed(2);
+  sun.classList.toggle('low', el < 6);
+  sun.dataset.az = Math.round(az); sun.dataset.el = Math.round(el);
+}
+$('#sun').onclick = () => {
+  const tip = $('#suntip'), sun = $('#sun');
+  if (tip.classList.contains('show')){ tip.classList.remove('show'); return; }
+  const sr = WX && WX.daily && WX.daily.sunrise && WX.daily.sunrise[0];
+  const ss = WX && WX.daily && WX.daily.sunset && WX.daily.sunset[0];
+  tip.innerHTML =
+    (sr ? `<b>Sunrise</b> ${fmtT(new Date(sr).getTime())}<br>` : '') +
+    (ss ? `<b>Sunset</b> ${fmtT(new Date(ss).getTime())}<br>` : '') +
+    (sr && ss ? `<b>Golden light</b> to ~${fmtT(new Date(sr).getTime()+40*60000)} · from ~${fmtT(new Date(ss).getTime()-40*60000)}<br>` : '') +
+    `<span>sun altitude ${sun.dataset.el ?? '–'}° · bearing ${sun.dataset.az ?? '–'}°</span>`;
+  const b = sun.getBoundingClientRect();
+  tip.style.left = Math.min(innerWidth-238, Math.max(8, b.left - 90)) + 'px';
+  tip.style.top = Math.min(innerHeight-140, b.bottom + 8) + 'px';
+  tip.classList.add('show');
+};
+addEventListener('resize', updateSun);
+setInterval(updateSun, 60000);
+updateSun();
 
 // ---------- navigation: waypoints, next leg, total ETA ----------
 let picking = false, wps = [], legIdx = 0;
-const routeLine = L.polyline([], {color:'#F2A93B', weight:5, opacity:.95, dashArray:'2 10', lineCap:'round'}).addTo(map);
-const legLine   = L.polyline([], {color:'#D93A2B', weight:4, opacity:.9, dashArray:'1 12', lineCap:'round'}).addTo(map);
+const routeSegs = L.layerGroup().addTo(map);   // weather-graded route: many short coloured segments
 const wpLayer = L.layerGroup().addTo(map);
 const cruise = () => curSpeed > 1.5 ? curSpeed : (P.cruise || 20);
 // where the boat icon actually is: the live fix, or the last-known / default spot before GPS locks on
@@ -631,28 +815,97 @@ $('#rUndo').onclick = () => { wps.pop(); legIdx = Math.min(legIdx, Math.max(0,wp
 $('#rClear').onclick = () => { wps = []; legIdx = 0; picking = false; draw(); };
 
 function draw(){
-  wpLayer.clearLayers();
-  wps.forEach((p,i) => L.marker(p, {icon:L.divIcon({className: i===wps.length-1 ? 'dest' : 'wp', iconSize: i===wps.length-1 ? [22,22] : [14,14]}), interactive:false}).addTo(wpLayer));
-  routeLine.setLatLngs(wps);
   const has = wps.length>0;
   $('#nav').classList.toggle('show', has); $('#alert').classList.toggle('pushed', has);
   $('#routebar').classList.toggle('show', picking || has);
   $('#gotoBtn').classList.toggle('on', picking || has);
-  if (!has){ legLine.setLatLngs([]); return; }
-  // total leg-by-leg from the boat through every point
-  let total = haversine(boatPos(), wps[legIdx]);
-  for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
-  const nm = total/NM, mins = nm/cruise()*60;
-  $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
-  $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}</span>`;
-  $('#navEta').textContent = fmtMin(mins);
-  $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}`;
+  renderRoute();
+  if (has){
+    // total leg-by-leg from the boat through every remaining point
+    let total = haversine(boatPos(), wps[legIdx]);
+    for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
+    const nm = total/NM, mins = nm/cruise()*60;
+    $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
+    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}</span>`;
+    $('#navEta').textContent = fmtMin(mins);
+    $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}`;
+    gradeRoute();
+  } else {
+    $('#rDist').innerHTML = `0 <span>points</span>`;
+    $('#rEta').innerHTML = `tap map <span>to add</span>`;
+  }
   updateNav();
 }
+
+// ---- weather-graded route line: colour reflects the forecast at each point along the way ----
+const GCOL = {g:'#1F8A5B', a:'#F2A93B', r:'#D93A2B'};
+const gLevel = s => s==='r' ? 2 : s==='a' ? 1 : 0;
+const gColor = lv => GCOL[['g','a','r'][Math.max(0, Math.min(2, Math.round(lv)))]];
+const wxAt = {};                 // "lat,lng" -> {grade, t}
+const wxPending = new Set();
+const gkey = p => p.lat.toFixed(2) + ',' + p.lng.toFixed(2);
+function curGrade(){             // grade at the boat, from the main forecast already loaded
+  if (!WX) return null;
+  const c = WX.current, mc = MAR && MAR.current;
+  return score(c.wind_speed_10m, mc && mc.wave_height, WX.hourly.precipitation_probability[nowIdx()], c.wind_gusts_10m);
+}
+function gradeAt(p){
+  const e = wxAt[gkey(p)];
+  if (e && Date.now()-e.t < 20*60000) return e.grade;
+  return curGrade() || 'g';
+}
+function renderRoute(){
+  wpLayer.clearLayers(); routeSegs.clearLayers();
+  if (!wps.length) return;
+  const path = [boatPos(), ...wps];
+  for (let i=0;i<path.length-1;i++){
+    const a = path[i], b = path[i+1];
+    const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = i===legIdx ? 6 : 5;
+    for (let k=0;k<N;k++){
+      const t0=k/N, t1=(k+1)/N;
+      const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
+      const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
+      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.95, lineCap:'round', interactive:false}).addTo(routeSegs);
+    }
+  }
+  wps.forEach((p,i) => {
+    const last = i===wps.length-1;
+    L.marker(p, {icon: pinIcon(last, wxAt[gkey(p)] ? gradeAt(p) : null), interactive:false, zIndexOffset: last?700:500}).addTo(wpLayer);
+  });
+}
+async function gradeRoute(){
+  for (const p of wps){
+    const k = gkey(p), e = wxAt[k];
+    if ((e && Date.now()-e.t < 20*60000) || wxPending.has(k)) continue;
+    wxPending.add(k);
+    try{
+      const [w, m] = await Promise.all([
+        fetch(`https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lng}&wind_speed_unit=kn&timezone=auto&current=precipitation,weather_code,wind_speed_10m,wind_gusts_10m`).then(r=>r.json()),
+        fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${p.lat}&longitude=${p.lng}&length_unit=imperial&current=wave_height`).then(r=>r.json()).catch(()=>null)
+      ]);
+      const c = w.current || {};
+      const rainP = (c.weather_code>=51 && c.weather_code<=67) || c.weather_code>=80 ? 60 : 0;
+      wxAt[k] = {grade: score(c.wind_speed_10m, m && m.current && m.current.wave_height, rainP, c.wind_gusts_10m), t: Date.now()};
+    }catch(e2){ wxAt[k] = {grade: curGrade() || 'g', t: Date.now()}; }
+    finally{ wxPending.delete(k); renderRoute(); }
+  }
+}
+function pinIcon(isDest, grade){
+  const col = grade ? GCOL[grade] : (isDest ? '#D93A2B' : '#F2A93B');
+  const s = isDest ? 1 : 0.82, w = Math.round(34*s), h = Math.round(46*s);
+  const html = `<svg width="${w}" height="${h}" viewBox="0 0 34 46" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="17" cy="43.5" rx="7.5" ry="2.6" fill="rgba(15,42,68,.33)"/>
+    <path d="M17 45 C7 30 2 22 2 15 A15 15 0 1 1 32 15 C32 22 27 30 17 45 Z" fill="${col}"/>
+    <path d="M17 45 C13.5 39 10 33 7 27 C11 30.5 14 32 17 32 C20 32 23 30.5 27 27 C24 33 20.5 39 17 45 Z" fill="rgba(0,0,0,.16)"/>
+    <ellipse cx="12" cy="10" rx="4.6" ry="6.4" transform="rotate(-24 12 10)" fill="#fff" opacity=".3"/>
+    <circle cx="17" cy="15" r="5.6" fill="#fff"/>
+  </svg>`;
+  return L.divIcon({className:'pin', html, iconSize:[w,h], iconAnchor:[w/2, h]});
+}
+
 function updateNav(){
   if (!wps.length) return;
   const from = boatPos(), tgt = wps[legIdx], d = haversine(from, tgt), brg = bearing(from, tgt);
-  legLine.setLatLngs([from, tgt]);
   $('#navDist').innerHTML = d < 370 ? `${Math.round(d*3.28)}<small>ft</small>` : `${(d/NM).toFixed(d/NM<10?2:1)}<small>nm</small>`;
   $('#navBrg').textContent = `steer ${Math.round(brg).toString().padStart(3,'0')}° ${dirName(brg)} · point ${legIdx+1} of ${wps.length}`;
   $('#navCmp').querySelector('path').setAttribute('transform', `rotate(${brg-heading} 12 12)`);
@@ -672,7 +925,7 @@ $('#gpxIn').onchange = async e => {
   const doc = new DOMParser().parseFromString(await f.text(), 'text/xml');
   wps = [...doc.querySelectorAll('rtept, trkpt, wpt')].map(n => L.latLng(+n.getAttribute('lat'), +n.getAttribute('lon')));
   legIdx = 0; draw();
-  if (wps.length){ follow=false; $('#follow').classList.remove('on'); map.fitBounds(routeLine.getBounds(), {padding:[40,160]}); }
+  if (wps.length){ follow=false; $('#follow').classList.remove('on'); map.fitBounds(L.latLngBounds(wps.map(p=>[p.lat,p.lng])), {padding:[40,160]}); }
   $('#sheet').classList.remove('open');
 };
 applyProfile();
