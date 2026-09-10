@@ -59,22 +59,39 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 #routebar button+button{margin-left:0}
 
 /* bottom sheet */
-#sheet{position:fixed;left:0;right:0;bottom:0;z-index:610;background:var(--paper);border-radius:20px 20px 0 0;box-shadow:0 -4px 20px rgba(15,42,68,.3);transform:translateY(calc(100% - 140px - var(--sab)));transition:transform .28s cubic-bezier(.2,.8,.2,1);max-height:82vh;display:flex;flex-direction:column}
+#sheet{position:fixed;left:0;right:0;bottom:0;z-index:610;background:linear-gradient(180deg,#d3e8f6 0%,#e9e8d6 42%,#f4edd8 66%);border-radius:20px 20px 0 0;box-shadow:0 -4px 20px rgba(15,42,68,.3);transform:translateY(calc(100% - 176px - var(--sab)));transition:transform .28s cubic-bezier(.2,.8,.2,1);max-height:86vh;display:flex;flex-direction:column}
 #sheet.open{transform:translateY(0)}
-#grab{height:26px;display:grid;place-items:center;flex:none}
-#grab i{width:40px;height:5px;border-radius:3px;background:rgba(15,42,68,.25);display:block}
-#now{display:grid;grid-template-columns:repeat(4,1fr);padding:0 14px 10px;gap:6px;flex:none}
-.cell{line-height:1.05}
-.cell b{display:block;font-size:26px;font-weight:700}
-.cell b small{font-size:13px;font-weight:500;opacity:.7;margin-left:2px}
-.cell span{display:block;font-size:12px;opacity:.7;margin-top:3px}
+#grab{height:24px;display:grid;place-items:center;flex:none}
+#grab i{width:40px;height:5px;border-radius:3px;background:rgba(15,42,68,.28);display:block}
+
+/* current-conditions header */
+#wxhead{display:flex;align-items:center;gap:12px;padding:2px 16px 6px;flex:none}
+#wxhead #wIcon{font-size:34px;line-height:1;flex:none}
+#wxhead .t{display:flex;align-items:flex-start;line-height:.85}
+#wxhead #wBig{font-size:52px;font-weight:700;letter-spacing:-2px}
+#wxhead #wBigU{font-size:19px;font-weight:700;opacity:.6;margin:5px 0 0 3px}
+#wxhead #wCond{margin-left:auto;text-align:right;font-size:13px;font-weight:600;opacity:.6;max-width:118px}
+
+#now{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 6px;padding:6px 16px 10px;flex:none}
+#now .cell{display:flex;gap:8px;align-items:flex-start;line-height:1.05}
+#now .ic{flex:none;width:22px;height:22px;color:var(--ink)}
+#now .ic svg{width:22px;height:22px;display:block}
+#now .ic.dir{background:var(--ink);border-radius:50%;display:grid;place-items:center}
+#now .ic.dir svg{width:13px;height:13px;color:#fff;transition:transform .5s ease}
+#now .cell b{font-size:19px;font-weight:700}
+#now .cell small{font-size:12px;font-weight:600;opacity:.55;margin-left:2px}
+#now .cell span{display:block;font-size:11px;font-weight:600;opacity:.5;margin-top:2px;text-transform:uppercase;letter-spacing:.02em}
+#tideStrip{display:flex;gap:14px;padding:0 16px 12px;font-size:13px;font-weight:600;opacity:.62;flex:none}
+#tideStrip #wTide{font-weight:700;opacity:1}
 .arrow{display:inline-block;width:14px;height:14px;vertical-align:-1px;margin-right:2px}
-#body{overflow:auto;padding:0 14px calc(var(--sab) + 16px);flex:1}
+
+#body{overflow:auto;padding:12px 14px calc(var(--sab) + 16px);flex:1;background:var(--paper);border-radius:16px 16px 0 0}
 .section{margin-top:14px}
+.section:first-child{margin-top:2px}
 .section h3{margin:0 0 8px;font-size:15px;font-weight:700;color:var(--sea)}
-#days{display:flex;gap:6px;overflow:auto;padding-bottom:6px}
-#days button{padding:7px 12px;border-radius:20px;background:rgba(46,111,158,.12);font-weight:700;font-size:14px;white-space:nowrap}
-#days button.on{background:var(--ink);color:var(--paper)}
+#days{display:flex;gap:6px;overflow:auto;padding:0 16px 12px;flex:none}
+#days button{padding:7px 13px;border-radius:20px;background:rgba(15,42,68,.10);font-weight:700;font-size:14px;white-space:nowrap;color:var(--ink)}
+#days button.on{background:var(--ink);color:#fff}
 #hours{width:100%;border-collapse:collapse;font-size:15px}
 #hours td{padding:9px 4px;border-bottom:1px solid rgba(15,42,68,.1);white-space:nowrap}
 #hours td:first-child{color:var(--sea);font-weight:700}
@@ -140,7 +157,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
   #alert{max-width:520px}
   #routebar{left:auto;right:12px;max-width:560px;bottom:calc(var(--sab) + 16px)}
   #sheet{left:12px;right:auto;width:390px;bottom:12px;border-radius:20px;max-height:calc(100vh - 24px);
-         transform:translateY(calc(100% - 150px))}
+         transform:translateY(calc(100% - 188px))}
   #sheet.open{transform:translateY(0)}
   #pmodal{align-items:center;justify-content:center;padding:24px}
   #pform{max-width:480px;border-radius:20px}
@@ -189,17 +206,32 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
   <div id="grab"><i></i></div>
   <div id="boatline"><span id="boatName">Set up your boat</span><button id="editBoat">Edit</button></div>
   <div id="boatwarn"></div>
-  <div id="now">
-    <div class="cell"><b id="wSpd">—<small>kn</small></b><span id="wDir">Wind</span></div>
-    <div class="cell"><b id="wGst">—<small>kn</small></b><span>Gust</span></div>
-    <div class="cell"><b id="wWav">—<small>ft</small></b><span id="wPer">Waves</span></div>
-    <div class="cell"><b id="wTide">—</b><span id="wTideNext">Tide</span></div>
+
+  <div id="wxhead">
+    <span id="wIcon">☀️</span>
+    <div class="t"><b id="wBig">—</b><span id="wBigU">°F</span></div>
+    <div id="wCond"></div>
   </div>
+  <div id="now">
+    <div class="cell"><span class="ic dir"><svg viewBox="0 0 24 24" id="wDirArrow"><path d="M12 3l6 11-6-2.6L6 14z" fill="currentColor"/></svg></span>
+      <div><b id="wSpd">—</b><small>kn</small><span id="wDir">Wind</span></div></div>
+    <div class="cell"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 18h8"/></svg></span>
+      <div><b id="wGst">—</b><small>kn</small><span>Gust</span></div></div>
+    <div class="cell"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M5 8l2 2M19 8l-2 2M3 18h18M12 20l-2.5-3h5z" fill="currentColor"/><path d="M8 17a4 4 0 0 1 8 0"/></svg></span>
+      <div><b id="wSun">—</b><span>Sunset</span></div></div>
+    <div class="cell"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13.5V5a2 2 0 1 1 4 0v8.5a4 4 0 1 1-4 0z"/><path d="M12 13V9"/></svg></span>
+      <div><b id="wSea">—</b><small>°F</small><span>Water</span></div></div>
+    <div class="cell"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 13c2.2 0 2.2-2.4 4.5-2.4S9 13 11.5 13 14 10.6 16 10.6 18.5 13 22 13M2 18c2.2 0 2.2-2.4 4.5-2.4S9 18 11.5 18 14 15.6 16 15.6 18.5 18 22 18"/></svg></span>
+      <div><b id="wWav">—</b><small>ft</small><span>Wave ht</span></div></div>
+    <div class="cell"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 9c2.4 0 2.4-4 5-4s2.6 4 5 4M2 15c2.4 0 2.4-4 5-4s2.6 4 5 4"/><path d="M15 7h7M15 12h7M15 17h7" opacity=".7"/></svg></span>
+      <div><b id="wPer">—</b><small>s</small><span>Wave per</span></div></div>
+  </div>
+  <div id="tideStrip"><span id="wTide">—</span><span id="wTideNext">Tide</span><span id="wRain">Rain —</span></div>
+  <div id="days"></div>
+
   <div id="body">
-    <div id="now2" class="legend"><span id="wTmp">—°F air</span><span id="wSea">—°F water</span><span id="wSun">Sunset —</span><span id="wRain">Rain —</span></div>
     <div class="section">
       <h3>Best time to boat</h3>
-      <div id="days"></div>
       <table id="hours"></table>
       <div class="legend"><span><i class="dot g"></i> Calm</span><span><i class="dot a"></i> Fair</span><span><i class="dot r"></i> Rough</span></div>
     </div>
@@ -442,17 +474,27 @@ function boatWarning(c, mc){
   else el.className='';
   fx.setBoat(over.length ? 'r' : near.length ? 'a' : null);
 }
+function condName(code){
+  if (code===0) return 'Clear'; if (code<=2) return 'Mostly clear'; if (code===3) return 'Cloudy';
+  if (code===45||code===48) return 'Fog'; if (code<=57) return 'Drizzle'; if (code<=63) return 'Rain';
+  if (code<=67) return 'Heavy rain'; if (code<=77) return 'Snow'; if (code<=82) return 'Showers';
+  if (code<=86) return 'Snow showers'; return 'Thunderstorm';
+}
 function renderNow(){
-  const c = WX.current, mc = MAR?.current;
-  $('#wSpd').innerHTML = `${Math.round(c.wind_speed_10m)}<small>kn</small>`;
-  $('#wDir').innerHTML = `${arrow(c.wind_direction_10m+180)} ${dirName(c.wind_direction_10m)} wind`;
-  $('#wGst').innerHTML = `${Math.round(c.wind_gusts_10m)}<small>kn</small>`;
-  $('#wWav').innerHTML = mc && mc.wave_height!=null ? `${mc.wave_height.toFixed(1)}<small>ft</small>` : '—';
-  $('#wPer').textContent = mc && mc.wave_period!=null ? `Waves · ${Math.round(mc.wave_period)} s` : 'Waves';
-  $('#wTmp').textContent = `${Math.round(c.temperature_2m)}°F air`;
-  $('#wSea').textContent = mc && mc.sea_surface_temperature!=null ? `${Math.round(mc.sea_surface_temperature)}°F water` : 'water —';
-  $('#wSun').textContent = `Sunset ${fmtT(WX.daily.sunset[0])}`;
-  const i = nowIdx(); $('#wRain').textContent = `Rain ${WX.hourly.precipitation_probability[i] ?? 0}%`;
+  const c = WX.current, mc = MAR?.current, i = nowIdx();
+  const rp = WX.hourly.precipitation_probability[i] ?? 0;
+  $('#wBig').textContent = Math.round(c.temperature_2m);
+  $('#wIcon').textContent = wxIcon(c.weather_code);
+  $('#wCond').textContent = condName(c.weather_code) + (rp>=15 ? ` · ${rp}% rain` : '');
+  $('#wSpd').textContent = Math.round(c.wind_speed_10m);
+  $('#wDir').textContent = dirName(c.wind_direction_10m);
+  $('#wDirArrow').style.transform = `rotate(${(c.wind_direction_10m+180)%360}deg)`;
+  $('#wGst').textContent = Math.round(c.wind_gusts_10m);
+  $('#wSun').textContent = fmtT(WX.daily.sunset[0]);
+  $('#wSea').textContent = mc && mc.sea_surface_temperature!=null ? Math.round(mc.sea_surface_temperature) : '—';
+  $('#wWav').textContent = mc && mc.wave_height!=null ? mc.wave_height.toFixed(1) : '—';
+  $('#wPer').textContent = mc && mc.wave_period!=null ? Math.round(mc.wave_period) : '—';
+  $('#wRain').textContent = `Rain ${rp}%`;
   fx.setWeather({wind:c.wind_speed_10m, gust:c.wind_gusts_10m, dir:c.wind_direction_10m, code:c.weather_code, precip:c.precipitation,
     waveH:mc?.wave_height, waveT:mc?.wave_period, waveDir:mc?.wave_direction ?? c.wind_direction_10m});
   boatWarning(c, mc);
