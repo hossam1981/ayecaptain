@@ -497,6 +497,7 @@ async function loadWeather(pos){
     ]);
     WX = w; MAR = m && !m.error ? m : null;
     renderNow(); renderDays(); renderHours();
+    if (tideLast) renderTide(tideLast.c, tideLast.h);   // repaint the tide chart now sunrise/sunset are known
   }catch(e){ console.warn('weather', e); }
 }
 function wxIcon(code, hour){
@@ -650,11 +651,12 @@ function renderTide(curve, hilo){
   // ---- SVG chart (viewBox ~= rendered px so labels stay legible on a phone) ----
   const W=360, H=220, mL=30, mR=10, mT=42, mB=26;
   const t0=pts[0].t, t1=pts[pts.length-1].t;
-  const vs=pts.map(p=>p.v), vmin=Math.min(...vs)-1.4, vmax=Math.max(...vs)+0.9;
+  const vs=pts.map(p=>p.v), vmin=Math.min(...vs)-2.3, vmax=Math.max(...vs)+0.9;
   const X = t => mL + (t-t0)/(t1-t0)*(W-mL-mR);
   const Y = v => mT + (1-(v-vmin)/(vmax-vmin))*(H-mT-mB);
   const line = pts.map((p,k)=> (k?'L':'M')+X(p.t).toFixed(1)+' '+Y(p.v).toFixed(1)).join(' ');
   const area = `${line} L${X(t1).toFixed(1)} ${H-mB} L${X(t0).toFixed(1)} ${H-mB} Z`;
+  const base = H-mB;                       // the "horizon" / chart baseline
   let grid='', yl='';
   for (let gv=Math.ceil(vmin/2)*2; gv<vmax; gv+=2){
     const y=Y(gv).toFixed(1);
@@ -665,6 +667,37 @@ function renderTide(curve, hilo){
   let xl='';
   for (let t=Math.ceil(t0/432e5)*432e5; t<t1; t+=432e5)   // 12-hour ticks (readable on a phone)
     xl += `<text x="${X(t).toFixed(1)}" y="${H-7}" text-anchor="middle">${new Date(t).toLocaleTimeString([], {hour:'numeric'}).replace(' ','')}</text>`;
+
+  // faint horizontal ocean ripples in the lower chart band
+  let waves='';
+  [[base-4,3.4,.09],[base-15,3,.06],[base-27,2.4,.05]].forEach(([wy,amp,op]) => {
+    let d=`M${mL} ${wy}`; const seg=(W-mL-mR)/5;
+    for (let k=0;k<5;k++){ const cx1=mL+seg*(k+.5), x2=mL+seg*(k+1);
+      d += ` Q${cx1.toFixed(0)} ${(wy+(k%2?amp:-amp)).toFixed(1)} ${x2.toFixed(0)} ${wy}`; }
+    waves += `<path d="${d}" fill="none" stroke="#28B7FF" stroke-width="1" opacity="${op}" filter="url(#waveBlur)"/>`;
+  });
+
+  // a sunrise / sunset SCENE (glow + horizon streak + rays + sun + cloud silhouette), sitting on the baseline behind the curve
+  function sunScene(sx, set){
+    const cy = base - 1;
+    const body = set?'sunSet':'sunRise', glow = set?'glowSet':'glowRise', hor = set?'horizSet':'horizRise', ray = set?'#FF9D3D':'#FFD34E';
+    const rays = [[0,-15,0,-23],[-9,-12,-15,-19],[9,-12,15,-19],[-15,-6,-25,-9],[15,-6,25,-9],[-17,1,-28,1],[17,1,28,1]]
+      .map(r=>`<line x1="${(sx+r[0]).toFixed(1)}" y1="${(cy+r[1]).toFixed(1)}" x2="${(sx+r[2]).toFixed(1)}" y2="${(cy+r[3]).toFixed(1)}"/>`).join('');
+    return `<ellipse cx="${sx}" cy="${cy}" rx="46" ry="22" fill="url(#${glow})" filter="url(#blurGlow)"/>`
+      + `<rect x="${(sx-50).toFixed(1)}" y="${(cy-1).toFixed(1)}" width="100" height="3" rx="1.5" fill="url(#${hor})"/>`
+      + `<g stroke="${ray}" stroke-width="1.8" stroke-linecap="round" opacity=".7" filter="url(#rayBlur)">${rays}</g>`
+      + `<circle cx="${sx}" cy="${(cy-3).toFixed(1)}" r="8.5" fill="url(#${body})"/>`
+      + `<g fill="#173149" opacity=".22"><ellipse cx="${(sx-13).toFixed(1)}" cy="${(cy-2).toFixed(1)}" rx="13" ry="5.5"/>`
+      + `<ellipse cx="${(sx+7).toFixed(1)}" cy="${(cy-5).toFixed(1)}" rx="15" ry="6.5"/><ellipse cx="${(sx+22).toFixed(1)}" cy="${(cy-1).toFixed(1)}" rx="11" ry="5"/></g>`;
+  }
+  let suns='';
+  if (WX && WX.daily){
+    const inWin = a => (a||[]).map(s=>new Date(s).getTime()).filter(t=>t>t0+2e6 && t<t1-2e6);
+    const rise = inWin(WX.daily.sunrise)[0], set = inWin(WX.daily.sunset)[0];   // first of each in view
+    if (set!=null)  suns += sunScene(+X(set).toFixed(1), true);
+    if (rise!=null) suns += sunScene(+X(rise).toFixed(1), false);
+  }
+
   let pg='', lastLx=-99;
   hl.forEach(p => {
     if (p.t<t0 || p.t>t1) return;
@@ -673,23 +706,35 @@ function renderTide(curve, hilo){
     pg += `<circle cx="${x}" cy="${y}" r="5.5" fill="${col}" stroke="#fff" stroke-width="1.6" filter="url(#glow${hi?'G':'R'})"/>`;
     if (Math.abs(x-lastLx) < 50) return;   // labels would collide — leave just the dot
     lastLx = x;
-    pg += `<text class="tp" x="${x}" y="${(hi?y-19:y+14).toFixed(1)}" text-anchor="${anch}">${fmtT(p.t)}</text>`
-        + `<text class="tv" x="${x}" y="${(hi?y-8:y+25).toFixed(1)}" text-anchor="${anch}">${fv(p.v)}</text>`;
+    pg += `<text class="tp" x="${x}" y="${(y-19).toFixed(1)}" text-anchor="${anch}">${fmtT(p.t)}</text>`
+        + `<text class="tv" x="${x}" y="${(y-8).toFixed(1)}" text-anchor="${anch}">${fv(p.v)}</text>`;
   });
   const nx=+X(now).toFixed(1), ny=+Y(cur.v).toFixed(1), tipY=Math.max(16, ny-34), tipX=Math.max(30,Math.min(W-30,nx));
-  const nowG = `<line x1="${nx}" y1="${ny}" x2="${nx}" y2="${H-mB}" stroke="#d7efff" stroke-width="1.4" stroke-dasharray="4 4" opacity=".7"/>`
+  const nowG = `<line x1="${nx}" y1="${ny}" x2="${nx}" y2="${base}" stroke="#d7efff" stroke-width="1.4" stroke-dasharray="4 4" opacity=".7"/>`
     + `<circle cx="${nx}" cy="${ny}" r="6" fill="#146dd7" stroke="#fff" stroke-width="2.4"/>`
     + `<g transform="translate(${tipX},${tipY})"><rect x="-28" y="-16" width="56" height="32" rx="9" fill="#1271e7" stroke="#58a7ff"/>`
     + `<text class="nlab" x="0" y="-3" text-anchor="middle">Now</text><text class="nval" x="0" y="10" text-anchor="middle">${fv(cur.v)}</text></g>`;
   $('#tideSvg').innerHTML =
-    `<defs><linearGradient id="tideFill" x1="0" y1="0" x2="0" y2="1">`
-    + `<stop offset="0" stop-color="#1597d4" stop-opacity=".42"/><stop offset="1" stop-color="#0d4d73" stop-opacity=".06"/></linearGradient>`
+    `<defs>`
+    + `<linearGradient id="tideBg" x1="0" y1="0" x2=".4" y2="1"><stop offset="0" stop-color="#0B2A44"/><stop offset="1" stop-color="#061A2D"/></linearGradient>`
+    + `<linearGradient id="waterFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#28B7FF" stop-opacity=".42"/><stop offset=".55" stop-color="#1177B0" stop-opacity=".2"/><stop offset="1" stop-color="#0A3653" stop-opacity=".04"/></linearGradient>`
+    + `<radialGradient id="sunRise"><stop offset="0" stop-color="#FFF7B2"/><stop offset="45%" stop-color="#FFD34E"/><stop offset="100%" stop-color="#F6A623"/></radialGradient>`
+    + `<radialGradient id="sunSet"><stop offset="0" stop-color="#FFE7C0"/><stop offset="45%" stop-color="#FF9D3D"/><stop offset="100%" stop-color="#E8531C"/></radialGradient>`
+    + `<radialGradient id="glowRise"><stop offset="0" stop-color="#FFC94A" stop-opacity=".6"/><stop offset="45%" stop-color="#F6A623" stop-opacity=".22"/><stop offset="100%" stop-color="#F6A623" stop-opacity="0"/></radialGradient>`
+    + `<radialGradient id="glowSet"><stop offset="0" stop-color="#FF8A4A" stop-opacity=".6"/><stop offset="45%" stop-color="#E8531C" stop-opacity=".22"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></radialGradient>`
+    + `<linearGradient id="horizRise" x1="0" x2="1"><stop offset="0" stop-color="#F6A623" stop-opacity="0"/><stop offset="50%" stop-color="#FFD34E" stop-opacity=".6"/><stop offset="100%" stop-color="#F6A623" stop-opacity="0"/></linearGradient>`
+    + `<linearGradient id="horizSet" x1="0" x2="1"><stop offset="0" stop-color="#E8531C" stop-opacity="0"/><stop offset="50%" stop-color="#FF9D3D" stop-opacity=".6"/><stop offset="100%" stop-color="#E8531C" stop-opacity="0"/></linearGradient>`
+    + `<filter id="blurGlow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="7"/></filter>`
+    + `<filter id="waveBlur"><feGaussianBlur stdDeviation="1.1"/></filter>`
+    + `<filter id="rayBlur"><feGaussianBlur stdDeviation=".5"/></filter>`
     + `<filter id="glowG" x="-140%" y="-140%" width="380%" height="380%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
-    + `<filter id="glowR" x="-140%" y="-140%" width="380%" height="380%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`
-    + `<g class="grid">${grid}</g><g class="yl">${yl}</g>${axTitle}`
-    + `<path d="${area}" fill="url(#tideFill)"/>`
-    + `<path d="${line}" fill="none" stroke="#18b4ff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>`
-    + `<g class="xl">${xl}</g>${pg}${nowG}`;
+    + `<filter id="glowR" x="-140%" y="-140%" width="380%" height="380%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+    + `<clipPath id="plotClip"><rect x="0" y="${(mT-10).toFixed(0)}" width="${W}" height="${(base-mT+12).toFixed(0)}" rx="6"/></clipPath></defs>`
+    + `<rect x="0" y="0" width="${W}" height="${H}" rx="12" fill="url(#tideBg)"/>`
+    + `<g clip-path="url(#plotClip)"><g class="grid">${grid}</g>${waves}${suns}</g>`
+    + `<path d="${area}" fill="url(#waterFill)"/>`
+    + `<path d="${line}" fill="none" stroke="#2DB7FF" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<g class="yl">${yl}</g>${axTitle}<g class="xl">${xl}</g>${pg}${nowG}`;
 
   // ---- next 4 events ----
   const upArrow = '<svg viewBox="0 0 24 24"><path d="M12 20V6m-6 6 6-6 6 6"/></svg>';
