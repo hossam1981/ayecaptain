@@ -678,8 +678,8 @@ function renderTide(curve, hilo){
     const inWin = a => (a||[]).map(s=>new Date(s).getTime()).filter(t=>t>t0+3e6 && t<t1-3e6);
     const rise = inWin(WX.daily.sunrise)[0], set = inWin(WX.daily.sunset)[0];
     const sImg = (t, href) => {
-      const w = 136, h = w*393/640, wl = 0.80;                 // the image's own waterline sits ~80% down
-      return `<image href="${href}" x="${(X(t)-w/2).toFixed(1)}" y="${(horizonY-h*wl).toFixed(1)}" width="${w}" height="${h.toFixed(1)}" preserveAspectRatio="none" style="mix-blend-mode:screen"/>`;
+      const w = 140, h = w*393/640, wl = 0.80;                 // transparent-bg PNG; its own waterline sits ~80% down
+      return `<image href="${href}" x="${(X(t)-w/2).toFixed(1)}" y="${(horizonY-h*wl).toFixed(1)}" width="${w}" height="${h.toFixed(1)}" preserveAspectRatio="none"/>`;
     };
     if (rise!=null) suns += sImg(rise, 'icons/sunrise.png');
     if (set!=null)  suns += sImg(set,  'icons/sunset.png');

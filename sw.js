@@ -1,4 +1,4 @@
-const CACHE = 'bayside-v19';
+const CACHE = 'bayside-v20';
 const SHELL = ['./', './index.html', './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/boat.png',
   './icons/sunrise.png', './icons/sunset.png', './icons/ocean.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
