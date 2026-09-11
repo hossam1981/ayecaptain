@@ -175,6 +175,55 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .wp{width:14px;height:14px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
 .pin{filter:drop-shadow(0 4px 4px rgba(15,42,68,.3))}
 .dockpin{filter:drop-shadow(0 3px 3px rgba(15,42,68,.3))}
+.curArrow{filter:drop-shadow(0 2px 3px rgba(15,42,68,.4))}
+
+/* safety: MOB + anchor watch */
+.round.danger{color:var(--red)}
+.round.danger.on{background:var(--red);color:#fff}
+.mobpin{width:0;height:0}
+.mobring{width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;background:rgba(217,58,43,.35);border:3px solid #D93A2B;animation:mobpulse 1.4s ease-out infinite}
+@keyframes mobpulse{0%{box-shadow:0 0 0 0 rgba(217,58,43,.55)}70%{box-shadow:0 0 0 20px rgba(217,58,43,0)}100%{box-shadow:0 0 0 0 rgba(217,58,43,0)}}
+#mobBar{align-self:stretch;max-width:calc(100% - 62px);display:none;background:var(--red);color:#fff;border-radius:14px;padding:10px 12px;line-height:1.15}
+#mobBar.show{display:flex;align-items:center;gap:10px}
+#mobBar .big{font-size:22px;font-weight:700}
+#mobBar .lbl{font-size:12px;opacity:.9;margin-top:1px}
+#mobBar button{margin-left:auto;flex:none;background:rgba(255,255,255,.22);border-radius:9px;padding:8px 11px;font-weight:700;font-size:13px;color:#fff}
+#anchorBar{align-self:stretch;max-width:calc(100% - 62px);display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:9px 12px;line-height:1.15}
+#anchorBar.show{display:flex;align-items:center;gap:8px}
+#anchorBar.warn{background:var(--red)}
+#anchorBar .big{font-size:18px;font-weight:700}
+#anchorBar .lbl{font-size:11px;opacity:.8;margin-top:1px}
+#anchorBar .adj{flex:none;background:rgba(255,255,255,.16);border-radius:8px;width:28px;height:28px;font-weight:700;font-size:16px;color:#fff}
+#anchorBar button.stop{flex:none;margin-left:auto;background:rgba(255,255,255,.16);border-radius:9px;padding:7px 10px;font-weight:700;font-size:12px;color:#fff}
+
+/* best-window callout */
+#bestWin{display:none;align-items:center;gap:8px;margin:2px 16px 10px;padding:9px 12px;border-radius:12px;background:rgba(31,138,91,.14);color:var(--ink);font-size:13px;font-weight:600;cursor:pointer}
+#bestWin.show{display:flex}
+#bestWin b{color:var(--green);font-weight:700}
+#bestWin .dot{width:9px;height:9px;border-radius:50%;margin-left:auto;flex:none}
+#bestWin .dot.g{background:var(--green)}#bestWin .dot.a{background:var(--amber)}
+
+/* more-tools drawer */
+#toolsModal{position:fixed;inset:0;z-index:700;background:rgba(15,42,68,.55);display:none;align-items:flex-end}
+#toolsModal.show{display:flex}
+#toolsSheet{background:var(--paper);width:100%;border-radius:20px 20px 0 0;padding:18px 16px calc(var(--sab) + 18px);max-height:80vh;overflow:auto}
+#toolsSheet h2{margin:0 0 10px;font-size:20px;color:var(--ink)}
+.toolrow{display:flex;align-items:center;gap:12px;padding:13px 2px;border-bottom:1px solid rgba(15,42,68,.08);cursor:pointer}
+.toolrow:last-child{border-bottom:none}
+.toolrow .ti{width:38px;height:38px;border-radius:50%;background:rgba(46,111,158,.12);display:grid;place-items:center;color:var(--sea);flex:none}
+.toolrow .ti svg{width:20px;height:20px}
+.toolrow.on .ti{background:var(--sea);color:#fff}
+.toolrow .tt{flex:1}
+.toolrow .tt b{display:block;font-size:15px;color:var(--ink)}
+.toolrow .tt span{display:block;font-size:12px;opacity:.6;margin-top:1px}
+.toolrow .tsw{width:42px;height:24px;border-radius:12px;background:rgba(15,42,68,.15);position:relative;flex:none;transition:background .2s}
+.toolrow .tsw::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.toolrow.on .tsw{background:var(--sea)}
+.toolrow.on .tsw::after{left:20px}
+@media (min-width:820px){
+  #toolsModal{align-items:center;justify-content:center;padding:24px}
+  #toolsSheet{max-width:420px;border-radius:20px}
+}
 .leaflet-control-attribution{font-size:9px;opacity:.7}
 
 /* sun marker (edge-pinned to its real compass bearing) */
@@ -223,12 +272,15 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
     <button class="stop" id="navStop">Done</button>
   </div>
   <div id="alert"><span id="alertText"></span><small id="alertBody"></small></div>
+  <div id="mobBar"><div><div class="big" id="mobDist">—<small>nm</small></div><div class="lbl" id="mobBrg">bearing —</div></div><button id="mobClear">Clear MOB</button></div>
+  <div id="anchorBar"><button class="adj" id="anchorMinus">−</button><div><div class="big" id="anchorDist">— ft</div><div class="lbl" id="anchorLbl">drift · radius <span id="anchorRad">100</span> ft</div></div><button class="adj" id="anchorPlus">+</button><button class="stop" id="anchorStop">Stop</button></div>
 </div>
 <div id="side">
   <button class="round on" id="follow" title="Follow my boat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
   <button class="round" id="gotoBtn" title="Go to a point"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
   <button class="round" id="fxBtn" title="Weather animation on/off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 8h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 18h7"/></svg></button>
-  <button class="round" id="dockBtn" title="Nearby docks, ramps &amp; fuel (20 mi)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v14M8 11h8M5 14a7 7 0 0 0 14 0"/></svg></button>
+  <button class="round" id="toolsBtn" title="More tools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+  <button class="round danger" id="mobBtn" title="Man overboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="6" r="3"/><path d="M12 9v7M8 12l4-2 4 2M9 20l3-4 3 4"/></svg></button>
 </div>
 <img id="sun" alt="Sun position">
 <div id="suntip"></div>
@@ -266,6 +318,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
       <div><b id="wPer">—</b><small>s</small><span>Wave per</span></div></div>
   </div>
   <div id="tideStrip"><span id="wTide">—</span><span id="wTideNext">Tide</span><span id="wRain">Rain —</span></div>
+  <div id="bestWin"><span id="bestWinTxt">Finding the best window…</span><span class="dot g" id="bestWinDot"></span></div>
   <div id="days"></div>
 
   <div id="body">
@@ -299,6 +352,27 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
   </div>
 </div>
 
+<div id="toolsModal">
+  <div id="toolsSheet">
+    <h2>More tools</h2>
+    <div class="toolrow" id="rowDocks">
+      <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v14M8 11h8M5 14a7 7 0 0 0 14 0"/></svg></span>
+      <span class="tt"><b>Docks &amp; fuel</b><span>Marinas, ramps &amp; fuel docks nearby (20 mi)</span></span>
+      <span class="tsw"></span>
+    </div>
+    <div class="toolrow" id="rowAnchor">
+      <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/></svg></span>
+      <span class="tt"><b>Anchor watch</b><span>Alarm if you drift off the hook</span></span>
+      <span class="tsw"></span>
+    </div>
+    <div class="toolrow" id="rowFuel">
+      <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V6a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v15M4 21h12M17 8l2.5 2.5a1.5 1.5 0 0 1 .5 1.1V18a1.5 1.5 0 0 1-3 0v-3"/><path d="M8 6h4"/></svg></span>
+      <span class="tt"><b>Fuel range</b><span>Half-range ring from your tank &amp; burn rate</span></span>
+      <span class="tsw"></span>
+    </div>
+  </div>
+</div>
+
 <div id="pmodal">
   <div id="pform">
     <h2>Your boat</h2>
@@ -320,6 +394,11 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
     <div class="row">
       <div><label>Max wave (ft)</label><input id="pWave" type="number" inputmode="decimal" placeholder="1.5"></div>
       <div><label>Use defaults for</label><button id="pAuto" style="width:100%;padding:10px;border:1.5px solid rgba(15,42,68,.25);border-radius:10px;font-size:15px;font-weight:700;color:var(--sea)">This size &amp; type</button></div>
+    </div>
+    <h2 style="font-size:17px;margin-top:16px">Fuel (for the range ring)</h2>
+    <div class="row">
+      <div><label>Burn rate at cruise (gal/hr)</label><input id="pBurn" type="number" inputmode="decimal" placeholder="12"></div>
+      <div><label>Tank size (gal)</label><input id="pTank" type="number" inputmode="decimal" placeholder="60"></div>
     </div>
     <h2 style="font-size:17px;margin-top:16px">Map</h2>
     <label>CARTO map key — optional, gives the cleanest labels (free at carto.com/basemaps/apikey). Saved on this device; leave blank to use the Esri street map.</label><input id="pKey" placeholder="paste key">
@@ -354,27 +433,30 @@ function defaultsFor(type, len){
   const f = len ? Math.max(.7, Math.min(1.4, len/20)) : 1;   // bigger boat, more tolerance
   return {wind:Math.round(w*f), gust:Math.round(g*f), wave:+(v*f).toFixed(1), cruise:c};
 }
-let P = store.get('boat') || {name:'', len:'', type:'jet', cruise:25, draft:1.5, wind:12, gust:18, wave:1.5};
+let P = store.get('boat') || {name:'', len:'', type:'jet', cruise:25, draft:1.5, wind:12, gust:18, wave:1.5, burn:'', tank:''};
 if (!(P.wind>=3)) P.wind=12; if (!(P.gust>=3)) P.gust=18; if (!(P.wave>=0.3)) P.wave=1.5;
 function applyProfile(){
   $('#boatName').textContent = P.name ? `${P.name}${P.len?' · '+P.len+' ft':''} · limits ${P.wind} kn / ${P.wave} ft` : 'Set up your boat';
   if (WX) { renderNow(); renderHours(); }
 }
-function openProfile(){
-  ['Name','Len','Cruise','Draft','Wind','Gust','Wave'].forEach(k => $('#p'+k).value = P[k.toLowerCase()] ?? '');
+function openProfile(focusId){
+  ['Name','Len','Cruise','Draft','Wind','Gust','Wave','Burn','Tank'].forEach(k => $('#p'+k).value = P[k.toLowerCase()] ?? '');
   $('#pType').value = P.type; $('#pKey').value = store.get('cartoKey') || '';
   $('#pFX').value = store.get('fxDetail') || 'classic';
   $('#pmodal').classList.add('show');
+  if (focusId) setTimeout(() => { const el = $('#'+focusId); if (el){ el.scrollIntoView({block:'center'}); el.focus(); } }, 50);
 }
-$('#editBoat').onclick = openProfile;
+$('#editBoat').onclick = () => openProfile();
 $('#pAuto').onclick = () => { const d = defaultsFor($('#pType').value, +$('#pLen').value); $('#pWind').value=d.wind; $('#pGust').value=d.gust; $('#pWave').value=d.wave; $('#pCruise').value=d.cruise; };
 $('#pSave').onclick = () => {
   P = {name:$('#pName').value.trim(), len:+$('#pLen').value||'', type:$('#pType').value, cruise:+$('#pCruise').value||20, draft:+$('#pDraft').value||1.5,
-       wind:+$('#pWind').value||12, gust:+$('#pGust').value||18, wave:+$('#pWave').value||1.5};
+       wind:+$('#pWind').value||12, gust:+$('#pGust').value||18, wave:+$('#pWave').value||1.5,
+       burn:+$('#pBurn').value||'', tank:+$('#pTank').value||''};
   store.set('boat', P); store.set('cartoKey', $('#pKey').value.trim());
   store.set('fxDetail', $('#pFX').value); fx.setDetail($('#pFX').value);
   buildBase(); setMode(mode); $('#pmodal').classList.remove('show'); applyProfile();
   if (wps.length){ for (const k in wxAt) delete wxAt[k]; draw(); }   // limits changed → re-grade the route
+  if (fuelOn) drawFuelRing();
 };
 $('#pmodal').onclick = e => { if (e.target.id==='pmodal') $('#pmodal').classList.remove('show'); };
 if (!store.get('boat')) setTimeout(openProfile, 1500);
@@ -467,6 +549,9 @@ function onFix(p){
   lastFix = here; store.set('lastPos', here);
   updateSun();
   if (wps.length) draw();
+  if (mobPoint) updateMOB();
+  if (anchorPoint) updateAnchor();
+  if (fuelOn) drawFuelRing();
   if (!wxPos || haversine(wxPos, here) > 3000){ wxPos = here; loadAll(here); }
 }
 function onErr(e){ $('#speed .h').textContent = e.code===1 ? 'GPS blocked — allow location' : 'GPS unavailable'; if (!wxPos){ wxPos = home; loadAll(home); } }
@@ -490,7 +575,7 @@ setInterval(() => wxPos && loadAll(wxPos), 20*60*1000); // refresh every 20 min
 let WX = null, MAR = null, dayIdx = 0, tideStation = null, tideLast = null;
 let tideUnit = store.get('tideUnit') || 'ft';
 async function loadAll(pos){
-  loadWeather(pos); loadTides(pos); loadAlerts(pos);
+  loadWeather(pos); loadTides(pos); loadAlerts(pos); loadCurrent(pos);
 }
 async function loadWeather(pos){
   try{
@@ -500,7 +585,7 @@ async function loadWeather(pos){
       fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${pos.lat}&longitude=${pos.lng}&timezone=auto&forecast_days=7&length_unit=imperial&temperature_unit=fahrenheit&current=wave_height,wave_period,wave_direction,sea_surface_temperature&hourly=wave_height,wave_period,sea_surface_temperature`).then(r=>r.json()).catch(()=>null)
     ]);
     WX = w; MAR = m && !m.error ? m : null;
-    renderNow(); renderDays(); renderHours();
+    renderNow(); renderDays(); renderHours(); renderBestWindow();
     if (tideLast) renderTide(tideLast.c, tideLast.h);   // repaint the tide chart now sunrise/sunset are known
   }catch(e){ console.warn('weather', e); }
 }
@@ -593,6 +678,44 @@ function renderHours(){
     t.appendChild(tr);
   }
 }
+// earliest run of >=2 consecutive boating hours that grade calm (or, failing that, fair) across the whole week
+function bestWindow(){
+  if (!WX || !WX.hourly) return null;
+  const now = Date.now();
+  const hrs = WX.hourly.time.map((s,i) => {
+    const t = new Date(s).getTime(), hr = new Date(s).getHours();
+    if (hr<5 || hr>21 || t < now-3600e3) return null;
+    const wave = MAR?.hourly?.wave_height?.[i] ?? null;
+    const sc = score(WX.hourly.wind_speed_10m[i], wave, WX.hourly.precipitation_probability[i], WX.hourly.wind_gusts_10m[i]);
+    return {s, t, sc};
+  }).filter(Boolean);
+  function firstRun(pred){
+    let run = [];
+    for (const h of hrs){
+      if (pred(h) && (!run.length || h.t - run[run.length-1].t <= 3600e3*1.5)) run.push(h);
+      else { if (run.length>=2) return run; run = pred(h) ? [h] : []; }
+    }
+    return run.length>=2 ? run : null;
+  }
+  return firstRun(h => h.sc==='g') || firstRun(h => h.sc!=='r');
+}
+function renderBestWindow(){
+  const el = $('#bestWin'), run = bestWindow();
+  if (!run){ el.classList.remove('show'); return; }
+  const grade = run.every(h=>h.sc==='g') ? 'g' : 'a';
+  const day0 = new Date(run[0].s), today = new Date();
+  const dayLbl = day0.toDateString()===today.toDateString() ? 'Today' : day0.toLocaleDateString([], {weekday:'short'});
+  $('#bestWinTxt').innerHTML = `Best window: <b>${dayLbl} ${fmtH(run[0].s)}–${fmtH(run[run.length-1].s)}</b> · ${grade==='g'?'Calm':'Fair'}`;
+  $('#bestWinDot').className = 'dot ' + grade;
+  el.dataset.day = run[0].s.slice(0,10);
+  el.classList.add('show');
+}
+$('#bestWin').onclick = () => {
+  if (!WX) return;
+  const idx = WX.daily.time.indexOf($('#bestWin').dataset.day);
+  if (idx>=0){ dayIdx = idx; renderDays(); renderHours(); }
+  $('#sheet').classList.add('open');
+};
 
 // ---------- tides (NOAA CO-OPS) ----------
 const FALLBACK = [{id:'8531680',name:'Sandy Hook, NJ',lat:40.467,lng:-74.009},{id:'8518750',name:'The Battery, NY',lat:40.7006,lng:-74.0142}];
@@ -628,6 +751,56 @@ async function loadTides(pos){
   }
   $('#tidemeta').textContent = 'Tide data unavailable right now.';
 }
+
+// ---------- tidal current arrows (NOAA CO-OPS current-predictions) ----------
+const curLayer = L.layerGroup();
+async function currentStations(){
+  let list = store.get('curStations');
+  if (list && Date.now()-list.t < 30*864e5) return list.s;
+  try{
+    const ctl = new AbortController(); setTimeout(()=>ctl.abort(), 8000);
+    const r = await fetch('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=currentpredictions&units=english', {signal:ctl.signal}).then(r=>r.json());
+    const s = r.stations.map(x => ({id:x.id, name:x.name, lat:x.lat, lng:x.lng}));
+    store.set('curStations', {t:Date.now(), s}); return s;
+  }catch(e){ return []; }
+}
+function curIcon(dir, speed){
+  const s = Math.min(1.5, Math.max(0.65, speed/2.2));
+  const html = `<svg class="curArrow" width="26" height="26" viewBox="0 0 26 26" style="transform:rotate(${Math.round(dir)}deg) scale(${s.toFixed(2)})" xmlns="http://www.w3.org/2000/svg">
+    <path d="M13 2 L19 17 L13 13 L7 17 Z" fill="#2E6F9E" stroke="#fff" stroke-width="1.2"/></svg>`;
+  return L.divIcon({className:'', html, iconSize:[26,26], iconAnchor:[13,13]});
+}
+async function loadCurrent(pos){
+  try{
+    const list = (await currentStations()).map(s => ({...s, d:haversine(pos,{lat:s.lat,lng:s.lng})})).sort((a,b)=>a.d-b.d);
+    const st = list[0];
+    curLayer.clearLayers();
+    if (!st || st.d/NM > 25) return;   // no station nearby — clean no-op
+    const d = new Date(); d.setHours(d.getHours()-6);
+    const bd = d.toISOString().slice(0,10).replace(/-/g,'');
+    const q = `product=currents_predictions&station=${st.id}&begin_date=${bd}&range=12&time_zone=lst_ldt&units=english&interval=MAX_SLACK&format=json`;
+    const r = await fetch(`https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?${q}`).then(r=>r.json());
+    const cp = r?.current_predictions?.cp;
+    if (!cp || !cp.length) return;
+    const now = Date.now();
+    let best = cp[0], bestDiff = Infinity;
+    for (const p of cp){
+      const diff = Math.abs(new Date(p.Time.replace(' ','T')).getTime() - now);
+      if (diff < bestDiff){ bestDiff = diff; best = p; }
+    }
+    const speed = Math.abs(+best.Velocity_Major || 0);
+    if (best.Type === 'slack' || speed < 0.1){
+      L.marker([st.lat, st.lng], {icon: L.divIcon({className:'', html:'<div style="width:11px;height:11px;border-radius:50%;background:#2E6F9E;border:2px solid #fff"></div>', iconSize:[11,11], iconAnchor:[5,5]})})
+        .bindPopup(`<b>${st.name}</b><br>Slack water`).addTo(curLayer);
+      return;
+    }
+    const dir = best.Type === 'flood' ? best.meanFloodDir : best.meanEbbDir;
+    L.marker([st.lat, st.lng], {icon: curIcon(dir, speed)})
+      .bindPopup(`<b>${st.name}</b><br>${best.Type==='flood'?'Flood':'Ebb'} · ${speed.toFixed(1)} kn`).addTo(curLayer);
+  }catch(e){ console.warn('current', e); }
+}
+curLayer.addTo(map);
+
 // subordinate stations only give highs/lows; draw a smooth curve between them
 function localStr(t){ const d=new Date(t), z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; }
 function cosineCurve(hl){
@@ -1170,11 +1343,98 @@ window.routeToDock = (lat, lng) => {
   map.closePopup();
   map.fitBounds(L.latLngBounds([[boatPos().lat,boatPos().lng],[lat,lng]]), {padding:[40,160]});
 };
-$('#dockBtn').onclick = () => {
+$('#rowDocks').onclick = () => {
   docksOn = !docksOn;
-  $('#dockBtn').classList.toggle('on', docksOn);
+  $('#rowDocks').classList.toggle('on', docksOn);
   if (docksOn){ dockLayer.addTo(map); if (dockCache) renderDocks(); else loadDocks(); }
   else map.removeLayer(dockLayer);
+};
+
+// ---------- more tools popover ----------
+$('#toolsBtn').onclick = () => $('#toolsModal').classList.add('show');
+$('#toolsModal').onclick = e => { if (e.target.id==='toolsModal') $('#toolsModal').classList.remove('show'); };
+
+// ---------- man overboard ----------
+let mobPoint = null, mobMarker = null, mobLine = null;
+function mobIcon(){ return L.divIcon({className:'mobpin', html:'<div class="mobring"></div>', iconSize:[0,0], iconAnchor:[0,0]}); }
+function updateMOB(){
+  if (!mobPoint) return;
+  const from = boatPos(), d = haversine(from, mobPoint), brg = bearing(from, mobPoint);
+  $('#mobDist').innerHTML = d < 370 ? `${Math.round(d*3.28)}<small>ft</small>` : `${(d/NM).toFixed(d/NM<10?2:1)}<small>nm</small>`;
+  $('#mobBrg').textContent = `steer ${Math.round(brg).toString().padStart(3,'0')}° ${dirName(brg)}`;
+  if (mobLine) mobLine.setLatLngs([[from.lat,from.lng],[mobPoint.lat,mobPoint.lng]]);
+}
+$('#mobBtn').onclick = () => {
+  mobPoint = boatPos();
+  if (mobMarker) map.removeLayer(mobMarker);
+  if (mobLine) map.removeLayer(mobLine);
+  mobMarker = L.marker([mobPoint.lat, mobPoint.lng], {icon: mobIcon()}).addTo(map);
+  mobLine = L.polyline([[boatPos().lat,boatPos().lng],[mobPoint.lat,mobPoint.lng]], {color:'#D93A2B', weight:3, dashArray:'6 8'}).addTo(map);
+  $('#mobBtn').classList.add('on');
+  $('#mobBar').classList.add('show');
+  if (navigator.vibrate) navigator.vibrate([300,120,300,120,300]);
+  updateMOB();
+};
+$('#mobClear').onclick = () => {
+  mobPoint = null;
+  if (mobMarker){ map.removeLayer(mobMarker); mobMarker = null; }
+  if (mobLine){ map.removeLayer(mobLine); mobLine = null; }
+  $('#mobBtn').classList.remove('on');
+  $('#mobBar').classList.remove('show');
+};
+
+// ---------- anchor watch ----------
+const FT_PER_M = 3.28084;
+let anchorPoint = null, anchorRadius = 100, anchorCircle = null, anchorWarn = false;
+function updateAnchor(){
+  if (!anchorPoint) return;
+  const dFt = haversine(boatPos(), anchorPoint) * FT_PER_M;
+  $('#anchorDist').textContent = `${Math.round(dFt)} ft`;
+  const breached = dFt > anchorRadius;
+  if (breached && !anchorWarn){ anchorWarn = true; $('#anchorBar').classList.add('warn'); if (navigator.vibrate) navigator.vibrate([250,150,250,150,250]); }
+  else if (!breached && anchorWarn){ anchorWarn = false; $('#anchorBar').classList.remove('warn'); }
+}
+function stopAnchor(){
+  anchorPoint = null; anchorWarn = false;
+  if (anchorCircle){ map.removeLayer(anchorCircle); anchorCircle = null; }
+  $('#rowAnchor').classList.remove('on');
+  $('#anchorBar').classList.remove('show','warn');
+}
+$('#rowAnchor').onclick = () => {
+  const on = $('#rowAnchor').classList.toggle('on');
+  if (on){
+    anchorPoint = boatPos(); anchorRadius = 100; anchorWarn = false;
+    if (anchorCircle) map.removeLayer(anchorCircle);
+    anchorCircle = L.circle([anchorPoint.lat,anchorPoint.lng], {radius: anchorRadius/FT_PER_M, color:'#0F2A44', weight:2, dashArray:'6 8', fillOpacity:.06}).addTo(map);
+    $('#anchorRad').textContent = anchorRadius;
+    $('#anchorBar').classList.add('show'); $('#anchorBar').classList.remove('warn');
+    if (navigator.vibrate) navigator.vibrate(120);
+    updateAnchor();
+  } else stopAnchor();
+};
+$('#anchorStop').onclick = stopAnchor;
+$('#anchorPlus').onclick = () => { anchorRadius = Math.min(2000, anchorRadius+25); if (anchorCircle) anchorCircle.setRadius(anchorRadius/FT_PER_M); $('#anchorRad').textContent = anchorRadius; updateAnchor(); };
+$('#anchorMinus').onclick = () => { anchorRadius = Math.max(25, anchorRadius-25); if (anchorCircle) anchorCircle.setRadius(anchorRadius/FT_PER_M); $('#anchorRad').textContent = anchorRadius; updateAnchor(); };
+
+// ---------- fuel range ring ----------
+let fuelOn = false, fuelCircle = null;
+function drawFuelRing(){
+  if (fuelCircle){ map.removeLayer(fuelCircle); fuelCircle = null; }
+  if (!fuelOn || !(P.burn>0) || !(P.tank>0) || !(P.cruise>0)) return;
+  const usable = P.tank * 0.75;                 // 25% reserve held back
+  const rangeNm = (usable / P.burn) * P.cruise;  // hours of usable fuel × cruise speed
+  const meters = (rangeNm/2) * NM;               // half range: there and back
+  fuelCircle = L.circle([boatPos().lat, boatPos().lng], {radius: meters, color:'#1F8A5B', weight:2, dashArray:'2 7', fillColor:'#1F8A5B', fillOpacity:.06}).addTo(map);
+}
+$('#rowFuel').onclick = () => {
+  if (!(P.burn>0) || !(P.tank>0)){
+    $('#toolsModal').classList.remove('show');
+    openProfile('pBurn');
+    return;
+  }
+  fuelOn = !fuelOn;
+  $('#rowFuel').classList.toggle('on', fuelOn);
+  drawFuelRing();
 };
 
 // ---------- sheet & install ----------
