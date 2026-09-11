@@ -51,7 +51,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 #alert.open small{max-height:220px;overflow:auto}
 
 /* route bar */
-#routebar{position:fixed;left:10px;right:10px;bottom:calc(var(--sab) + 148px);z-index:600;display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:10px 12px;align-items:center;gap:10px;font-size:15px}
+#routebar{position:fixed;left:10px;right:10px;bottom:calc(var(--sab) + 184px);z-index:600;display:none;background:var(--ink);color:var(--paper);border-radius:14px;padding:10px 12px;align-items:center;gap:10px;font-size:15px}
 #routebar.show{display:flex}
 #routebar .stat{font-weight:700;font-size:18px}
 #routebar .stat span{font-weight:500;opacity:.7;font-size:13px}
@@ -67,6 +67,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 /* current-conditions header */
 #wxhead{display:flex;align-items:center;gap:12px;padding:2px 16px 6px;flex:none}
 #wxhead #wIcon{font-size:34px;line-height:1;flex:none}
+#wxhead #wIcon img{width:32px;height:32px;display:block}
 #wxhead .t{display:flex;align-items:flex-start;line-height:.85}
 #wxhead #wBig{font-size:52px;font-weight:700;letter-spacing:-2px}
 #wxhead #wBigU{font-size:19px;font-weight:700;opacity:.6;margin:5px 0 0 3px}
@@ -173,6 +174,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .boat svg{position:absolute;left:-30px;top:-40px;width:60px;height:110px;transform-origin:30px 40px;transition:transform .4s linear;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
 .wp{width:14px;height:14px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
 .pin{filter:drop-shadow(0 4px 4px rgba(15,42,68,.3))}
+.dockpin{filter:drop-shadow(0 3px 3px rgba(15,42,68,.3))}
 .leaflet-control-attribution{font-size:9px;opacity:.7}
 
 /* sun marker (edge-pinned to its real compass bearing) */
@@ -188,6 +190,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 /* desktop / wide browser */
 @media (min-width:820px){
   #top{right:auto;max-width:600px}
+  #layers{position:fixed;top:calc(var(--sat) + 8px);right:12px;margin-left:0}
   #nav{max-width:none}
   #alert{max-width:520px}
   #routebar{left:auto;right:12px;max-width:560px;bottom:calc(var(--sab) + 16px)}
@@ -225,6 +228,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
   <button class="round on" id="follow" title="Follow my boat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
   <button class="round" id="gotoBtn" title="Go to a point"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
   <button class="round" id="fxBtn" title="Weather animation on/off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 8h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 18h7"/></svg></button>
+  <button class="round" id="dockBtn" title="Nearby docks, ramps &amp; fuel (20 mi)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v14M8 11h8M5 14a7 7 0 0 0 14 0"/></svg></button>
 </div>
 <img id="sun" alt="Sun position">
 <div id="suntip"></div>
@@ -532,7 +536,13 @@ function renderNow(){
   const c = WX.current, mc = MAR?.current, i = nowIdx();
   const rp = WX.hourly.precipitation_probability[i] ?? 0;
   $('#wBig').textContent = Math.round(c.temperature_2m);
-  $('#wIcon').textContent = wxIcon(c.weather_code);
+  if (c.weather_code <= 2){                          // clear / mostly clear: swap sun <-> moon by real sun position
+    const p = wxPos || lastFix || home;
+    const night = solarPos(p.lat, p.lng, new Date()).el < -0.83;
+    $('#wIcon').innerHTML = `<img src="icons/${night?'moon':'sun'}-icon.png" alt="${night?'Night':'Clear'}">`;
+  } else {
+    $('#wIcon').textContent = wxIcon(c.weather_code);
+  }
   $('#wCond').textContent = condName(c.weather_code) + (rp>=15 ? ` · ${rp}% rain` : '');
   $('#wSpd').textContent = Math.round(c.wind_speed_10m);
   $('#wDir').textContent = dirName(c.wind_direction_10m);
@@ -1005,7 +1015,7 @@ function draw(){
 }
 
 // ---- weather-graded route line: colour reflects the forecast at each point along the way ----
-const GCOL = {g:'#1F8A5B', a:'#F2A93B', r:'#D93A2B'};
+const GCOL = {g:'#22C55E', a:'#F2A93B', r:'#D93A2B'};
 const gLevel = s => s==='r' ? 2 : s==='a' ? 1 : 0;
 const gColor = lv => GCOL[['g','a','r'][Math.max(0, Math.min(2, Math.round(lv)))]];
 const wxAt = {};                 // "lat,lng" -> {grade, t}
@@ -1032,7 +1042,10 @@ function renderRoute(){
       const t0=k/N, t1=(k+1)/N;
       const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
       const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
-      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.6,
+      // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
+      L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
+        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
         dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
     }
   }
@@ -1063,7 +1076,7 @@ function pinIcon(isDest, grade){
   const s = isDest ? 1 : 0.82, w = Math.round(34*s), h = Math.round(46*s);
   const html = `<svg width="${w}" height="${h}" viewBox="0 0 34 46" xmlns="http://www.w3.org/2000/svg">
     <ellipse cx="17" cy="43.5" rx="7.5" ry="2.6" fill="rgba(15,42,68,.33)"/>
-    <path d="M17 45 C7 30 2 22 2 15 A15 15 0 1 1 32 15 C32 22 27 30 17 45 Z" fill="${col}"/>
+    <path d="M17 45 C7 30 2 22 2 15 A15 15 0 1 1 32 15 C32 22 27 30 17 45 Z" fill="${col}" stroke="rgba(11,39,68,.55)" stroke-width="1.4"/>
     <path d="M17 45 C13.5 39 10 33 7 27 C11 30.5 14 32 17 32 C20 32 23 30.5 27 27 C24 33 20.5 39 17 45 Z" fill="rgba(0,0,0,.16)"/>
     <ellipse cx="12" cy="10" rx="4.6" ry="6.4" transform="rotate(-24 12 10)" fill="#fff" opacity=".3"/>
     <circle cx="17" cy="15" r="5.6" fill="#fff"/>
@@ -1097,6 +1110,72 @@ $('#gpxIn').onchange = async e => {
   $('#sheet').classList.remove('open');
 };
 applyProfile();
+
+// ---------- docking spots: marinas, ramps & fuel within 20 statute miles (OpenStreetMap) ----------
+const MI = 1609.34;
+const dockLayer = L.layerGroup();
+let docksOn = false, dockCache = null;
+function dockIcon(){
+  const html = `<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="13" cy="32" rx="6" ry="2" fill="rgba(15,42,68,.3)"/>
+    <path d="M13 33 C6 22 2 16 2 11 A11 11 0 1 1 24 11 C24 16 20 22 13 33 Z" fill="#2E6F9E" stroke="rgba(11,39,68,.6)" stroke-width="1.2"/>
+    <circle cx="13" cy="11" r="5.4" fill="#fff"/>
+    <g stroke="#2E6F9E" stroke-width="1.6" stroke-linecap="round" fill="none">
+      <circle cx="13" cy="7.6" r="1.3" fill="#2E6F9E" stroke="none"/>
+      <path d="M13 9v6M10 13a3.2 3.2 0 0 0 3 2.6 3.2 3.2 0 0 0 3-2.6M11 11.4h4"/>
+    </g>
+  </svg>`;
+  return L.divIcon({className:'dockpin', html, iconSize:[26,34], iconAnchor:[13,33]});
+}
+async function loadDocks(){
+  const pos = boatPos(), key = `docks:${pos.lat.toFixed(2)},${pos.lng.toFixed(2)}`;
+  const cached = store.get(key);
+  if (cached && Date.now()-cached.t < 7*864e5){ dockCache = cached.d; renderDocks(); return; }
+  try{
+    const r = Math.round(20*MI);   // 20 statute miles, in meters
+    const q = `[out:json][timeout:25];(node["leisure"="marina"](around:${r},${pos.lat},${pos.lng});way["leisure"="marina"](around:${r},${pos.lat},${pos.lng});`
+      + `node["leisure"="slipway"](around:${r},${pos.lat},${pos.lng});way["leisure"="slipway"](around:${r},${pos.lat},${pos.lng});`
+      + `node["seamark:type"="fuel"](around:${r},${pos.lat},${pos.lng}););out center tags 80;`;
+    const res = await fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:q}).then(x=>x.json());
+    const list = (res.elements||[]).map(e => {
+      const lat = e.lat ?? e.center?.lat, lng = e.lon ?? e.center?.lon;
+      if (lat==null || lng==null) return null;
+      const tg = e.tags || {};
+      const kind = tg.leisure==='marina' ? 'Marina' : tg.leisure==='slipway' ? 'Boat ramp' : 'Fuel dock';
+      return {lat, lng, name: tg.name || kind, kind};
+    }).filter(Boolean);
+    dockCache = list;
+    store.set(key, {t:Date.now(), d:list});
+    renderDocks();
+  }catch(e){ console.warn('docks', e); }
+}
+function renderDocks(){
+  dockLayer.clearLayers();
+  if (!dockCache) return;
+  dockCache.forEach(d => {
+    const dist = (haversine(boatPos(), d)/MI).toFixed(1);
+    const brg = Math.round(bearing(boatPos(), d));
+    const html = `<div style="min-width:150px;font-family:inherit">
+      <b style="display:block;margin-bottom:2px">${d.name}</b>
+      <span style="opacity:.7;font-size:13px">${d.kind} · ${dist} mi · ${brg}° ${dirName(brg)}</span>
+      <button style="margin-top:7px;width:100%;background:#0F2A44;color:#fff;border-radius:8px;padding:7px;font-weight:700;font-size:13px" onclick="routeToDock(${d.lat},${d.lng})">Route here</button>
+    </div>`;
+    L.marker([d.lat,d.lng], {icon: dockIcon()}).bindPopup(html).addTo(dockLayer);
+  });
+}
+window.routeToDock = (lat, lng) => {
+  wps = [L.latLng(lat,lng)]; legIdx = 0; picking = false;
+  follow = false; $('#follow').classList.remove('on');
+  draw();
+  map.closePopup();
+  map.fitBounds(L.latLngBounds([[boatPos().lat,boatPos().lng],[lat,lng]]), {padding:[40,160]});
+};
+$('#dockBtn').onclick = () => {
+  docksOn = !docksOn;
+  $('#dockBtn').classList.toggle('on', docksOn);
+  if (docksOn){ dockLayer.addTo(map); if (dockCache) renderDocks(); else loadDocks(); }
+  else map.removeLayer(dockLayer);
+};
 
 // ---------- sheet & install ----------
 $('#grab').onclick = () => $('#sheet').classList.toggle('open');
