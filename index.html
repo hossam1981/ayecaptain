@@ -183,6 +183,10 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .mobpin{width:0;height:0}
 .mobring{width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;background:rgba(217,58,43,.35);border:3px solid #D93A2B;animation:mobpulse 1.4s ease-out infinite}
 @keyframes mobpulse{0%{box-shadow:0 0 0 0 rgba(217,58,43,.55)}70%{box-shadow:0 0 0 20px rgba(217,58,43,0)}100%{box-shadow:0 0 0 0 rgba(217,58,43,0)}}
+.mobsmoke-wrap{position:relative;width:0;height:0}
+.mobsmoke{position:absolute;left:-54px;bottom:-8px;width:150px;height:152px;transform-origin:36% 95%;pointer-events:none;opacity:0;transition:opacity .5s ease;transform:rotate(var(--windDeg,0deg));animation:mobsmokesway 3.6s ease-in-out infinite}
+.mobsmoke.ready{opacity:1}
+@keyframes mobsmokesway{0%,100%{transform:rotate(calc(var(--windDeg, 0deg) - var(--sway, 6deg)))}50%{transform:rotate(calc(var(--windDeg, 0deg) + var(--sway, 6deg)))}}
 #mobBar{align-self:stretch;max-width:calc(100% - 62px);display:none;background:var(--red);color:#fff;border-radius:14px;padding:10px 12px;line-height:1.15}
 #mobBar.show{display:flex;align-items:center;gap:10px}
 #mobBar .big{font-size:22px;font-weight:700}
@@ -586,6 +590,7 @@ async function loadWeather(pos){
     ]);
     WX = w; MAR = m && !m.error ? m : null;
     renderNow(); renderDays(); renderHours(); renderBestWindow();
+    if (mobSmoke) updateMobSmokeWind();
     if (tideLast) renderTide(tideLast.c, tideLast.h);   // repaint the tide chart now sunrise/sunset are known
   }catch(e){ console.warn('weather', e); }
 }
@@ -1355,21 +1360,96 @@ $('#toolsBtn').onclick = () => $('#toolsModal').classList.add('show');
 $('#toolsModal').onclick = e => { if (e.target.id==='toolsModal') $('#toolsModal').classList.remove('show'); };
 
 // ---------- man overboard ----------
-let mobPoint = null, mobMarker = null, mobLine = null;
+let mobPoint = null, mobMarker = null, mobLine = null, mobGlow = null, mobArrow = null, mobLabel = null, mobSmoke = null;
 function mobIcon(){ return L.divIcon({className:'mobpin', html:'<div class="mobring"></div>', iconSize:[0,0], iconAnchor:[0,0]}); }
+function mobSmokeIcon(){
+  // Leaflet positions marker icons with a CSS transform, which forces a new stacking context —
+  // mix-blend-mode can't see through that to the map tiles below, so the black background can't be
+  // screened out that way. Instead, decode the video into a hidden <video> and paint every frame onto
+  // a small <canvas>, keying near-black pixels to transparent ourselves (same "key out the plain
+  // background" idea as the sun-overlay PNGs earlier, just done per-frame in JS instead of via blend-mode).
+  const html = `<div class="mobsmoke-wrap"><video class="mobsmoke-src" src="icons/mob-smoke.mp4" autoplay muted loop playsinline style="display:none"></video><canvas class="mobsmoke" width="150" height="152"></canvas></div>`;
+  return L.divIcon({className:'', html, iconSize:[0,0], iconAnchor:[0,0]});
+}
+function startMobSmokeLoop(el){
+  const video = el.querySelector('.mobsmoke-src'), canvas = el.querySelector('.mobsmoke');
+  if (!video || !canvas) return;
+  const ctx = canvas.getContext('2d', {willReadFrequently:true});
+  const w = canvas.width, h = canvas.height;
+  function draw(){
+    if (!mobSmoke){ return; }  // marker was cleared — let the loop die
+    if (video.readyState >= 2){
+      ctx.drawImage(video, 0, 0, w, h);
+      const frame = ctx.getImageData(0, 0, w, h), d = frame.data;
+      for (let i=0; i<d.length; i+=4){
+        const luma = (d[i]*0.299 + d[i+1]*0.587 + d[i+2]*0.114) / 255;
+        let a = (luma - 0.05) * 2.8;
+        d[i+3] = a<=0 ? 0 : a>=1 ? 255 : Math.round(a*255);
+      }
+      ctx.putImageData(frame, 0, 0);
+      canvas.classList.add('ready');
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+}
+// keep the smoke leaning downwind and swaying at a speed that matches the real wind, reusing the
+// same "current+180" convention as #wDirArrow / the hourly wind arrows
+function updateMobSmokeWind(){
+  if (!mobSmoke) return;
+  const wrap = mobSmoke.getElement();
+  const canvas = wrap?.querySelector('canvas.mobsmoke'), video = wrap?.querySelector('video');
+  if (!canvas) return;
+  const c = WX?.current;
+  const dir = c ? (c.wind_direction_10m+180)%360 : 0;
+  const spd = c ? c.wind_speed_10m : 8;
+  canvas.style.setProperty('--windDeg', `${dir}deg`);
+  canvas.style.setProperty('--sway', `${Math.min(14, Math.max(4, spd/2))}deg`);
+  if (video) try{ video.playbackRate = Math.min(1.6, Math.max(0.7, spd/14)); }catch(e){}
+}
+function mobArrowIcon(dir){
+  const html = `<svg width="24" height="24" viewBox="0 0 26 26" style="transform:rotate(${Math.round(dir)}deg);filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))" xmlns="http://www.w3.org/2000/svg">
+    <path d="M13 1 L20 18 L13 13.5 L6 18 Z" fill="#FF4433" stroke="#fff" stroke-width="1.4"/></svg>`;
+  return L.divIcon({className:'', html, iconSize:[24,24], iconAnchor:[12,12]});
+}
+function mobLabelIcon(text){
+  const html = `<div style="transform:translate(-50%,-50%);background:#D93A2B;color:#fff;font-weight:700;font-size:12px;padding:4px 10px;border-radius:11px;white-space:nowrap;box-shadow:0 2px 8px rgba(15,42,68,.45);border:1.5px solid #fff">${text}</div>`;
+  return L.divIcon({className:'', html, iconSize:[0,0], iconAnchor:[0,0]});
+}
 function updateMOB(){
   if (!mobPoint) return;
   const from = boatPos(), d = haversine(from, mobPoint), brg = bearing(from, mobPoint);
+  const distTxt = d < 370 ? `${Math.round(d*3.28)} ft` : `${(d/NM).toFixed(d/NM<10?2:1)} nm`;
   $('#mobDist').innerHTML = d < 370 ? `${Math.round(d*3.28)}<small>ft</small>` : `${(d/NM).toFixed(d/NM<10?2:1)}<small>nm</small>`;
   $('#mobBrg').textContent = `steer ${Math.round(brg).toString().padStart(3,'0')}° ${dirName(brg)}`;
-  if (mobLine) mobLine.setLatLngs([[from.lat,from.lng],[mobPoint.lat,mobPoint.lng]]);
+  const pts = [[from.lat,from.lng],[mobPoint.lat,mobPoint.lng]];
+  if (mobLine){ mobLine.setLatLngs(pts); mobGlow.setLatLngs(pts); }
+  if (mobArrow){
+    // cap the line just short of the pulsing ring so the chevron doesn't fully bury it
+    const t = 0.88;
+    mobArrow.setLatLng([from.lat+(mobPoint.lat-from.lat)*t, from.lng+(mobPoint.lng-from.lng)*t]);
+    mobArrow.setIcon(mobArrowIcon(brg));
+  }
+  if (mobLabel){
+    mobLabel.setLatLng([(from.lat+mobPoint.lat)/2, (from.lng+mobPoint.lng)/2]);
+    mobLabel.setIcon(mobLabelIcon(distTxt));
+  }
 }
 $('#mobBtn').onclick = () => {
   mobPoint = boatPos();
-  if (mobMarker) map.removeLayer(mobMarker);
-  if (mobLine) map.removeLayer(mobLine);
-  mobMarker = L.marker([mobPoint.lat, mobPoint.lng], {icon: mobIcon()}).addTo(map);
-  mobLine = L.polyline([[boatPos().lat,boatPos().lng],[mobPoint.lat,mobPoint.lng]], {color:'#D93A2B', weight:3, dashArray:'6 8'}).addTo(map);
+  [mobMarker, mobLine, mobGlow, mobArrow, mobLabel, mobSmoke].forEach(l => l && map.removeLayer(l));
+  const from = boatPos(), pts = [[from.lat,from.lng],[mobPoint.lat,mobPoint.lng]];
+  // dark glow halo first so the bright line reads over any basemap, same trick as the graded route line
+  mobGlow = L.polyline(pts, {color:'#5a0f08', weight:8, opacity:.4, lineCap:'round', interactive:false}).addTo(map);
+  mobLine = L.polyline(pts, {color:'#FF4433', weight:4, opacity:.95, dashArray:'2 9', lineCap:'round', interactive:false}).addTo(map);
+  mobArrow = L.marker([mobPoint.lat, mobPoint.lng], {icon: mobArrowIcon(0), interactive:false, zIndexOffset: 910}).addTo(map);
+  mobLabel = L.marker([from.lat, from.lng], {icon: mobLabelIcon('0 ft'), interactive:false, zIndexOffset: 920}).addTo(map);
+  mobMarker = L.marker([mobPoint.lat, mobPoint.lng], {icon: mobIcon(), zIndexOffset: 900}).addTo(map);
+  // real smoke video layered on top of the always-reliable pulsing ring — ring shows instantly,
+  // smoke fades in once it's decoded (never leaves the spot unmarked if it's slow/offline)
+  mobSmoke = L.marker([mobPoint.lat, mobPoint.lng], {icon: mobSmokeIcon(), interactive:false, zIndexOffset: 905}).addTo(map);
+  startMobSmokeLoop(mobSmoke.getElement());
+  updateMobSmokeWind();
   $('#mobBtn').classList.add('on');
   $('#mobBar').classList.add('show');
   if (navigator.vibrate) navigator.vibrate([300,120,300,120,300]);
@@ -1377,8 +1457,8 @@ $('#mobBtn').onclick = () => {
 };
 $('#mobClear').onclick = () => {
   mobPoint = null;
-  if (mobMarker){ map.removeLayer(mobMarker); mobMarker = null; }
-  if (mobLine){ map.removeLayer(mobLine); mobLine = null; }
+  [mobMarker, mobLine, mobGlow, mobArrow, mobLabel, mobSmoke].forEach(l => { if (l) map.removeLayer(l); });
+  mobMarker = mobLine = mobGlow = mobArrow = mobLabel = mobSmoke = null;
   $('#mobBtn').classList.remove('on');
   $('#mobBar').classList.remove('show');
 };
