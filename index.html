@@ -185,12 +185,12 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 @keyframes mobpulse{0%{box-shadow:0 0 0 0 rgba(217,58,43,.55)}70%{box-shadow:0 0 0 20px rgba(217,58,43,0)}100%{box-shadow:0 0 0 0 rgba(217,58,43,0)}}
 .mobbuoy-wrap{position:relative;width:0;height:0}
 /* !important: leaflet.css's ".leaflet-marker-pane img{width:auto}" outranks a single-class selector */
-.mobbuoy{position:absolute;left:-42px;bottom:0;width:84px!important;height:auto;pointer-events:none;display:block}
+.mobbuoy{position:absolute;left:-28px;bottom:0;width:56px!important;height:auto;pointer-events:none;display:block}
 .mobsmoke2-wrap{position:relative;width:0;height:0}
 /* hand-drawn particle smoke (canvas, no video/rotation involved) — each particle's own velocity is
    computed from live wind direction/speed every frame, so the canvas itself never needs to rotate and
    can never show a hard edge; it just needs to be big enough that rising/drifting particles stay inside */
-.mobsmoke2{position:absolute;left:-180px;bottom:29.8px;width:360px;height:360px;pointer-events:none;opacity:0;transition:opacity .4s ease}
+.mobsmoke2{position:absolute;left:-180px;bottom:6.6px;width:360px;height:360px;pointer-events:none;opacity:0;transition:opacity .4s ease}
 .mobsmoke2.ready{opacity:1}
 #mobBar{align-self:stretch;max-width:calc(100% - 62px);display:none;background:var(--red);color:#fff;border-radius:14px;padding:10px 12px;line-height:1.15}
 #mobBar.show{display:flex;align-items:center;gap:10px}
@@ -1384,7 +1384,7 @@ function startMobSmokeLoop(el){
   const canvas = el.querySelector('canvas.mobsmoke2');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const originX = canvas.width/2, originY = 320;   // matches CSS: bottom = 29.8px = H(360) - 320 - 10.2
+  const originX = canvas.width/2, originY = 320;   // matches CSS: bottom = 6.6px = H(360) - 320 - 33.4
   let particles = [], lastTs = 0, spawnAcc = 0, elapsed = 0;
   function draw(ts){
     if (!mobSmoke){ return; }  // marker was cleared — let the loop die
