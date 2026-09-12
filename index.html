@@ -1184,10 +1184,12 @@ function draw(){
     let total = haversine(boatPos(), wps[legIdx]);
     for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
     const nm = total/NM, mins = nm/cruise()*60;
+    const gal = P.burn>0 ? (mins/60)*P.burn : null;   // same time-based math as the ETA, just × burn rate
+    const galTxt = gal!=null ? ` · ~${gal<10?gal.toFixed(1):Math.round(gal)} gal` : '';
     $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
-    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}</span>`;
+    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}${galTxt}</span>`;
     $('#navEta').textContent = fmtMin(mins);
-    $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}`;
+    $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}${galTxt}`;
     gradeRoute();
   } else {
     $('#rDist').innerHTML = `0 <span>points</span>`;
