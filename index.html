@@ -22,6 +22,18 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;background:var(--ink);font-family:"Barlow Semi Condensed",system-ui,sans-serif;color:var(--ink);overflow:hidden;touch-action:manipulation}
 #map{position:fixed;inset:0;background:#cfe0ea}
+/* active-nav "3D" tilt — CSS perspective on the map + effects canvas. Not a true 3D camera
+   (Leaflet is 2D-only), but the ~45° lean reads as a driving-nav view. #fx gets the same transform
+   so the boat's wake stays anchored under the (visually tilted) boat. */
+#map, #fx{transition:transform .7s cubic-bezier(.4,0,.2,1)}
+body.nav-active #map, body.nav-active #fx{
+  transform: perspective(1400px) rotateX(45deg) scale(1.08);
+  transform-origin: 50% 60%;
+}
+/* boat icon crossfade — classic top-down skiff <-> photo-real orange RIB while active-nav */
+.boat-img{transition:opacity .5s ease}
+body.nav-active .boat-img.classic{opacity:0}
+body.nav-active .boat-img.active{opacity:1}
 #fx{position:fixed;inset:0;pointer-events:none;z-index:450}
 .leaflet-container{font-family:inherit}
 button{font-family:inherit;font-size:inherit;border:0;background:none;color:inherit;cursor:pointer;padding:0}
@@ -539,8 +551,11 @@ document.querySelectorAll('#layers button').forEach(b => b.onclick = () => setMo
 // ---------- boat ----------
 // user-supplied top-down boat (white hull, orange trim, outboard aft). Bow points up (svg -y).
 // Marker/GPS point sits at svg (30,40) ~= the helm; prop tip lands near svg y 78 -> see STERN_OFF in drawSpray.
+// two stacked <image>s: the classic slim skiff (always there) and a photo-real orange RIB shown only
+// while active nav is on. CSS opacity crossfades between them, driven by body.nav-active
 const boatSVG = `<svg viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
-  <image href="icons/boat.png" x="14.5" y="4" width="31" height="76" preserveAspectRatio="xMidYMid meet"/>
+  <image class="boat-img classic" href="icons/boat.png"    x="14.5" y="4" width="31" height="76" preserveAspectRatio="xMidYMid meet"/>
+  <image class="boat-img active"  href="icons/boat-3d.png" x="14.5" y="4" width="31" height="76" preserveAspectRatio="xMidYMid meet" opacity="0"/>
 </svg>`;
 const boatIcon = L.divIcon({className:'boat', html:boatSVG, iconSize:[0,0]});
 const boat = L.marker([home.lat, home.lng], {icon:boatIcon, zIndexOffset:1000, interactive:false}).addTo(map);
@@ -555,9 +570,19 @@ map.on('dragstart', () => { follow = false; $('#follow').classList.remove('on');
 
 // ---------- GPS ----------
 let wxTimer = null, wxPos = null;
+let lastFixTime = 0;
 function onFix(p){
   const c = p.coords, here = {lat:c.latitude, lng:c.longitude};
-  const spd = (c.speed!=null && c.speed>=0) ? c.speed*KN : 0;
+  // Speed fallback from consecutive fixes when the GPS itself doesn't send coords.speed (common on
+  // Android at low speed / right after cold start) — mirrors the heading fallback a few lines down.
+  // Without this, spray/wake stays off and the ETA reads at cruise even when moving.
+  let derivedKn = 0;
+  if (lastFix && lastFixTime){
+    const dt = (Date.now() - lastFixTime)/1000;
+    const dm = haversine(lastFix, here);
+    if (dt > 0.3 && dt < 6 && dm > 3) derivedKn = (dm/dt) * 1.943844;   // m/s -> knots
+  }
+  const spd = (c.speed!=null && c.speed>=0) ? c.speed*KN : derivedKn;
   let h = c.heading;
   if ((h==null || isNaN(h)) && lastFix && haversine(lastFix, here) > 3) h = bearing(lastFix, here);
   if (h!=null && !isNaN(h)) setHeading(h);
@@ -572,7 +597,7 @@ function onFix(p){
   $('#speed .h').textContent = c.accuracy > 60
     ? `weak GPS ±${Math.round(c.accuracy)} m — need sky view`
     : `${Math.round(heading).toString().padStart(3,'0')}° ${dirName(heading)} · ±${Math.round(c.accuracy)} m`;
-  lastFix = here; store.set('lastPos', here);
+  lastFix = here; lastFixTime = Date.now(); store.set('lastPos', here);
   updateSun();
   if (wps.length) draw();
   if (mobPoint) updateMOB();
@@ -1425,6 +1450,8 @@ function startNavigation(){
   follow = true; $('#follow').classList.add('on');   // keep the boat centred while under way
   if (navigator.vibrate) navigator.vibrate(60);
   acquireWakeLock();
+  // zoom in on the boat so the 3D-tilt view has something to lean over — same feel as driving nav
+  try{ map.flyTo(boatPos(), Math.max(map.getZoom(), 16), {duration:0.7}); }catch(e){}
 }
 function stopNavigation(){
   if (!navigating) return;
@@ -1433,6 +1460,8 @@ function stopNavigation(){
   $('#routebar').classList.remove('nav-active');
   $('#rStart').textContent = 'Start';
   releaseWakeLock();
+  // pull back out to a normal overview zoom
+  try{ map.flyTo(boatPos(), 14, {duration:0.7}); }catch(e){}
 }
 $('#rStart').onclick = () => { navigating ? stopNavigation() : startNavigation(); };
 
