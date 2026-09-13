@@ -1260,11 +1260,17 @@ async function landFor(from, to){
 function gridRoute(from, to, ways){
   const segs = wayGeomsToSegs(ways);
   if (!ways.length || !edgeCrossesLand(from, to, segs, ways)) return [from, to];   // clear — nothing to route around
-  const spacing = 200, corridor = 1400, margin = 900;   // metres (grid step, half-width, along-axis slack)
   const latR = from.lat*Math.PI/180, mPerLat = 111320, mPerLng = 111320*Math.cos(latR);
   const toXY = p => [(p.lng-from.lng)*mPerLng, (p.lat-from.lat)*mPerLat];
   const toLL = (x,y) => ({lat: from.lat + y/mPerLat, lng: from.lng + x/mPerLng});
   const [ex,ey] = toXY(to), legLen = Math.hypot(ex,ey) || 1, ux = ex/legLen, uy = ey/legLen, px = -uy, py = ux;
+  // grid step, corridor half-width and along-axis slack all scale with leg length: a short hop stays a
+  // tight fast grid; a long cross-bay leg needs a much wider corridor so the route can bow out around a
+  // shoreline that sits far off the direct line (a fixed 1400m corridor left long routes disconnected)
+  const clamp = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+  const spacing = clamp(legLen/60, 150, 300);
+  const corridor = clamp(legLen*0.3, 1400, 3000);
+  const margin = Math.max(900, spacing*4);
   const nodes = [from, to];
   for (let a=-margin; a<=legLen+margin; a+=spacing){
     for (let c=-corridor; c<=corridor; c+=spacing){
@@ -1273,7 +1279,7 @@ function gridRoute(from, to, ways){
     }
   }
   const n = nodes.length;
-  if (n > 1500) return markUnverified([from, to]);   // area too large/complex to grid in real time — stay honest
+  if (n > 2200) return markUnverified([from, to]);   // area too large/complex to grid in real time — stay honest
   const linkR = spacing*1.8, adj = Array.from({length:n}, () => []);
   const connect = (i,j) => { if (edgeCrossesLand(nodes[i], nodes[j], segs, ways)) return; const d = haversine(nodes[i], nodes[j]); adj[i].push([j,d]); adj[j].push([i,d]); };
   for (const e of [0,1]) for (let j=2;j<n;j++) if (haversine(nodes[e], nodes[j]) <= spacing*4) connect(e,j);   // endpoints reach nearby water
