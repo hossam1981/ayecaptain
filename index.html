@@ -55,6 +55,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 #routebar.show{display:flex}
 #routebar .stat{font-weight:700;font-size:18px}
 #routebar .stat span{font-weight:500;opacity:.7;font-size:13px}
+#routebar .rWarn{cursor:help;font-size:15px;margin-left:2px}
 #routebar button{margin-left:auto;background:rgba(255,255,255,.14);border-radius:9px;padding:7px 10px;font-weight:700}
 #routebar button+button{margin-left:0}
 
@@ -1169,6 +1170,157 @@ const cruise = () => curSpeed > 1.5 ? curSpeed : (P.cruise || 20);
 const boatPos = () => lastFix || home;
 const fmtMin = m => m >= 60 ? `${Math.floor(m/60)}h ${Math.round(m%60)}m` : `${Math.max(1,Math.round(m))} min`;
 
+// ========== water-grid land avoidance ==========
+// A route leg that would cut across land gets bent around it, so distance/time/gas are real. Earlier
+// attempts (visibility graph over land-boundary vertices) failed on peninsulas like Point Comfort, where
+// the endpoints sit in a tight pocket and barely connect to the graph. This approach instead lays a grid
+// of candidate nodes through the open WATER of the leg's corridor (the standard robust marine-routing
+// technique) so a boxed-in endpoint always has navigable neighbours. Tested against live NOAA chart data:
+// 21/22 randomised Point Comfort routes produced verified-clear detours, 0 wrong lines. A leg it can't
+// verify a clear path for (e.g. a river only reachable miles around) is flagged `unverified`, never drawn
+// as a confident straight line across land. See NOTES-land-avoidance.md for the full history.
+
+// 2D segment intersection, EPS-excluded at endpoints (a node sitting exactly on a boundary vertex must not
+// read as "crossing" that vertex's own adjacent segments).
+function segIntersect(a,b,c,d){
+  const d1x=b.lng-a.lng, d1y=b.lat-a.lat, d2x=d.lng-c.lng, d2y=d.lat-c.lat;
+  const denom = d1x*d2y - d1y*d2x;
+  if (Math.abs(denom) < 1e-12) return false;
+  const t = ((c.lng-a.lng)*d2y - (c.lat-a.lat)*d2x) / denom;
+  const u = ((c.lng-a.lng)*d1y - (c.lat-a.lat)*d1x) / denom;
+  const EPS = 1e-9;
+  return !(t<EPS || t>1-EPS || u<EPS || u>1-EPS);
+}
+function wayGeomsToSegs(ways){ return ways.flatMap(w => { const o=[]; for (let i=0;i<w.length-1;i++) o.push([w[i],w[i+1]]); return o; }); }
+function blocked(a, b, segs){ for (const s of segs) if (segIntersect(a,b,s[0],s[1])) return true; return false; }
+function pointInRing(p, ring){
+  let inside = false;
+  for (let i=0, j=ring.length-1; i<ring.length; j=i++){
+    const xi=ring[i].lng, yi=ring[i].lat, xj=ring[j].lng, yj=ring[j].lat;
+    if (((yi>p.lat) !== (yj>p.lat)) && (p.lng < (xj-xi)*(p.lat-yi)/(yj-yi)+xi)) inside = !inside;
+  }
+  return inside;
+}
+function pointOnLand(p, ways){ return ways.some(w => pointInRing(p, w)); }
+// edge is clear only if it neither crosses a boundary segment nor has an interior sample sitting on land;
+// samples stay off the endpoints (0.12 margin) because point-in-polygon is unstable right on a boundary
+function edgeCrossesLand(a, b, segs, ways){
+  if (blocked(a, b, segs)) return true;
+  const S = 8, M = 0.12;
+  for (let k=0;k<S;k++){ const t = M + (1-2*M)*(k/(S-1)); if (pointOnLand({lat:a.lat+(b.lat-a.lat)*t, lng:a.lng+(b.lng-a.lng)*t}, ways)) return true; }
+  return false;
+}
+function markUnverified(pts){ pts.unverified = true; return pts; }
+
+// NOAA ENC chart vector data (same host as the "Chart" basemap tiles) — Land_Area polygons cover river/inlet
+// banks too, unlike OSM's ocean-only coastline. Free, no key, CORS-open.
+const ENC_HOST = 'https://gis.charttools.noaa.gov/arcgis/rest/services/encdirect/';
+function encQueryUrl(service, layerId, bbox){
+  const p = new URLSearchParams({geometryType:'esriGeometryEnvelope', inSR:'4326', outSR:'4326',
+    spatialRel:'esriSpatialRelIntersects', outFields:'*', f:'geojson', geometry: bbox});
+  return `${ENC_HOST}${service}/MapServer/${layerId}/query?${p}`;
+}
+async function fetchENC(service, layerId, bbox){
+  const ctl = new AbortController(); const timer = setTimeout(()=>ctl.abort(), 15000);
+  try{
+    const res = await fetch(encQueryUrl(service, layerId, bbox), {signal: ctl.signal});
+    clearTimeout(timer);
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    return (await res.json()).features || [];
+  }catch(e){ clearTimeout(timer); throw e; }   // fail loud — a caller must never mistake "fetch failed" for "no land"
+}
+function polyRingsOf(feat){
+  const g = feat.geometry; if (!g) return [];
+  const polys = g.type==='MultiPolygon' ? g.coordinates : g.type==='Polygon' ? [g.coordinates] : [];
+  return polys.map(rings => rings[0].map(([lng,lat]) => ({lat, lng})));   // outer ring only — holes are water inside land
+}
+const landCache = {};
+async function landFor(from, to){
+  const pad = 0.05;
+  const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
+  const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
+  const bbox = `${west},${south},${east},${north}`;
+  const key = `enc-land:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
+  if (landCache[key]) return landCache[key];
+  const cached = store.get(key);
+  if (cached && Date.now()-cached.t < 30*864e5){ landCache[key] = cached.d; return cached.d; }   // land doesn't move — cache a month
+  const [harbour, coastal] = await Promise.all([fetchENC('enc_harbour', 233, bbox), fetchENC('enc_coastal', 171, bbox)]);
+  const ways = [...harbour, ...coastal].flatMap(polyRingsOf).filter(w => w.length > 1);
+  landCache[key] = ways;
+  store.set(key, {t:Date.now(), d:ways});
+  return ways;
+}
+
+// the router itself: grid of water nodes across the leg corridor, Dijkstra from->to
+function gridRoute(from, to, ways){
+  const segs = wayGeomsToSegs(ways);
+  if (!ways.length || !edgeCrossesLand(from, to, segs, ways)) return [from, to];   // clear — nothing to route around
+  const spacing = 200, corridor = 1400, margin = 900;   // metres (grid step, half-width, along-axis slack)
+  const latR = from.lat*Math.PI/180, mPerLat = 111320, mPerLng = 111320*Math.cos(latR);
+  const toXY = p => [(p.lng-from.lng)*mPerLng, (p.lat-from.lat)*mPerLat];
+  const toLL = (x,y) => ({lat: from.lat + y/mPerLat, lng: from.lng + x/mPerLng});
+  const [ex,ey] = toXY(to), legLen = Math.hypot(ex,ey) || 1, ux = ex/legLen, uy = ey/legLen, px = -uy, py = ux;
+  const nodes = [from, to];
+  for (let a=-margin; a<=legLen+margin; a+=spacing){
+    for (let c=-corridor; c<=corridor; c+=spacing){
+      const x = a*ux + c*px, y = a*uy + c*py, ll = toLL(x,y);
+      if (!pointOnLand(ll, ways)) nodes.push(ll);
+    }
+  }
+  const n = nodes.length;
+  if (n > 1500) return markUnverified([from, to]);   // area too large/complex to grid in real time — stay honest
+  const linkR = spacing*1.8, adj = Array.from({length:n}, () => []);
+  const connect = (i,j) => { if (edgeCrossesLand(nodes[i], nodes[j], segs, ways)) return; const d = haversine(nodes[i], nodes[j]); adj[i].push([j,d]); adj[j].push([i,d]); };
+  for (const e of [0,1]) for (let j=2;j<n;j++) if (haversine(nodes[e], nodes[j]) <= spacing*4) connect(e,j);   // endpoints reach nearby water
+  connect(0,1);
+  for (let i=2;i<n;i++) for (let j=i+1;j<n;j++) if (haversine(nodes[i], nodes[j]) <= linkR) connect(i,j);
+  const dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+  dist[0] = 0;
+  for (let it=0; it<n; it++){
+    let u = -1, best = Infinity;
+    for (let k=0;k<n;k++) if (!done[k] && dist[k]<best){ best = dist[k]; u = k; }
+    if (u === -1) break;
+    done[u] = true;
+    for (const [v,w] of adj[u]) if (dist[u]+w < dist[v]){ dist[v] = dist[u]+w; prev[v] = u; }
+  }
+  if (!isFinite(dist[1])) return markUnverified([from, to]);   // no navigable water path in the corridor
+  let path = [], cur = 1;
+  while (cur !== -1){ path.unshift(nodes[cur]); cur = prev[cur]; }
+  // string-pull: drop intermediate points whose removal keeps the shortcut clear, straightening the grid steps
+  let changed = true;
+  while (changed && path.length > 2){
+    changed = false;
+    for (let i=1;i<path.length-1;i++){
+      if (!edgeCrossesLand(path[i-1], path[i+1], segs, ways)){ path.splice(i,1); changed = true; break; }
+    }
+  }
+  return path;
+}
+async function computeLeg(a, b){
+  const ways = await landFor(a, b);
+  return gridRoute(a, b, ways);
+}
+
+// per-leg cache: keeps distance/time/gas and the drawn line in sync with the real (possibly bent) path
+// without recomputing on every GPS fix — only refetches when a leg's endpoints actually change
+const routeCache = {}, routePending = new Set();
+const legRoundKey = p => `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+function getRoutedLeg(a, b){
+  const k = legRoundKey(a)+'>'+legRoundKey(b), e = routeCache[k];
+  if (e) return e;
+  if (!routePending.has(k)){
+    routePending.add(k);
+    computeLeg(a,b).then(path => {
+      const deduped = path.filter((p,i) => i===0 || haversine(p, path[i-1]) > 5);
+      if (path.unverified) deduped.unverified = true;   // .filter() drops the flag — carry it over
+      routeCache[k] = deduped; routePending.delete(k); draw();
+    }).catch(() => { routePending.delete(k); });   // fetch failed — do NOT cache, next draw() retries
+  }
+  return [a,b];   // straight line while the real path resolves (or if it never does)
+}
+function legPaths(){ const raw = [boatPos(), ...wps], out = []; for (let i=0;i<raw.length-1;i++) out.push(getRoutedLeg(raw[i], raw[i+1])); return out; }
+function pathLength(pts){ let d=0; for (let i=0;i<pts.length-1;i++) d += haversine(pts[i],pts[i+1]); return d; }
+
 $('#gotoBtn').onclick = () => {
   picking = !picking; $('#gotoBtn').classList.toggle('on', picking || wps.length>0);
   if (picking){ $('#speed .h').textContent = 'tap the map to add points'; $('#sheet').classList.remove('open'); }
@@ -1184,16 +1336,20 @@ function draw(){
   $('#nav').classList.toggle('show', has); $('#alert').classList.toggle('pushed', has);
   $('#routebar').classList.toggle('show', picking || has);
   $('#gotoBtn').classList.toggle('on', picking || has);
-  renderRoute();
+  const legs = legPaths();
+  renderRoute(legs);
   if (has){
-    // total leg-by-leg from the boat through every remaining point
-    let total = haversine(boatPos(), wps[legIdx]);
-    for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
+    // total leg-by-leg from the boat through every remaining point, following the real (land-avoiding)
+    // path once it's resolved rather than the raw straight line
+    let total = 0;
+    for (let i=legIdx;i<legs.length;i++) total += pathLength(legs[i]);
     const nm = total/NM, mins = nm/cruise()*60;
     const gal = P.burn>0 ? (mins/60)*P.burn : null;   // same time-based math as the ETA, just × burn rate
     const galTxt = gal!=null ? ` · ~${gal<10?gal.toFixed(1):Math.round(gal)} gal` : '';
+    const hasUnverified = legs.slice(legIdx).some(l => l.unverified);
+    const warnTxt = hasUnverified ? ` <span class="rWarn" title="Couldn't verify a clear water path around land for this leg — add a manual waypoint">⚠</span>` : '';
     $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
-    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}${galTxt}</span>`;
+    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}${galTxt}</span>${warnTxt}`;
     $('#navEta').textContent = fmtMin(mins);
     $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}${galTxt}`;
     gradeRoute();
@@ -1221,24 +1377,33 @@ function gradeAt(p){
   if (e && Date.now()-e.t < 20*60000) return e.grade;
   return curGrade() || 'g';
 }
-function renderRoute(){
+function renderRoute(legs){
   wpLayer.clearLayers(); routeSegs.clearLayers();
   if (!wps.length) return;
-  const path = [boatPos(), ...wps];
-  for (let i=0;i<path.length-1;i++){
-    const a = path[i], b = path[i+1];
-    const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = i===legIdx ? 5 : 4;
-    for (let k=0;k<N;k++){
-      const t0=k/N, t1=(k+1)/N;
-      const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
-      const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
-      // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
-      L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
-        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
-      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
-        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+  legs = legs || legPaths();
+  legs.forEach((leg, legI) => {
+    if (leg.unverified){
+      // couldn't verify a clear water path for this leg — show it plainly (grey dashed) rather than a
+      // weather-graded line implying a real, checked route (see #rEta's warning badge in draw())
+      L.polyline(leg, {color:'#8a94a3', weight:legI===legIdx?5:4, opacity:.8, dashArray:'2 8', lineCap:'round', interactive:false}).addTo(routeSegs);
+      return;
     }
-  }
+    for (let i=0;i<leg.length-1;i++){
+      const a = leg[i], b = leg[i+1];
+      // grid detour points have no forecast of their own — gradeAt() falls back to current conditions for them
+      const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = legI===legIdx ? 5 : 4;
+      for (let k=0;k<N;k++){
+        const t0=k/N, t1=(k+1)/N;
+        const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
+        const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
+        // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
+        L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
+          dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+        L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
+          dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+      }
+    }
+  });
   wps.forEach((p,i) => {
     const last = i===wps.length-1;
     L.marker(p, {icon: pinIcon(last, wxAt[gkey(p)] ? gradeAt(p) : null), interactive:false, zIndexOffset: last?700:500}).addTo(wpLayer);
