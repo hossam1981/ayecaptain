@@ -55,7 +55,6 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 #routebar.show{display:flex}
 #routebar .stat{font-weight:700;font-size:18px}
 #routebar .stat span{font-weight:500;opacity:.7;font-size:13px}
-#routebar .rWarn{cursor:help;font-size:15px;margin-left:2px}
 #routebar button{margin-left:auto;background:rgba(255,255,255,.14);border-radius:9px;padding:7px 10px;font-weight:700}
 #routebar button+button{margin-left:0}
 
@@ -441,21 +440,6 @@ const store = {
 };
 function haversine(a,b){ const R=6371000,toR=x=>x*Math.PI/180; const dLat=toR(b.lat-a.lat),dLon=toR(b.lng-a.lng); const s=Math.sin(dLat/2)**2+Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
 function bearing(a,b){ const toR=x=>x*Math.PI/180; const y=Math.sin(toR(b.lng-a.lng))*Math.cos(toR(b.lat)); const x=Math.cos(toR(a.lat))*Math.sin(toR(b.lat))-Math.sin(toR(a.lat))*Math.cos(toR(b.lat))*Math.cos(toR(b.lng-a.lng)); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
-// 2D segment intersection (lat/lng treated as locally-planar — fine at the few-mile scale routes run at).
-// EPS excludes a touch exactly at either segment's own endpoint — every candidate routing node IS a
-// coastline vertex, so a line deliberately ending AT one constantly "touches" that vertex's own two
-// neighboring coastline segments there; without this, that touch was misread as crossing land and blocked
-// almost every edge in the visibility graph, including from the boat to literally anything
-function segIntersect(a,b,c,d){
-  const d1x=b.lng-a.lng, d1y=b.lat-a.lat, d2x=d.lng-c.lng, d2y=d.lat-c.lat;
-  const denom = d1x*d2y - d1y*d2x;
-  if (Math.abs(denom) < 1e-12) return null;   // parallel
-  const t = ((c.lng-a.lng)*d2y - (c.lat-a.lat)*d2x) / denom;
-  const u = ((c.lng-a.lng)*d1y - (c.lat-a.lat)*d1x) / denom;
-  const EPS = 1e-9;
-  if (t<EPS || t>1-EPS || u<EPS || u>1-EPS) return null;
-  return {lat: a.lat + t*d1y, lng: a.lng + t*d1x};
-}
 
 // ---------- boat profile ----------
 const DEFAULTS = {jet:[12,18,1.5,25], bowrider:[13,19,1.8,24], center:[16,22,2.5,25], cruiser:[18,25,3,18], sail:[22,28,4,6]};
@@ -1185,29 +1169,6 @@ const cruise = () => curSpeed > 1.5 ? curSpeed : (P.cruise || 20);
 const boatPos = () => lastFix || home;
 const fmtMin = m => m >= 60 ? `${Math.floor(m/60)}h ${Math.round(m%60)}m` : `${Math.max(1,Math.round(m))} min`;
 
-// per-leg cache for the land-avoidance detour (routeAroundLand, defined near the docks/Overpass code) —
-// keeps distance/time/gas and the drawn line in sync with the real (possibly bent) path, not the raw
-// straight line, without recomputing on every GPS fix: only refetches when a leg's endpoints actually change
-const routeCache = {}, routePending = new Set();
-const legRoundKey = p => `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
-function getRoutedLeg(a, b){
-  const k = legRoundKey(a)+'>'+legRoundKey(b), e = routeCache[k];
-  if (e) return e;
-  if (!routePending.has(k)){
-    routePending.add(k);
-    computeLeg(a,b).then(path => {
-      // safety net: collapse any near-duplicate consecutive points (e.g. a detour that recursed
-      // without making progress) so the line/distance never double back on itself
-      const deduped = path.filter((p,i) => i===0 || haversine(p, path[i-1]) > 5);
-      if (path.unverified) deduped.unverified = true;   // .filter() returns a fresh array — flag doesn't carry over on its own
-      routeCache[k] = deduped; routePending.delete(k); draw();
-    }).catch(() => { routePending.delete(k); });
-  }
-  return [a,b];   // straight line while the real (possibly bent) path is being computed, or if it never resolves
-}
-function legPaths(){ const raw = [boatPos(), ...wps], out = []; for (let i=0;i<raw.length-1;i++) out.push(getRoutedLeg(raw[i], raw[i+1])); return out; }
-function pathLength(pts){ let d=0; for (let i=0;i<pts.length-1;i++) d += haversine(pts[i],pts[i+1]); return d; }
-
 $('#gotoBtn').onclick = () => {
   picking = !picking; $('#gotoBtn').classList.toggle('on', picking || wps.length>0);
   if (picking){ $('#speed .h').textContent = 'tap the map to add points'; $('#sheet').classList.remove('open'); }
@@ -1223,20 +1184,16 @@ function draw(){
   $('#nav').classList.toggle('show', has); $('#alert').classList.toggle('pushed', has);
   $('#routebar').classList.toggle('show', picking || has);
   $('#gotoBtn').classList.toggle('on', picking || has);
-  const legs = legPaths();
-  renderRoute(legs);
+  renderRoute();
   if (has){
-    // total leg-by-leg from the boat through every remaining point, following the real (land-avoiding)
-    // path once it's resolved rather than the raw straight line
-    let total = 0;
-    for (let i=legIdx;i<legs.length;i++) total += pathLength(legs[i]);
+    // total leg-by-leg from the boat through every remaining point
+    let total = haversine(boatPos(), wps[legIdx]);
+    for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
     const nm = total/NM, mins = nm/cruise()*60;
     const gal = P.burn>0 ? (mins/60)*P.burn : null;   // same time-based math as the ETA, just × burn rate
     const galTxt = gal!=null ? ` · ~${gal<10?gal.toFixed(1):Math.round(gal)} gal` : '';
-    const hasUnverified = legs.slice(legIdx).some(l => l.unverified);
-    const warnTxt = hasUnverified ? ` <span class="rWarn" title="Couldn't verify a safe path around land for this leg — add a manual waypoint">⚠</span>` : '';
     $('#rDist').innerHTML = `${wps.length} <span>point${wps.length>1?'s':''}</span>`;
-    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}${galTxt}</span>${warnTxt}`;
+    $('#rEta').innerHTML = `${nm.toFixed(1)} nm <span>${fmtMin(mins)} · arrive ${fmtT(Date.now()+mins*60000)}${galTxt}</span>`;
     $('#navEta').textContent = fmtMin(mins);
     $('#navEtaL').textContent = `${nm.toFixed(1)} nm to final · at ${Math.round(cruise())} kn${curSpeed>1.5?'':' cruise'}${galTxt}`;
     gradeRoute();
@@ -1264,34 +1221,24 @@ function gradeAt(p){
   if (e && Date.now()-e.t < 20*60000) return e.grade;
   return curGrade() || 'g';
 }
-function renderRoute(legs){
+function renderRoute(){
   wpLayer.clearLayers(); routeSegs.clearLayers();
   if (!wps.length) return;
-  legs = legs || legPaths();
-  legs.forEach((leg, legI) => {
-    if (leg.unverified){
-      // couldn't confirm a safe path around land for this leg — show it plainly as unverified rather
-      // than a weather-graded line implying a real, checked route (see #rEta's warning badge in draw())
-      L.polyline(leg, {color:'#8a94a3', weight:legI===legIdx?5:4, opacity:.8, dashArray:'2 8', lineCap:'round', interactive:false}).addTo(routeSegs);
-      return;
+  const path = [boatPos(), ...wps];
+  for (let i=0;i<path.length-1;i++){
+    const a = path[i], b = path[i+1];
+    const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = i===legIdx ? 5 : 4;
+    for (let k=0;k<N;k++){
+      const t0=k/N, t1=(k+1)/N;
+      const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
+      const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
+      // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
+      L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
+        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
+        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
     }
-    for (let i=0;i<leg.length-1;i++){
-      const a = leg[i], b = leg[i+1];
-      // detour points inserted by the land-avoidance routing have no weather grade of their own —
-      // gradeAt() already falls back to the current conditions for those, same as any ungraded point
-      const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = legI===legIdx ? 5 : 4;
-      for (let k=0;k<N;k++){
-        const t0=k/N, t1=(k+1)/N;
-        const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
-        const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
-        // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
-        L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
-          dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
-        L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
-          dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
-      }
-    }
-  });
+  }
   wps.forEach((p,i) => {
     const last = i===wps.length-1;
     L.marker(p, {icon: pinIcon(last, wxAt[gkey(p)] ? gradeAt(p) : null), interactive:false, zIndexOffset: last?700:500}).addTo(wpLayer);
@@ -1374,297 +1321,6 @@ async function fetchOverpass(q){
     }catch(e){ clearTimeout(timer); lastErr = e; }
   }
   throw lastErr;
-}
-
-// NOAA's own nautical chart vector data (same host as the "Chart" basemap tiles above) — unlike OSM's
-// natural=coastline, which only marks the ocean-facing edge of the mainland, NOAA's Land_Area layer
-// covers river/inlet banks too, since it's built for real navigation. Free, no key, CORS-friendly.
-const ENC_HOST = 'https://gis.charttools.noaa.gov/arcgis/rest/services/encdirect/';
-function encQueryUrl(service, layerId, bbox, geomType){
-  const p = new URLSearchParams({geometryType: geomType||'esriGeometryEnvelope', inSR:'4326', outSR:'4326',
-    spatialRel:'esriSpatialRelIntersects', outFields:'*', f:'geojson', geometry: bbox});
-  return `${ENC_HOST}${service}/MapServer/${layerId}/query?${p}`;
-}
-async function fetchENC(service, layerId, bbox){
-  const ctl = new AbortController(); const timer = setTimeout(()=>ctl.abort(), 15000);
-  try{
-    const res = await fetch(encQueryUrl(service, layerId, bbox), {signal: ctl.signal});
-    clearTimeout(timer);
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const gj = await res.json();
-    return gj.features || [];
-  }catch(e){ clearTimeout(timer); throw e; }   // fail loud — a caller must never mistake "fetch failed" for "no data"
-}
-
-// ---------- route land-avoidance: bend a leg around the coastline so distance/time/gas are real ----------
-// A first cut here tried a "nudge off the nearest vertex, recurse" heuristic. Testing against a real
-// point next to a creek/inlet (concave coastline) showed it doesn't reliably converge — it kept re-hitting
-// the same crossing no matter how far it nudged. That's a known hard case for a shallow heuristic, so this
-// is a proper (if scoped-down) visibility-graph shortest path instead: candidate waypoints are the actual
-// coastline vertices near the crossing, edges connect any two that don't cross land, and Dijkstra finds
-// the real shortest route through that graph — the standard algorithm for routing around polygon obstacles.
-const coastCache = {};   // in-memory this session, backed by the long-lived `store` cache below
-// collapse a way's points to ones at least minDist apart — also works correctly on a closed polygon
-// ring (re-closes using the last *retained* point, not way[0]) — chart-scale land detail is far finer
-// than a boat route needs, and this keeps the visibility graph (below) small enough to run in real time
-function simplifyWay(way, minDist){
-  if (way.length < 3) return way;
-  const out = [way[0]];
-  for (const p of way.slice(1, -1)) if (haversine(out[out.length-1], p) >= minDist) out.push(p);
-  const last = way[way.length-1];
-  if (haversine(out[out.length-1], last) > 1) out.push(last);
-  return out;
-}
-function polyRingsOf(feat){
-  const g = feat.geometry; if (!g) return [];
-  const polys = g.type==='MultiPolygon' ? g.coordinates : g.type==='Polygon' ? [g.coordinates] : [];
-  return polys.map(rings => rings[0].map(([lng,lat]) => ({lat, lng})));   // outer ring only — a hole is water inside land, not an obstacle
-}
-async function coastlineFor(from, to){
-  const pad = 0.05;   // ~3-4 miles of margin around the leg's own bounding box
-  const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
-  const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
-  const bbox = `${west},${south},${east},${north}`;
-  const key = `enc-land:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
-  if (coastCache[key]) return coastCache[key];
-  const cached = store.get(key);
-  if (cached && Date.now()-cached.t < 30*864e5){ coastCache[key] = cached.d; return cached.d; }   // land doesn't move — cache for a month
-  try{
-    const [harbour, coastal] = await Promise.all([
-      fetchENC('enc_harbour', 233, bbox),
-      fetchENC('enc_coastal', 171, bbox)
-    ]);
-    const ways = [...harbour, ...coastal]
-      .flatMap(polyRingsOf)
-      .filter(w => w.length > 1)
-      .map(w => simplifyWay(w, 120));   // NOAA land polygons are far denser than OSM's coastline lines
-    coastCache[key] = ways;
-    store.set(key, {t:Date.now(), d:ways});
-    return ways;
-  }catch(e){
-    // a genuine fetch/parse failure must NOT be reported the same way as "checked, no land nearby" —
-    // that used to collapse into an empty array either way, and whichever result landed first got cached
-    // as if it were a confirmed straight line (getRoutedLeg has no expiry on a resolved leg), permanently
-    // masking any real crossing even after a later, successful fetch would have found it. Throwing here
-    // instead lets routeAroundLand's rejection reach getRoutedLeg's .catch(), which deliberately does NOT
-    // cache anything — so the very next draw() (next GPS fix, next click) retries instead of getting stuck.
-    console.warn('land data', e); throw e;
-  }
-}
-function wayGeomsToSegs(ways){ return ways.flatMap(w => { const o=[]; for (let i=0;i<w.length-1;i++) o.push([w[i],w[i+1]]); return o; }); }
-function wayHits(way, a, b){ for (let i=0;i<way.length-1;i++) if (segIntersect(a,b,way[i],way[i+1])) return true; return false; }
-function blocked(a, b, segs){ for (const s of segs) if (segIntersect(a,b,s[0],s[1])) return true; return false; }
-// standard ray-casting point-in-polygon test
-function pointInRing(p, ring){
-  let inside = false;
-  for (let i=0, j=ring.length-1; i<ring.length; j=i++){
-    const xi=ring[i].lng, yi=ring[i].lat, xj=ring[j].lng, yj=ring[j].lat;
-    if (((yi>p.lat) !== (yj>p.lat)) && (p.lng < (xj-xi)*(p.lat-yi)/(yj-yi)+xi)) inside = !inside;
-  }
-  return inside;
-}
-function pointOnLand(p, ways){ return ways.some(w => pointInRing(p, w)); }
-// NOAA publishes chart data in cells, and land polygons get clipped exactly at each cell's boundary —
-// a route that threads a waypoint right along one of those seams can pass edge-vs-edge intersection
-// (segIntersect/blocked) against both clipped pieces without technically crossing either one's stored
-// edge, even though the real land is continuous underneath. Sampling points along the edge and checking
-// them against the actual polygon interiors (not just their boundary edges) closes that gap — a sampled
-// interior point can't land exactly on a seam the way two edges' intersection math sometimes can.
-function edgeCrossesLand(a, b, segs, ways){
-  if (blocked(a, b, segs)) return true;
-  // a routing node is very often exactly ON a land polygon's boundary vertex by construction (that's how
-  // the visibility graph builds candidate detour points) — ray-casting point-in-polygon is numerically
-  // unstable for points on/near a boundary, so sampling right next to an endpoint can misfire. Stick to
-  // the interior stretch of the edge, well clear of either end, where "inside vs outside" is unambiguous.
-  const SAMPLES = 8, MARGIN = 0.12;
-  for (let k=0; k<SAMPLES; k++){
-    const t = MARGIN + (1 - 2*MARGIN) * (k/(SAMPLES-1));
-    if (pointOnLand({lat: a.lat+(b.lat-a.lat)*t, lng: a.lng+(b.lng-a.lng)*t}, ways)) return true;
-  }
-  return false;
-}
-// a leg we've CONFIRMED is blocked but couldn't find a safe detour for must never look identical to a
-// leg that's genuinely clear — flag it so the caller can show it as unverified instead of a silent,
-// possibly-wrong straight line (the exact bug that started this rebuild)
-function markUnverified(pts){ pts.unverified = true; return pts; }
-async function routeAroundLand(from, to){
-  const ways = await coastlineFor(from, to);
-  if (!ways.length) return [from, to];
-  const segs = wayGeomsToSegs(ways);
-  if (!edgeCrossesLand(from, to, segs, ways)) return [from, to];   // clear already — nothing to route around
-
-  // candidate waypoints: from, to, and every vertex of every way the direct line actually crosses —
-  // that captures the full local shape of the obstacle (including a concave notch), not just one corner.
-  // Track which ring (and position in it) each vertex came from — consecutive vertices of the SAME ring
-  // are literally the charted boundary itself, so walking between them can never cross land, no matter
-  // how densely packed the ring is or how fragile a geometric shortcut test is near that same boundary.
-  const nodes = [from, to], nodeRing = [null, null];
-  const seen = new Set([legRoundKey(from), legRoundKey(to)]);
-  ways.forEach((way, ringId) => {
-    if (!wayHits(way, from, to)) return;
-    way.forEach((v, vi) => {
-      const k = legRoundKey(v);
-      if (!seen.has(k)){ seen.add(k); nodes.push(v); nodeRing.push({ringId, vi}); }
-    });
-  });
-  // NOAA land polygons are far denser than OSM's coastline lines and can wrap miles around the far side
-  // of an obstacle — only vertices actually near the crossing matter for a local detour, so drop anything
-  // outside a corridor around the direct line (same projection technique channelPath uses below)
-  if (nodes.length > 2){
-    const latR = from.lat*Math.PI/180, mPerLat = 111320, mPerLng = 111320*Math.cos(latR);
-    const toXY = p => [(p.lng-from.lng)*mPerLng, (p.lat-from.lat)*mPerLat];
-    const [ex, ey] = toXY(to), legLen = Math.hypot(ex, ey) || 1;
-    const ux = ex/legLen, uy = ey/legLen, MARGIN = 500, CORRIDOR = 1200;
-    for (let i=nodes.length-1; i>=2; i--){
-      const [cx, cy] = toXY(nodes[i]);
-      const along = cx*ux + cy*uy, across = Math.abs(cx*uy - cy*ux);
-      if (along < -MARGIN || along > legLen+MARGIN || across > CORRIDOR){ nodes.splice(i, 1); nodeRing.splice(i, 1); }
-    }
-  }
-  if (nodes.length > 400) return markUnverified([from, to]);   // still an unreasonably complex local shape
-
-  // visibility graph: an edge exists between two nodes if the straight line between them is clear, OR if
-  // they're consecutive vertices of the same ring (trusted — that IS the boundary, not a shortcut across
-  // it). Non-trusted edges use the cheap edge-vs-edge test to build the graph fast; a chart-cell seam
-  // artifact can let a truly-blocked shortcut look clear here, so Dijkstra's result gets verified below
-  // with the thorough (point-sampled) check, and any shortcut that turns out to be a false "clear" is
-  // removed and re-solved — trusted boundary edges are never removed, so a path around the obstacle by
-  // simply hugging the actual charted shore is always available as a fallback if every shortcut fails.
-  const n = nodes.length, adj = Array.from({length:n}, () => new Map());
-  const ringAdjacent = (i, j) => { const a=nodeRing[i], b=nodeRing[j]; return a && b && a.ringId===b.ringId && Math.abs(a.vi-b.vi)===1; };
-  // NOAA clips land features at chart-cell boundaries — a single real landmass straddling a cell edge
-  // (exactly what happens here) becomes two separately-clipped rings with no actual water between them.
-  // A short hop between two very-close vertices from DIFFERENT rings is almost certainly a stitch point
-  // along that same shared cut line, not a real gap — trust it too, same as walking one ring's own
-  // boundary. Bounded to a few meters, so even a wrong guess here is nowhere near the scale of the
-  // mile-long wrong-line bug this rebuild started from.
-  const seamStitch = (i, j) => { const a=nodeRing[i], b=nodeRing[j]; return a && b && a.ringId!==b.ringId && haversine(nodes[i], nodes[j]) < 60; };
-  for (let i=0;i<n;i++){
-    for (let j=i+1;j<n;j++){
-      const trusted = ringAdjacent(i, j) || seamStitch(i, j);
-      if (!trusted && blocked(nodes[i], nodes[j], segs)) continue;
-      const d = haversine(nodes[i], nodes[j]);
-      adj[i].set(j, {d, trusted}); adj[j].set(i, {d, trusted});
-    }
-  }
-  function dijkstra(){
-    const dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
-    dist[0] = 0;
-    for (let iter=0; iter<n; iter++){
-      let u = -1, best = Infinity;
-      for (let k=0;k<n;k++) if (!done[k] && dist[k]<best){ best = dist[k]; u = k; }
-      if (u === -1) break;
-      done[u] = true;
-      for (const [v,e] of adj[u]) if (dist[u]+e.d < dist[v]){ dist[v] = dist[u]+e.d; prev[v] = u; }
-    }
-    return {dist, prev};
-  }
-  for (let attempt=0; attempt<40; attempt++){
-    const {dist, prev} = dijkstra();
-    if (!isFinite(dist[1])) return markUnverified([from, to]);   // ran out of edges to try
-    const idxPath = []; let cur = 1;
-    while (cur !== -1){ idxPath.unshift(cur); cur = prev[cur]; }
-    let badEdge = null;
-    for (let i=0;i<idxPath.length-1;i++){
-      const u = idxPath[i], v = idxPath[i+1];
-      if (adj[u].get(v).trusted) continue;   // boundary-following edge — never a shortcut, never re-verified
-      if (edgeCrossesLand(nodes[u], nodes[v], segs, ways)){ badEdge = [u,v]; break; }
-    }
-    if (!badEdge) return idxPath.map(i => nodes[i]);   // verified clear end to end
-    adj[badEdge[0]].delete(badEdge[1]); adj[badEdge[1]].delete(badEdge[0]);   // phantom-clear shortcut — cut it and reroute
-  }
-  return markUnverified([from, to]);   // exhausted reasonable attempts to route around the seam artifacts
-}
-
-// ---------- channel-snapping: prefer a real charted route/marked channel over a plain land-avoidance detour ----------
-// NOAA ENC data: lateral buoys/beacons (the red/green channel markers boaters actually steer by, side read
-// straight from the CATLAM chart attribute) plus any official recommended_track/navigation_line. Official
-// charted routes are sparse, so this also auto-pairs nearby port(green)/starboard(red) marks into "gates"
-// and threads the route between them — broader coverage than waiting for an official track, validated
-// against the land check below before ever being trusted, so a bad pairing can never produce a worse
-// result than today's land-avoidance.
-const chanCache = {};
-async function channelDataFor(from, to){
-  const pad = 0.05;
-  const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
-  const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
-  const bbox = `${west},${south},${east},${north}`;
-  const key = `enc-chan:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
-  if (chanCache[key]) return chanCache[key];
-  const cached = store.get(key);
-  if (cached && Date.now()-cached.t < 30*864e5){ chanCache[key] = cached.d; return cached.d; }   // nav aids don't move — cache for a month
-  try{
-    const [hBuoy, cBuoy, hBeacon, cBeacon, hTrack, cTrack, hNav, cNav] = await Promise.all([
-      fetchENC('enc_harbour', 6, bbox), fetchENC('enc_coastal', 5, bbox),
-      fetchENC('enc_harbour', 1, bbox), fetchENC('enc_coastal', 1, bbox),
-      fetchENC('enc_harbour', 134, bbox), fetchENC('enc_coastal', 102, bbox),
-      fetchENC('enc_harbour', 132, bbox), fetchENC('enc_coastal', 99, bbox)
-    ]);
-    // CATLAM: 1 = port (green), 2 = starboard (red) — straight from the chart, no string-tag guessing
-    const toMark = f => {
-      const [lng, lat] = f.geometry.coordinates, catlam = f.properties && f.properties.CATLAM;
-      const side = catlam===1 ? 'port' : catlam===2 ? 'stbd' : null;
-      return side ? {lat, lng, side} : null;
-    };
-    const toLine = f => (f.geometry.coordinates||[]).map(([lng,lat]) => ({lat, lng}));
-    const marks = [...hBuoy, ...cBuoy, ...hBeacon, ...cBeacon].map(toMark).filter(Boolean);
-    const tracks = [...hTrack, ...cTrack, ...hNav, ...cNav].map(toLine).filter(w => w.length > 1);
-    const data = {marks, tracks};
-    chanCache[key] = data;
-    store.set(key, {t:Date.now(), d:data});
-    return data;
-  }catch(e){
-    // same lesson as coastlineFor above: never let a transient fetch failure get cached as "no channel
-    // data" — throw so computeLeg's fallback runs but nothing is cached, and the next draw() retries for real
-    console.warn('channel', e); throw e;
-  }
-}
-function channelPath(from, to, chan){
-  if (!chan) return null;
-  const port = chan.marks.filter(m => m.side==='port'), stbd = chan.marks.filter(m => m.side==='stbd');
-  const GATE_MAX = 400;   // meters — port/starboard marks farther apart than this aren't the same gate
-  const pairs = [];
-  for (const p of port) for (const s of stbd){ const d = haversine(p, s); if (d <= GATE_MAX) pairs.push([p, s, d]); }
-  pairs.sort((a,b) => a[2]-b[2]);
-  const usedP = new Set(), usedS = new Set(), gates = [];
-  for (const [p, s] of pairs){
-    if (usedP.has(p) || usedS.has(s)) continue;   // greedy nearest-pair — each mark belongs to at most one gate
-    usedP.add(p); usedS.add(s);
-    gates.push({lat:(p.lat+s.lat)/2, lng:(p.lng+s.lng)/2});
-  }
-  const candidates = [...gates, ...chan.tracks.flat()];
-  if (!candidates.length) return null;
-
-  // project every candidate onto the from->to line (local equirectangular approx — fine at boat-route scale)
-  const latR = from.lat*Math.PI/180, mPerLat = 111320, mPerLng = 111320*Math.cos(latR);
-  const toXY = p => [(p.lng-from.lng)*mPerLng, (p.lat-from.lat)*mPerLat];
-  const [ex, ey] = toXY(to), legLen = Math.hypot(ex, ey);
-  if (legLen < 1) return null;
-  const ux = ex/legLen, uy = ey/legLen, MARGIN = 300, CORRIDOR = 1000;
-  const onLeg = [];
-  for (const c of candidates){
-    const [cx, cy] = toXY(c);
-    const along = cx*ux + cy*uy, across = Math.abs(cx*uy - cy*ux);
-    // keep only marks that actually sit between from/to (± a little slack) and reasonably close to the direct
-    // line — this is what stops an unrelated channel elsewhere in the bay from ever being pulled into the route
-    if (along >= -MARGIN && along <= legLen+MARGIN && across <= CORRIDOR) onLeg.push({p:c, along});
-  }
-  if (!onLeg.length) return null;
-  onLeg.sort((a,b) => a.along-b.along);
-  const pts = [from, ...onLeg.map(o => o.p), to];
-  return pts.filter((p,i) => i===0 || haversine(p, pts[i-1]) > 5);
-}
-async function computeLeg(a, b){
-  let path = null;
-  try{ path = channelPath(a, b, await channelDataFor(a, b)); }
-  catch(e){ /* no channel data this time — routeAroundLand below still gives a safe result */ }
-  if (path){
-    try{
-      const ways = await coastlineFor(a, b), segs = wayGeomsToSegs(ways);
-      for (let i=0;i<path.length-1;i++) if (edgeCrossesLand(path[i], path[i+1], segs, ways)){ path = null; break; }
-    }catch(e){ path = null; }   // couldn't verify the candidate is actually clear of land — don't risk it
-  }
-  return path || routeAroundLand(a, b);
 }
 
 function dockIcon(){
