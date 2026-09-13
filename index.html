@@ -1240,12 +1240,17 @@ async function landFor(from, to){
   const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
   const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
   const bbox = `${west},${south},${east},${north}`;
-  const key = `enc-land:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
+  const key = `enc-land2:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
   if (landCache[key]) return landCache[key];
   const cached = store.get(key);
   if (cached && Date.now()-cached.t < 30*864e5){ landCache[key] = cached.d; return cached.d; }   // land doesn't move — cache a month
-  const [harbour, coastal] = await Promise.all([fetchENC('enc_harbour', 233, bbox), fetchENC('enc_coastal', 171, bbox)]);
-  const ways = [...harbour, ...coastal].flatMap(polyRingsOf).filter(w => w.length > 1);
+  // Use the DETAILED harbour layer (233) where it has coverage — it correctly resolves rivers/inlets as
+  // water. The coarse coastal layer (171) is one giant mainland blob that does NOT cut out rivers, so it
+  // wrongly marks e.g. the Navesink (Red Bank) as land; only fall back to it where harbour has no coverage
+  // at all (far offshore), so open-water islands are still caught.
+  let feats = await fetchENC('enc_harbour', 233, bbox);
+  if (!feats.length) feats = await fetchENC('enc_coastal', 171, bbox);
+  const ways = feats.flatMap(polyRingsOf).filter(w => w.length > 1);
   landCache[key] = ways;
   store.set(key, {t:Date.now(), d:ways});
   return ways;
