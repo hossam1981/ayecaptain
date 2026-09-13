@@ -435,6 +435,26 @@ const store = {
 };
 function haversine(a,b){ const R=6371000,toR=x=>x*Math.PI/180; const dLat=toR(b.lat-a.lat),dLon=toR(b.lng-a.lng); const s=Math.sin(dLat/2)**2+Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
 function bearing(a,b){ const toR=x=>x*Math.PI/180; const y=Math.sin(toR(b.lng-a.lng))*Math.cos(toR(b.lat)); const x=Math.cos(toR(a.lat))*Math.sin(toR(b.lat))-Math.sin(toR(a.lat))*Math.cos(toR(b.lat))*Math.cos(toR(b.lng-a.lng)); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
+// point a given distance (meters) along a bearing (degrees) from p — used to nudge a detour point offshore
+function destPoint(p, bearingDeg, meters){
+  const R=6371000, toR=x=>x*Math.PI/180, toD=x=>x*180/Math.PI;
+  const br=toR(bearingDeg), lat1=toR(p.lat), lon1=toR(p.lng), d=meters/R;
+  const lat2 = Math.asin(Math.sin(lat1)*Math.cos(d) + Math.cos(lat1)*Math.sin(d)*Math.cos(br));
+  const lon2 = lon1 + Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(lat1), Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+  return {lat: toD(lat2), lng: toD(lon2)};
+}
+// 2D segment intersection (lat/lng treated as locally-planar — fine at the few-mile scale routes run at)
+function segIntersect(a,b,c,d){
+  const d1x=b.lng-a.lng, d1y=b.lat-a.lat, d2x=d.lng-c.lng, d2y=d.lat-c.lat;
+  const denom = d1x*d2y - d1y*d2x;
+  if (Math.abs(denom) < 1e-12) return null;   // parallel
+  const t = ((c.lng-a.lng)*d2y - (c.lat-a.lat)*d2x) / denom;
+  const u = ((c.lng-a.lng)*d1y - (c.lat-a.lat)*d1x) / denom;
+  if (t<0 || t>1 || u<0 || u>1) return null;
+  return {lat: a.lat + t*d1y, lng: a.lng + t*d1x};
+}
+// which side of line a->b point p is on (sign only; magnitude unused)
+function sideOfLine(p,a,b){ return Math.sign((b.lng-a.lng)*(p.lat-a.lat) - (b.lat-a.lat)*(p.lng-a.lng)); }
 
 // ---------- boat profile ----------
 const DEFAULTS = {jet:[12,18,1.5,25], bowrider:[13,19,1.8,24], center:[16,22,2.5,25], cruiser:[18,25,3,18], sail:[22,28,4,6]};
@@ -1164,6 +1184,28 @@ const cruise = () => curSpeed > 1.5 ? curSpeed : (P.cruise || 20);
 const boatPos = () => lastFix || home;
 const fmtMin = m => m >= 60 ? `${Math.floor(m/60)}h ${Math.round(m%60)}m` : `${Math.max(1,Math.round(m))} min`;
 
+// per-leg cache for the land-avoidance detour (routeAroundLand, defined near the docks/Overpass code) —
+// keeps distance/time/gas and the drawn line in sync with the real (possibly bent) path, not the raw
+// straight line, without recomputing on every GPS fix: only refetches when a leg's endpoints actually change
+const routeCache = {}, routePending = new Set();
+const legRoundKey = p => `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+function getRoutedLeg(a, b){
+  const k = legRoundKey(a)+'>'+legRoundKey(b), e = routeCache[k];
+  if (e) return e;
+  if (!routePending.has(k)){
+    routePending.add(k);
+    routeAroundLand(a,b).then(path => {
+      // safety net: collapse any near-duplicate consecutive points (e.g. a detour that recursed
+      // without making progress) so the line/distance never double back on itself
+      const deduped = path.filter((p,i) => i===0 || haversine(p, path[i-1]) > 5);
+      routeCache[k] = deduped; routePending.delete(k); draw();
+    }).catch(() => { routePending.delete(k); });
+  }
+  return [a,b];   // straight line while the real (possibly bent) path is being computed, or if it never resolves
+}
+function legPaths(){ const raw = [boatPos(), ...wps], out = []; for (let i=0;i<raw.length-1;i++) out.push(getRoutedLeg(raw[i], raw[i+1])); return out; }
+function pathLength(pts){ let d=0; for (let i=0;i<pts.length-1;i++) d += haversine(pts[i],pts[i+1]); return d; }
+
 $('#gotoBtn').onclick = () => {
   picking = !picking; $('#gotoBtn').classList.toggle('on', picking || wps.length>0);
   if (picking){ $('#speed .h').textContent = 'tap the map to add points'; $('#sheet').classList.remove('open'); }
@@ -1179,11 +1221,13 @@ function draw(){
   $('#nav').classList.toggle('show', has); $('#alert').classList.toggle('pushed', has);
   $('#routebar').classList.toggle('show', picking || has);
   $('#gotoBtn').classList.toggle('on', picking || has);
-  renderRoute();
+  const legs = legPaths();
+  renderRoute(legs);
   if (has){
-    // total leg-by-leg from the boat through every remaining point
-    let total = haversine(boatPos(), wps[legIdx]);
-    for (let i=legIdx+1;i<wps.length;i++) total += haversine(wps[i-1], wps[i]);
+    // total leg-by-leg from the boat through every remaining point, following the real (land-avoiding)
+    // path once it's resolved rather than the raw straight line
+    let total = 0;
+    for (let i=legIdx;i<legs.length;i++) total += pathLength(legs[i]);
     const nm = total/NM, mins = nm/cruise()*60;
     const gal = P.burn>0 ? (mins/60)*P.burn : null;   // same time-based math as the ETA, just × burn rate
     const galTxt = gal!=null ? ` · ~${gal<10?gal.toFixed(1):Math.round(gal)} gal` : '';
@@ -1216,24 +1260,28 @@ function gradeAt(p){
   if (e && Date.now()-e.t < 20*60000) return e.grade;
   return curGrade() || 'g';
 }
-function renderRoute(){
+function renderRoute(legs){
   wpLayer.clearLayers(); routeSegs.clearLayers();
   if (!wps.length) return;
-  const path = [boatPos(), ...wps];
-  for (let i=0;i<path.length-1;i++){
-    const a = path[i], b = path[i+1];
-    const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = i===legIdx ? 5 : 4;
-    for (let k=0;k<N;k++){
-      const t0=k/N, t1=(k+1)/N;
-      const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
-      const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
-      // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
-      L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
-        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
-      L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
-        dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+  legs = legs || legPaths();
+  legs.forEach((leg, legI) => {
+    for (let i=0;i<leg.length-1;i++){
+      const a = leg[i], b = leg[i+1];
+      // detour points inserted by the land-avoidance routing have no weather grade of their own —
+      // gradeAt() already falls back to the current conditions for those, same as any ungraded point
+      const la = gLevel(gradeAt(a)), lb = gLevel(gradeAt(b)), N = 14, wt = legI===legIdx ? 5 : 4;
+      for (let k=0;k<N;k++){
+        const t0=k/N, t1=(k+1)/N;
+        const p0=[a.lat+(b.lat-a.lat)*t0, a.lng+(b.lng-a.lng)*t0];
+        const p1=[a.lat+(b.lat-a.lat)*t1, a.lng+(b.lng-a.lng)*t1];
+        // dark halo first so the colour reads over any basemap (light street, satellite imagery, or dark canvas)
+        L.polyline([p0,p1], {color:'#0b2740', weight:wt+2.4, opacity:.45,
+          dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+        L.polyline([p0,p1], {color:gColor(la + (lb-la)*((t0+t1)/2)), weight:wt, opacity:.85,
+          dashArray:'3 10', lineCap:'round', interactive:false}).addTo(routeSegs);
+      }
     }
-  }
+  });
   wps.forEach((p,i) => {
     const last = i===wps.length-1;
     L.marker(p, {icon: pinIcon(last, wxAt[gkey(p)] ? gradeAt(p) : null), interactive:false, zIndexOffset: last?700:500}).addTo(wpLayer);
@@ -1316,6 +1364,56 @@ async function fetchOverpass(q){
     }catch(e){ clearTimeout(timer); lastErr = e; }
   }
   throw lastErr;
+}
+
+// ---------- route land-avoidance: bend a leg around the coastline so distance/time/gas are real ----------
+const coastCache = {};   // in-memory this session, backed by the long-lived `store` cache below
+async function coastlineFor(from, to){
+  const pad = 0.05;   // ~3-4 miles of margin around the leg's own bounding box
+  const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
+  const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
+  const key = `coast:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
+  if (coastCache[key]) return coastCache[key];
+  const cached = store.get(key);
+  if (cached && Date.now()-cached.t < 30*864e5){ coastCache[key] = cached.d; return cached.d; }   // coastlines don't move — cache for a month
+  try{
+    const q = `[out:json][timeout:25];way["natural"="coastline"](${south},${west},${north},${east});out geom;`;
+    const res = await fetchOverpass(q);
+    const segs = [];
+    (res.elements||[]).forEach(w => {
+      const g = w.geometry; if (!g) return;
+      for (let i=0;i<g.length-1;i++) segs.push([{lat:g[i].lat,lng:g[i].lon}, {lat:g[i+1].lat,lng:g[i+1].lon}]);
+    });
+    coastCache[key] = segs;
+    store.set(key, {t:Date.now(), d:segs});
+    return segs;
+  }catch(e){ console.warn('coastline', e); return []; }   // graceful: caller falls back to a straight line
+}
+// best-effort: bend a from->to leg around the nearest coastline crossing, recursing on the two halves.
+// not a real marine router — handles a single point/small peninsula well, complex coastlines may still need a manual waypoint
+async function routeAroundLand(from, to, depth){
+  depth = depth || 0;
+  if (depth >= 4) return [from, to];
+  const segs = await coastlineFor(from, to);
+  if (!segs.length) return [from, to];
+  let hit = null, hitSeg = null;
+  for (const s of segs){
+    const x = segIntersect(from, to, s[0], s[1]);
+    if (x){ hit = x; hitSeg = s; break; }
+  }
+  if (!hit) return [from, to];
+  const [c,d] = hitSeg;
+  const vertex = haversine(hit,c) < haversine(hit,d) ? c : d;   // nearer end of the crossing coastline segment
+  const along = bearing(c,d);
+  const waterSide = sideOfLine(boatPos(), c, d) || 1;           // the boat's own position is known to be in water
+  const perp = (along + (waterSide>0 ? 90 : -90) + 360) % 360;
+  // push further out each recursion — a real point/peninsula can extend well past a small fixed nudge,
+  // so a shallow buffer just re-hits the same crossing on the next pass instead of actually clearing it
+  const buffer = 250 * (depth+1);
+  const detour = destPoint(vertex, perp, buffer);
+  const left = await routeAroundLand(from, detour, depth+1);
+  const right = await routeAroundLand(detour, to, depth+1);
+  return [...left.slice(0,-1), ...right];
 }
 function dockIcon(){
   const html = `<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">
