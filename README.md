@@ -16,6 +16,17 @@ It must be served over https for GPS and install to work. Opening index.html dir
 
 Then open http://localhost:8080 (localhost counts as secure).
 
+## Rebuilding the pre-baked land data (rarely needed)
+
+The smart-route feature uses `data/land-njny.json`, a pre-processed NOAA ENC land polygon set
+(chart-cell seams already dissolved) for the NJ / NY harbour coast. It's checked in — you only
+regenerate if NOAA has published new ENC charts and you want the update:
+
+    npm install         # once, gets polygon-clipping as a devDependency
+    npm run build:land  # fetches, merges, simplifies, writes data/land-njny.json (~1 min)
+
+The app itself remains a static PWA with no runtime NPM dependencies; `package.json` is dev-tools-only.
+
 ## Data sources (all free, no keys)
 
 | What | Source |

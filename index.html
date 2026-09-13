@@ -1240,10 +1240,47 @@ function polyRingsOf(feat){
   return polys.map(rings => rings[0].map(([lng,lat]) => ({lat, lng})));   // outer ring only — holes are water inside land
 }
 const landCache = {};
+
+// Pre-baked land polygons (NJ/NY coast + harbours), produced offline by scripts/build-land.mjs — see
+// NOTES-land-avoidance.md. Chart-cell seams are already merged (polygon-clipping union), so `blocked()`
+// against these polygons has NO seam artefacts. Loaded once on startup; if the fetch fails (rare, e.g.
+// the file was ever removed), `staticLand` stays null and landFor() falls back to live NOAA.
+let staticLand = null, staticLandBBox = null, staticLandPolyBBox = null;
+fetch('./data/land-njny.json').then(r => r.ok ? r.json() : null).then(d => {
+  if (!d || !d.bbox || !d.ways) return;
+  staticLandBBox = d.bbox;
+  staticLand = d.ways;
+  // pre-compute a bbox per polygon so leg-scale filtering is O(polygons) not O(vertices)
+  staticLandPolyBBox = staticLand.map(w => {
+    let mnLa=90, mxLa=-90, mnLo=180, mxLo=-180;
+    for (const p of w){ if(p.lat<mnLa)mnLa=p.lat; if(p.lat>mxLa)mxLa=p.lat; if(p.lng<mnLo)mnLo=p.lng; if(p.lng>mxLo)mxLo=p.lng; }
+    return [mnLo, mnLa, mxLo, mxLa];   // [w,s,e,n]
+  });
+}).catch(()=>{});   // no static asset → live NOAA fallback still works
+
+function legInStaticCoverage(legS, legW, legN, legE){
+  if (!staticLand || !staticLandBBox) return false;
+  const [w,s,e,n] = staticLandBBox;
+  return legS>=s && legN<=n && legW>=w && legE<=e;
+}
+function staticLandFor(legS, legW, legN, legE){
+  const out = [];
+  for (let i=0;i<staticLand.length;i++){
+    const [pw,ps,pe,pn] = staticLandPolyBBox[i];
+    if (pe < legW || pw > legE || pn < legS || ps > legN) continue;   // polygon bbox disjoint from leg bbox
+    out.push(staticLand[i]);
+  }
+  return out;
+}
+
 async function landFor(from, to){
   const pad = 0.05;
   const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
   const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
+  // Fast path: pre-baked land polygons, no fetch, seams already merged. Skips the entire NOAA round-trip
+  // and its ~0.8-1.4s latency inside the covered region.
+  if (legInStaticCoverage(south, west, north, east)) return staticLandFor(south, west, north, east);
+  // Live NOAA fallback for legs outside the pre-baked coverage box
   const bbox = `${west},${south},${east},${north}`;
   const key = `enc-land2:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
   if (landCache[key]) return landCache[key];

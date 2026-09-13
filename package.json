@@ -1,0 +1,13 @@
+{
+  "name": "ayecaptain-tools",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Dev-only build tools for AyeCaptain / Bayside. The app itself is a static PWA with no runtime dependencies — this package.json only exists to run the offline data preprocessor.",
+  "type": "module",
+  "scripts": {
+    "build:land": "node scripts/build-land.mjs"
+  },
+  "devDependencies": {
+    "polygon-clipping": "^0.15.7"
+  }
+}

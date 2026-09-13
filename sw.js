@@ -1,7 +1,8 @@
-const CACHE = 'bayside-v39';
+const CACHE = 'bayside-v40';
 const SHELL = ['./', './index.html', './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/boat.png',
   './icons/sunrise.png', './icons/sunset.png', './icons/ocean.png', './icons/sun-icon.png', './icons/moon-icon.png',
   './icons/mob-buoy.png',
+  './data/land-njny.json',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 // add each item on its own so one missing/blocked asset can't fail the whole install
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => Promise.allSettled(SHELL.map(u => c.add(u))))); self.skipWaiting(); });
