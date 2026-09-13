@@ -122,6 +122,65 @@ manual routing until there's a real fix.
   problem, if one exists with acceptable licensing/cost for a free hobby app, rather than a
   from-scratch client-side visibility graph over raw chart polygons.
 
+## NOAA ENC API reference (so next time doesn't re-discover this from scratch)
+
+Base host: `https://gis.charttools.noaa.gov/arcgis/rest/services/encdirect/` — free, no API
+key, and CORS-open (the server reflects `Access-Control-Allow-Origin` back to whatever `Origin`
+the browser sends, so it works from any deployed domain including Netlify). Same host already
+used for this app's "Chart" basemap tiles, just a different sub-service exposing queryable
+vector geometry instead of pre-rendered tiles.
+
+There are four scale-band `MapServer` services, each covering the whole US chart suite merged
+(query by arbitrary bbox and it returns all matching features regardless of which underlying
+chart cell they came from). Two were used; the finer two (`enc_approach`, `enc_general`) exist
+but were coarser than needed for Raritan Bay:
+- `enc_harbour/MapServer` — finest detail, near ports/marinas/rivers
+- `enc_coastal/MapServer` — broader open-water coverage
+
+**Each service has its OWN layer-ID numbering for the same feature classes.** Layer IDs
+confirmed via each service's `?f=json` layer list:
+
+| Feature class                | `enc_harbour` id | `enc_coastal` id |
+|------------------------------|:----------------:|:----------------:|
+| Land_Area (polygon)          | 233              | 171              |
+| Fairway_area (polygon)       | 208              | 150              |
+| River_area (polygon)         | 236              | 174              |
+| Recommended_Track_line       | 134              | 102              |
+| Navigation_Line              | 132              | 99               |
+| Buoy_Lateral_point           | 6                | 5                |
+| Beacon_Lateral_point         | 1                | 1                |
+| Coastline_line               | 84               | 70               |
+
+Query pattern (ArcGIS REST `query` endpoint, GeoJSON out, WGS84 lat/lng):
+```
+GET {host}{service}/MapServer/{layerId}/query
+  ?geometry=<xmin>,<ymin>,<xmax>,<ymax>   (lng,lat order for envelope)
+  &geometryType=esriGeometryEnvelope
+  &inSR=4326&outSR=4326
+  &spatialRel=esriSpatialRelIntersects
+  &outFields=*&f=geojson
+```
+The server can also do the crossing test itself: pass `geometryType=esriGeometryPolyline` with a
+JSON `{"paths":[[[lng,lat],[lng,lat]]],"spatialReference":{"wkid":4326}}` as `geometry` and it
+returns exactly the polygons that line crosses (this is how the Port Monmouth→Red Bank
+land-crossing was confirmed).
+
+Field notes:
+- **`CATLAM`** on `Buoy_Lateral_point`/`Beacon_Lateral_point`: 1 = port (green), 2 = starboard
+  (red). Verified against real samples (CATLAM=1 paired 100% with COLOUR green, =2 with red).
+  Much cleaner than parsing OSM colour/category tag strings.
+- **`DSNM`** = source chart cell id (e.g. `US5NJ1UM.000`) — multiple different values come back
+  in one bbox query, confirming the merged-coverage behavior. This field is also the fingerprint
+  of the chart-cell-seam problem: the two Point Comfort land fragments carry different `DSNM`s.
+
+**Layers found but never integrated** (deliberately deferred, not forgotten): `Fairway_area`
+(real marked-channel polygons — ~10 near Sandy Hook vs OSM's 1) and `River_area`. They weren't
+used because a polygon's boundary vertices don't make good route via-points for the gate-
+threading algorithm as written (routing between the two edges of a channel polygon zigzags
+instead of following a centerline). Using them well would need either a point-in-polygon
+corridor constraint or a centerline-extraction step — a natural v1.1, not required to close the
+original land-crossing bug.
+
 ## Where the code still lives
 
 Every line described above is intact in git history, not deleted from the project — only
