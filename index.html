@@ -58,6 +58,10 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 #routebar .rWarn{cursor:help;font-size:15px;margin-left:2px}
 #routebar button{margin-left:auto;background:rgba(255,255,255,.14);border-radius:9px;padding:7px 10px;font-weight:700}
 #routebar button+button{margin-left:0}
+#routebar #rStart{background:var(--green);color:#fff}
+#routebar.nav-active #rStart{background:var(--red)}
+body.nav-active #nav{background:linear-gradient(135deg,#0F2A44,#123f5b)}
+body.nav-active #nav .lbl{opacity:.85}
 
 /* bottom sheet */
 #sheet{position:fixed;left:0;right:0;bottom:0;z-index:610;background:linear-gradient(180deg,#d3e8f6 0%,#e9e8d6 42%,#f4edd8 66%);border-radius:20px 20px 0 0;box-shadow:0 -4px 20px rgba(15,42,68,.3);transform:translateY(calc(100% - 176px - var(--sab)));transition:transform .28s cubic-bezier(.2,.8,.2,1);max-height:86vh;display:flex;flex-direction:column}
@@ -299,6 +303,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 <div id="routebar">
   <div class="stat" id="rDist">0 <span>points</span></div>
   <div class="stat" id="rEta">tap map <span>to add</span></div>
+  <button id="rStart">Start</button>
   <button id="rUndo">Undo</button>
   <button id="rGpx">GPX</button>
   <button id="rClear">Clear</button>
@@ -1386,7 +1391,50 @@ $('#gotoBtn').onclick = () => {
 map.on('click', e => { if (!picking) return; wps.push(e.latlng); legIdx = Math.min(legIdx, wps.length-1); draw(); });
 $('#navStop').onclick = () => { picking = false; $('#routebar').classList.remove('show'); $('#gotoBtn').classList.toggle('on', wps.length>0); };
 $('#rUndo').onclick = () => { wps.pop(); legIdx = Math.min(legIdx, Math.max(0,wps.length-1)); draw(); };
-$('#rClear').onclick = () => { wps = []; legIdx = 0; picking = false; draw(); };
+$('#rClear').onclick = () => { wps = []; legIdx = 0; picking = false; stopNavigation(); draw(); };
+
+// ---------- active navigation ("Start ride") ----------
+// Screen Wake Lock so Android doesn't dim/sleep the display and pause GPS. This is the single biggest
+// cause of "GPS lags on my boat" for a PWA — mobile OSes throttle geolocation aggressively when the
+// screen goes dark. Native chart plotters like Savvy Navvy solve it with a wakelock plugin; the Screen
+// Wake Lock API is the web equivalent.
+let navigating = false, wakeLockSentinel = null;
+async function acquireWakeLock(){
+  if (!('wakeLock' in navigator)) return;   // Safari/older Android — silently skip; not fatal
+  try{
+    wakeLockSentinel = await navigator.wakeLock.request('screen');
+    // when the OS revokes the lock (tab hidden, phone locks), the sentinel fires 'release'; we'll reacquire on visibility
+    wakeLockSentinel.addEventListener('release', () => { wakeLockSentinel = null; });
+  }catch(e){ /* denied — the "Start" flow still works, just without wake lock */ }
+}
+function releaseWakeLock(){
+  if (!wakeLockSentinel) return;
+  wakeLockSentinel.release().catch(()=>{});
+  wakeLockSentinel = null;
+}
+// reacquire the lock when the user comes back to the tab — the OS releases it while hidden
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState==='visible' && navigating && !wakeLockSentinel) acquireWakeLock();
+});
+function startNavigation(){
+  if (!wps.length) return;
+  navigating = true;
+  document.body.classList.add('nav-active');
+  $('#routebar').classList.add('nav-active');
+  $('#rStart').textContent = 'Stop';
+  follow = true; $('#follow').classList.add('on');   // keep the boat centred while under way
+  if (navigator.vibrate) navigator.vibrate(60);
+  acquireWakeLock();
+}
+function stopNavigation(){
+  if (!navigating) return;
+  navigating = false;
+  document.body.classList.remove('nav-active');
+  $('#routebar').classList.remove('nav-active');
+  $('#rStart').textContent = 'Start';
+  releaseWakeLock();
+}
+$('#rStart').onclick = () => { navigating ? stopNavigation() : startNavigation(); };
 
 function draw(){
   const has = wps.length>0;
@@ -1502,9 +1550,16 @@ function updateNav(){
   $('#navDist').innerHTML = d < 370 ? `${Math.round(d*3.28)}<small>ft</small>` : `${(d/NM).toFixed(d/NM<10?2:1)}<small>nm</small>`;
   $('#navBrg').textContent = `steer ${Math.round(brg).toString().padStart(3,'0')}° ${dirName(brg)} · point ${legIdx+1} of ${wps.length}`;
   $('#navCmp').querySelector('path').setAttribute('transform', `rotate(${brg-heading} 12 12)`);
-  if (d < 40 && lastFix){   // only auto-advance on a real position fix, not the fallback
+  // wider auto-advance radius while actively navigating: a moving boat overshoots a 40 m fence, and
+  // the boat's own length + GPS accuracy easily eats that up. 100 m is the practical "you're here" mark
+  const advRadius = navigating ? 100 : 40;
+  if (d < advRadius && lastFix){   // only auto-advance on a real position fix, not the fallback
     if (navigator.vibrate) navigator.vibrate([200,100,200]);
-    if (legIdx < wps.length-1){ legIdx++; draw(); } else $('#navBrg').textContent = 'you have arrived';
+    if (legIdx < wps.length-1){ legIdx++; draw(); }
+    else {
+      $('#navBrg').textContent = 'you have arrived';
+      if (navigating) stopNavigation();   // ride done — release the wake lock, return to normal state
+    }
   }
 }
 function drawRoute(){ draw(); }
