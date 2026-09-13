@@ -380,6 +380,11 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
       <span class="tt"><b>Fuel range</b><span>Half-range ring from your tank &amp; burn rate</span></span>
       <span class="tsw"></span>
     </div>
+    <div class="toolrow" id="rowNavAids">
+      <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l4.5 8-2 11h-5l-2-11z"/></svg></span>
+      <span class="tt"><b>Nav aids</b><span id="rowNavAidsSub">Channel buoys &amp; beacons nearby (20 mi)</span></span>
+      <span class="tsw"></span>
+    </div>
   </div>
 </div>
 
@@ -1189,7 +1194,7 @@ function getRoutedLeg(a, b){
   if (e) return e;
   if (!routePending.has(k)){
     routePending.add(k);
-    routeAroundLand(a,b).then(path => {
+    computeLeg(a,b).then(path => {
       // safety net: collapse any near-duplicate consecutive points (e.g. a detour that recursed
       // without making progress) so the line/distance never double back on itself
       const deduped = path.filter((p,i) => i===0 || haversine(p, path[i-1]) > 5);
@@ -1407,12 +1412,13 @@ async function coastlineFor(from, to){
     console.warn('coastline', e); throw e;
   }
 }
+function wayGeomsToSegs(ways){ return ways.flatMap(w => { const o=[]; for (let i=0;i<w.length-1;i++) o.push([w[i],w[i+1]]); return o; }); }
 function wayHits(way, a, b){ for (let i=0;i<way.length-1;i++) if (segIntersect(a,b,way[i],way[i+1])) return true; return false; }
 function blocked(a, b, segs){ for (const s of segs) if (segIntersect(a,b,s[0],s[1])) return true; return false; }
 async function routeAroundLand(from, to){
   const ways = await coastlineFor(from, to);
   if (!ways.length) return [from, to];
-  const segs = ways.flatMap(w => { const o=[]; for (let i=0;i<w.length-1;i++) o.push([w[i],w[i+1]]); return o; });
+  const segs = wayGeomsToSegs(ways);
   if (!blocked(from, to, segs)) return [from, to];   // clear already — nothing to route around
 
   // candidate waypoints: from, to, and every vertex of every way the direct line actually crosses —
@@ -1455,6 +1461,96 @@ async function routeAroundLand(from, to){
   for (let i=0;i<path.length-1;i++) if (blocked(path[i], path[i+1], segs)) return [from, to];
   return path;
 }
+
+// ---------- channel-snapping: prefer a real charted route/marked channel over a plain land-avoidance detour ----------
+// Same free OSM data, one more seamark type: lateral buoys/beacons (the red/green channel markers boaters
+// actually steer by) plus any official recommended_track/navigation_line. Real charted routes are sparse, so
+// this also auto-pairs nearby port(green)/starboard(red) marks into "gates" and threads the route between
+// them — broader coverage than waiting for an official track, validated against the coastline check below
+// before ever being trusted, so a bad pairing can never produce a worse result than today's land-avoidance.
+const chanCache = {};
+async function channelDataFor(from, to){
+  const pad = 0.05;
+  const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
+  const west = Math.min(from.lng,to.lng)-pad, east = Math.max(from.lng,to.lng)+pad;
+  const key = `chan:${south.toFixed(2)},${west.toFixed(2)},${north.toFixed(2)},${east.toFixed(2)}`;
+  if (chanCache[key]) return chanCache[key];
+  const cached = store.get(key);
+  if (cached && Date.now()-cached.t < 30*864e5){ chanCache[key] = cached.d; return cached.d; }   // nav aids don't move — cache for a month
+  try{
+    const q = `[out:json][timeout:25];(node["seamark:type"~"^(buoy_lateral|beacon_lateral)$"](${south},${west},${north},${east});`
+      + `way["seamark:type"~"^(recommended_track|navigation_line)$"](${south},${west},${north},${east}););out geom tags;`;
+    const res = await fetchOverpass(q);
+    const marks = [], tracks = [];
+    for (const e of (res.elements||[])){
+      const t = e.tags || {}, type = t['seamark:type'];
+      if (type==='buoy_lateral' || type==='beacon_lateral'){
+        if (e.lat==null || e.lon==null) continue;
+        marks.push({lat:e.lat, lng:e.lon, colour: t[`seamark:${type}:colour`] || '', category: t[`seamark:${type}:category`] || ''});
+      } else if (e.geometry){
+        tracks.push(e.geometry.map(g => ({lat:g.lat, lng:g.lon})));
+      }
+    }
+    const data = {marks, tracks};
+    chanCache[key] = data;
+    store.set(key, {t:Date.now(), d:data});
+    return data;
+  }catch(e){
+    // same lesson as coastlineFor above: never let a transient fetch failure get cached as "no channel
+    // data" — throw so computeLeg's fallback runs but nothing is cached, and the next draw() retries for real
+    console.warn('channel', e); throw e;
+  }
+}
+const markSide = m => m.category.includes('starboard') || m.colour.startsWith('red') ? 'stbd'
+  : m.category.includes('port') || m.colour.startsWith('green') ? 'port' : null;
+function channelPath(from, to, chan){
+  if (!chan) return null;
+  const port = chan.marks.filter(m => markSide(m)==='port'), stbd = chan.marks.filter(m => markSide(m)==='stbd');
+  const GATE_MAX = 400;   // meters — port/starboard marks farther apart than this aren't the same gate
+  const pairs = [];
+  for (const p of port) for (const s of stbd){ const d = haversine(p, s); if (d <= GATE_MAX) pairs.push([p, s, d]); }
+  pairs.sort((a,b) => a[2]-b[2]);
+  const usedP = new Set(), usedS = new Set(), gates = [];
+  for (const [p, s] of pairs){
+    if (usedP.has(p) || usedS.has(s)) continue;   // greedy nearest-pair — each mark belongs to at most one gate
+    usedP.add(p); usedS.add(s);
+    gates.push({lat:(p.lat+s.lat)/2, lng:(p.lng+s.lng)/2});
+  }
+  const candidates = [...gates, ...chan.tracks.flat()];
+  if (!candidates.length) return null;
+
+  // project every candidate onto the from->to line (local equirectangular approx — fine at boat-route scale)
+  const latR = from.lat*Math.PI/180, mPerLat = 111320, mPerLng = 111320*Math.cos(latR);
+  const toXY = p => [(p.lng-from.lng)*mPerLng, (p.lat-from.lat)*mPerLat];
+  const [ex, ey] = toXY(to), legLen = Math.hypot(ex, ey);
+  if (legLen < 1) return null;
+  const ux = ex/legLen, uy = ey/legLen, MARGIN = 300, CORRIDOR = 1000;
+  const onLeg = [];
+  for (const c of candidates){
+    const [cx, cy] = toXY(c);
+    const along = cx*ux + cy*uy, across = Math.abs(cx*uy - cy*ux);
+    // keep only marks that actually sit between from/to (± a little slack) and reasonably close to the direct
+    // line — this is what stops an unrelated channel elsewhere in the bay from ever being pulled into the route
+    if (along >= -MARGIN && along <= legLen+MARGIN && across <= CORRIDOR) onLeg.push({p:c, along});
+  }
+  if (!onLeg.length) return null;
+  onLeg.sort((a,b) => a.along-b.along);
+  const pts = [from, ...onLeg.map(o => o.p), to];
+  return pts.filter((p,i) => i===0 || haversine(p, pts[i-1]) > 5);
+}
+async function computeLeg(a, b){
+  let path = null;
+  try{ path = channelPath(a, b, await channelDataFor(a, b)); }
+  catch(e){ /* no channel data this time — routeAroundLand below still gives a safe result */ }
+  if (path){
+    try{
+      const segs = wayGeomsToSegs(await coastlineFor(a, b));
+      for (let i=0;i<path.length-1;i++) if (blocked(path[i], path[i+1], segs)){ path = null; break; }
+    }catch(e){ path = null; }   // couldn't verify the candidate is actually clear of land — don't risk it
+  }
+  return path || routeAroundLand(a, b);
+}
+
 function dockIcon(){
   const html = `<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">
     <ellipse cx="13" cy="32" rx="6" ry="2" fill="rgba(15,42,68,.3)"/>
@@ -1466,6 +1562,16 @@ function dockIcon(){
     </g>
   </svg>`;
   return L.divIcon({className:'dockpin', html, iconSize:[26,34], iconAnchor:[13,33]});
+}
+function buoyIcon(colour, category){
+  const col = colour.startsWith('red') ? '#D93A2B' : colour.startsWith('green') ? '#1FA24A' : '#F2A93B';
+  const banded = category.includes('preferred');   // preferred-channel marks carry a contrasting band
+  const html = `<svg width="16" height="22" viewBox="0 0 16 22" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="8" cy="20" rx="3.6" ry="1.3" fill="rgba(15,42,68,.3)"/>
+    <path d="M8 2 L13 9 L11 19 L5 19 L3 9 Z" fill="${col}" stroke="rgba(11,39,68,.6)" stroke-width="1"/>
+    ${banded ? '<rect x="3.4" y="10.5" width="9.2" height="3" fill="#fff" opacity=".85"/>' : ''}
+  </svg>`;
+  return L.divIcon({className:'buoypin', html, iconSize:[16,22], iconAnchor:[8,20]});
 }
 function setDocksSub(text, isErr){
   const el = $('#rowDocksSub'); if (!el) return;
@@ -1526,6 +1632,61 @@ $('#rowDocks').onclick = () => {
   $('#rowDocks').classList.toggle('on', docksOn);
   if (docksOn){ dockLayer.addTo(map); if (dockCache) renderDocks(); else loadDocks(); }
   else { map.removeLayer(dockLayer); dockError = false; setDocksSub(DOCKS_SUB_DEFAULT); }
+};
+
+// ---------- nav aids: real charted buoys & beacons nearby (same OSM seamark data the router uses) ----------
+const navAidLayer = L.layerGroup();
+let navAidsOn = false, navAidCache = null, navAidError = false;
+const NAVAIDS_SUB_DEFAULT = 'Channel buoys & beacons nearby (20 mi)';
+function setNavAidsSub(text, isErr){
+  const el = $('#rowNavAidsSub'); if (!el) return;
+  el.textContent = text; el.classList.toggle('err', !!isErr);
+}
+async function loadNavAids(){
+  const pos = boatPos(), key = `navaids:${pos.lat.toFixed(2)},${pos.lng.toFixed(2)}`;
+  const cached = store.get(key);
+  if (cached && Date.now()-cached.t < 30*864e5){ navAidCache = cached.d; navAidError = false; setNavAidsSub(NAVAIDS_SUB_DEFAULT); renderNavAids(); return; }
+  navAidError = false; setNavAidsSub('Loading nearby buoys…');
+  try{
+    const r = Math.round(20*MI);
+    const q = `[out:json][timeout:25];node["seamark:type"~"^(buoy_lateral|beacon_lateral)$"](around:${r},${pos.lat},${pos.lng});out;`;
+    const res = await fetchOverpass(q);
+    const list = (res.elements||[]).map(e => {
+      if (e.lat==null || e.lon==null) return null;
+      const t = e.tags||{}, type = t['seamark:type'];
+      const category = t[`seamark:${type}:category`] || '';
+      const name = t.name || (category.includes('starboard') ? 'Starboard mark' : category.includes('port') ? 'Port mark' : 'Channel mark');
+      return {lat:e.lat, lng:e.lon, colour: t[`seamark:${type}:colour`] || '', category, name};
+    }).filter(Boolean);
+    navAidCache = list;
+    store.set(key, {t:Date.now(), d:list});
+    setNavAidsSub(NAVAIDS_SUB_DEFAULT);
+    renderNavAids();
+  }catch(e){
+    console.warn('navaids', e);
+    navAidError = true;
+    setNavAidsSub('Couldn’t reach buoy data — tap to retry', true);
+  }
+}
+function renderNavAids(){
+  navAidLayer.clearLayers();
+  if (!navAidCache) return;
+  navAidCache.forEach(m => {
+    const dist = (haversine(boatPos(), m)/MI).toFixed(1);
+    const brg = Math.round(bearing(boatPos(), m));
+    const html = `<div style="min-width:140px;font-family:inherit">
+      <b style="display:block;margin-bottom:2px">${m.name}</b>
+      <span style="opacity:.7;font-size:13px">${dist} mi · ${brg}° ${dirName(brg)}</span>
+    </div>`;
+    L.marker([m.lat,m.lng], {icon: buoyIcon(m.colour, m.category)}).bindPopup(html).addTo(navAidLayer);
+  });
+}
+$('#rowNavAids').onclick = () => {
+  if (navAidsOn && navAidError){ loadNavAids(); return; }
+  navAidsOn = !navAidsOn;
+  $('#rowNavAids').classList.toggle('on', navAidsOn);
+  if (navAidsOn){ navAidLayer.addTo(map); if (navAidCache) renderNavAids(); else loadNavAids(); }
+  else { map.removeLayer(navAidLayer); navAidError = false; setNavAidsSub(NAVAIDS_SUB_DEFAULT); }
 };
 
 // ---------- more tools popover ----------
