@@ -225,6 +225,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
 .toolrow .tt{flex:1}
 .toolrow .tt b{display:block;font-size:15px;color:var(--ink)}
 .toolrow .tt span{display:block;font-size:12px;opacity:.6;margin-top:1px}
+.toolrow .tt span.err{opacity:1;color:var(--red);font-weight:600}
 .toolrow .tsw{width:42px;height:24px;border-radius:12px;background:rgba(15,42,68,.15);position:relative;flex:none;transition:background .2s}
 .toolrow .tsw::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .toolrow.on .tsw{background:var(--sea)}
@@ -366,7 +367,7 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
     <h2>More tools</h2>
     <div class="toolrow" id="rowDocks">
       <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v14M8 11h8M5 14a7 7 0 0 0 14 0"/></svg></span>
-      <span class="tt"><b>Docks &amp; fuel</b><span>Marinas, ramps &amp; fuel docks nearby (20 mi)</span></span>
+      <span class="tt"><b>Docks &amp; fuel</b><span id="rowDocksSub">Marinas, ramps &amp; fuel docks nearby (20 mi)</span></span>
       <span class="tsw"></span>
     </div>
     <div class="toolrow" id="rowAnchor">
@@ -1298,7 +1299,24 @@ applyProfile();
 // ---------- docking spots: marinas, ramps & fuel within 20 statute miles (OpenStreetMap) ----------
 const MI = 1609.34;
 const dockLayer = L.layerGroup();
-let docksOn = false, dockCache = null;
+let docksOn = false, dockCache = null, dockError = false;
+const DOCKS_SUB_DEFAULT = 'Marinas, ramps & fuel docks nearby (20 mi)';
+// the free Overpass API is a shared, keyless community service that occasionally times out or
+// rate-limits — try a couple of mirrors before giving up, instead of one single point of failure
+const OVERPASS_MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+async function fetchOverpass(q){
+  let lastErr;
+  for (const url of OVERPASS_MIRRORS){
+    const ctl = new AbortController(); const timer = setTimeout(()=>ctl.abort(), 15000);
+    try{
+      const res = await fetch(url, {method:'POST', body:q, signal: ctl.signal});
+      clearTimeout(timer);
+      if (!res.ok) throw new Error('HTTP '+res.status);
+      return await res.json();
+    }catch(e){ clearTimeout(timer); lastErr = e; }
+  }
+  throw lastErr;
+}
 function dockIcon(){
   const html = `<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">
     <ellipse cx="13" cy="32" rx="6" ry="2" fill="rgba(15,42,68,.3)"/>
@@ -1311,16 +1329,21 @@ function dockIcon(){
   </svg>`;
   return L.divIcon({className:'dockpin', html, iconSize:[26,34], iconAnchor:[13,33]});
 }
+function setDocksSub(text, isErr){
+  const el = $('#rowDocksSub'); if (!el) return;
+  el.textContent = text; el.classList.toggle('err', !!isErr);
+}
 async function loadDocks(){
   const pos = boatPos(), key = `docks:${pos.lat.toFixed(2)},${pos.lng.toFixed(2)}`;
   const cached = store.get(key);
-  if (cached && Date.now()-cached.t < 7*864e5){ dockCache = cached.d; renderDocks(); return; }
+  if (cached && Date.now()-cached.t < 7*864e5){ dockCache = cached.d; dockError = false; setDocksSub(DOCKS_SUB_DEFAULT); renderDocks(); return; }
+  dockError = false; setDocksSub('Loading nearby docks…');
   try{
     const r = Math.round(20*MI);   // 20 statute miles, in meters
     const q = `[out:json][timeout:25];(node["leisure"="marina"](around:${r},${pos.lat},${pos.lng});way["leisure"="marina"](around:${r},${pos.lat},${pos.lng});`
       + `node["leisure"="slipway"](around:${r},${pos.lat},${pos.lng});way["leisure"="slipway"](around:${r},${pos.lat},${pos.lng});`
       + `node["seamark:type"="fuel"](around:${r},${pos.lat},${pos.lng}););out center tags 80;`;
-    const res = await fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:q}).then(x=>x.json());
+    const res = await fetchOverpass(q);
     const list = (res.elements||[]).map(e => {
       const lat = e.lat ?? e.center?.lat, lng = e.lon ?? e.center?.lon;
       if (lat==null || lng==null) return null;
@@ -1330,8 +1353,13 @@ async function loadDocks(){
     }).filter(Boolean);
     dockCache = list;
     store.set(key, {t:Date.now(), d:list});
+    setDocksSub(DOCKS_SUB_DEFAULT);
     renderDocks();
-  }catch(e){ console.warn('docks', e); }
+  }catch(e){
+    console.warn('docks', e);
+    dockError = true;
+    setDocksSub('Couldn’t reach dock data — tap to retry', true);
+  }
 }
 function renderDocks(){
   dockLayer.clearLayers();
@@ -1355,10 +1383,11 @@ window.routeToDock = (lat, lng) => {
   map.fitBounds(L.latLngBounds([[boatPos().lat,boatPos().lng],[lat,lng]]), {padding:[40,160]});
 };
 $('#rowDocks').onclick = () => {
+  if (docksOn && dockError){ loadDocks(); return; }   // still "on" but failed last time — retry, don't turn off
   docksOn = !docksOn;
   $('#rowDocks').classList.toggle('on', docksOn);
   if (docksOn){ dockLayer.addTo(map); if (dockCache) renderDocks(); else loadDocks(); }
-  else map.removeLayer(dockLayer);
+  else { map.removeLayer(dockLayer); dockError = false; setDocksSub(DOCKS_SUB_DEFAULT); }
 };
 
 // ---------- more tools popover ----------
