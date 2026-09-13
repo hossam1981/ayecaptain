@@ -1397,7 +1397,15 @@ async function coastlineFor(from, to){
     coastCache[key] = ways;
     store.set(key, {t:Date.now(), d:ways});
     return ways;
-  }catch(e){ console.warn('coastline', e); return []; }   // graceful: caller falls back to a straight line
+  }catch(e){
+    // a genuine fetch/parse failure must NOT be reported the same way as "checked, no coastline nearby" —
+    // that used to collapse into an empty array either way, and whichever result landed first got cached
+    // as if it were a confirmed straight line (getRoutedLeg has no expiry on a resolved leg), permanently
+    // masking any real crossing even after a later, successful fetch would have found it. Throwing here
+    // instead lets routeAroundLand's rejection reach getRoutedLeg's .catch(), which deliberately does NOT
+    // cache anything — so the very next draw() (next GPS fix, next click) retries instead of getting stuck.
+    console.warn('coastline', e); throw e;
+  }
 }
 function wayHits(way, a, b){ for (let i=0;i<way.length-1;i++) if (segIntersect(a,b,way[i],way[i+1])) return true; return false; }
 function blocked(a, b, segs){ for (const s of segs) if (segIntersect(a,b,s[0],s[1])) return true; return false; }
