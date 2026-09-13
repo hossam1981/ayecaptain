@@ -386,6 +386,11 @@ button{font-family:inherit;font-size:inherit;border:0;background:none;color:inhe
       <span class="tt"><b>Nav aids</b><span id="rowNavAidsSub">Channel buoys &amp; beacons nearby (20 mi)</span></span>
       <span class="tsw"></span>
     </div>
+    <div class="toolrow" id="rowSmart">
+      <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c4 0 4-8 8-8s4 6 8 6"/><circle cx="3" cy="17" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+      <span class="tt"><b>Smart routes</b><span>Bend routes around land (experimental)</span></span>
+      <span class="tsw"></span>
+    </div>
   </div>
 </div>
 
@@ -1316,7 +1321,11 @@ async function computeLeg(a, b){
 // without recomputing on every GPS fix — only refetches when a leg's endpoints actually change
 const routeCache = {}, routePending = new Set();
 const legRoundKey = p => `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+// Smart routes (opt-in). Off by default: legs are plain straight lines, exactly as the app worked before
+// land-avoidance existed. On: legs bend around land via the water-grid router. Toggle lives in More tools.
+let smartRoutes = !!store.get('smartRoutes');
 function getRoutedLeg(a, b){
+  if (!smartRoutes) return [a,b];   // feature off — straight line, no fetch/compute, no warnings
   const k = legRoundKey(a)+'>'+legRoundKey(b), e = routeCache[k];
   if (e) return e;
   if (!routePending.has(k)){
@@ -1635,6 +1644,14 @@ $('#rowNavAids').onclick = () => {
   $('#rowNavAids').classList.toggle('on', navAidsOn);
   if (navAidsOn){ navAidLayer.addTo(map); if (navAidCache) renderNavAids(); else loadNavAids(); }
   else { map.removeLayer(navAidLayer); navAidError = false; setNavAidsSub(NAVAIDS_SUB_DEFAULT); }
+};
+$('#rowSmart').classList.toggle('on', smartRoutes);
+$('#rowSmart').onclick = () => {
+  smartRoutes = !smartRoutes;
+  store.set('smartRoutes', smartRoutes);
+  $('#rowSmart').classList.toggle('on', smartRoutes);
+  for (const k of Object.keys(routeCache)) delete routeCache[k];   // recompute legs under the new mode
+  draw();
 };
 
 // ---------- more tools popover ----------
