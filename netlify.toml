@@ -1,3 +1,36 @@
+# This netlify.toml only takes effect on the `flutter` branch. On `main`, the netlify.toml
+# there says `publish = "."` and no build command — the PWA is served as static files.
+# Netlify uses whichever netlify.toml is on the branch it's deploying, so the two coexist cleanly.
+
 [build]
-  publish = "."
-  # Static PWA — no build step
+  base = "flutter-web"
+  publish = "build/web"
+  # Install Flutter from GitHub into the build sandbox, then build web. Netlify caches node_modules
+  # by default but not this — first build takes ~4-6 min, subsequent builds re-clone (unavoidable on
+  # Netlify's build image). Fine for a preview branch.
+  command = """
+    set -e
+    if [ ! -d "$HOME/flutter" ]; then
+      git clone https://github.com/flutter/flutter.git -b stable --depth 1 "$HOME/flutter"
+    fi
+    export PATH="$PATH:$HOME/flutter/bin"
+    flutter --disable-analytics >/dev/null 2>&1 || true
+    flutter config --enable-web
+    flutter --version
+    flutter pub get
+    flutter build web --release
+  """
+
+# Cache directives so returning visitors don't hard-refresh the whole bundle every reload
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+[[headers]]
+  for = "/*.wasm"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

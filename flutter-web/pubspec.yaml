@@ -1,0 +1,19 @@
+name: bayside_flutter
+description: Bayside — Flutter Web preview (a starter skeleton on the `flutter` branch to test the Flutter path without disturbing the live PWA on `main`).
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  geolocator: ^12.0.0
+  http: ^1.2.2
+
+flutter:
+  uses-material-design: true
