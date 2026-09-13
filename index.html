@@ -435,26 +435,21 @@ const store = {
 };
 function haversine(a,b){ const R=6371000,toR=x=>x*Math.PI/180; const dLat=toR(b.lat-a.lat),dLon=toR(b.lng-a.lng); const s=Math.sin(dLat/2)**2+Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
 function bearing(a,b){ const toR=x=>x*Math.PI/180; const y=Math.sin(toR(b.lng-a.lng))*Math.cos(toR(b.lat)); const x=Math.cos(toR(a.lat))*Math.sin(toR(b.lat))-Math.sin(toR(a.lat))*Math.cos(toR(b.lat))*Math.cos(toR(b.lng-a.lng)); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
-// point a given distance (meters) along a bearing (degrees) from p — used to nudge a detour point offshore
-function destPoint(p, bearingDeg, meters){
-  const R=6371000, toR=x=>x*Math.PI/180, toD=x=>x*180/Math.PI;
-  const br=toR(bearingDeg), lat1=toR(p.lat), lon1=toR(p.lng), d=meters/R;
-  const lat2 = Math.asin(Math.sin(lat1)*Math.cos(d) + Math.cos(lat1)*Math.sin(d)*Math.cos(br));
-  const lon2 = lon1 + Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(lat1), Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
-  return {lat: toD(lat2), lng: toD(lon2)};
-}
-// 2D segment intersection (lat/lng treated as locally-planar — fine at the few-mile scale routes run at)
+// 2D segment intersection (lat/lng treated as locally-planar — fine at the few-mile scale routes run at).
+// EPS excludes a touch exactly at either segment's own endpoint — every candidate routing node IS a
+// coastline vertex, so a line deliberately ending AT one constantly "touches" that vertex's own two
+// neighboring coastline segments there; without this, that touch was misread as crossing land and blocked
+// almost every edge in the visibility graph, including from the boat to literally anything
 function segIntersect(a,b,c,d){
   const d1x=b.lng-a.lng, d1y=b.lat-a.lat, d2x=d.lng-c.lng, d2y=d.lat-c.lat;
   const denom = d1x*d2y - d1y*d2x;
   if (Math.abs(denom) < 1e-12) return null;   // parallel
   const t = ((c.lng-a.lng)*d2y - (c.lat-a.lat)*d2x) / denom;
   const u = ((c.lng-a.lng)*d1y - (c.lat-a.lat)*d1x) / denom;
-  if (t<0 || t>1 || u<0 || u>1) return null;
+  const EPS = 1e-9;
+  if (t<EPS || t>1-EPS || u<EPS || u>1-EPS) return null;
   return {lat: a.lat + t*d1y, lng: a.lng + t*d1x};
 }
-// which side of line a->b point p is on (sign only; magnitude unused)
-function sideOfLine(p,a,b){ return Math.sign((b.lng-a.lng)*(p.lat-a.lat) - (b.lat-a.lat)*(p.lng-a.lng)); }
 
 // ---------- boat profile ----------
 const DEFAULTS = {jet:[12,18,1.5,25], bowrider:[13,19,1.8,24], center:[16,22,2.5,25], cruiser:[18,25,3,18], sail:[22,28,4,6]};
@@ -1367,7 +1362,23 @@ async function fetchOverpass(q){
 }
 
 // ---------- route land-avoidance: bend a leg around the coastline so distance/time/gas are real ----------
+// A first cut here tried a "nudge off the nearest vertex, recurse" heuristic. Testing against a real
+// point next to a creek/inlet (concave coastline) showed it doesn't reliably converge — it kept re-hitting
+// the same crossing no matter how far it nudged. That's a known hard case for a shallow heuristic, so this
+// is a proper (if scoped-down) visibility-graph shortest path instead: candidate waypoints are the actual
+// coastline vertices near the crossing, edges connect any two that don't cross land, and Dijkstra finds
+// the real shortest route through that graph — the standard algorithm for routing around polygon obstacles.
 const coastCache = {};   // in-memory this session, backed by the long-lived `store` cache below
+// collapse a coastline way's points to ones at least minDist apart — OSM coastline detail is far finer
+// than a boat route needs, and this keeps the visibility graph (below) small enough to run in real time
+function simplifyWay(way, minDist){
+  if (way.length < 3) return way;
+  const out = [way[0]];
+  for (const p of way.slice(1, -1)) if (haversine(out[out.length-1], p) >= minDist) out.push(p);
+  const last = way[way.length-1];
+  if (haversine(out[out.length-1], last) > 1) out.push(last);
+  return out;
+}
 async function coastlineFor(from, to){
   const pad = 0.05;   // ~3-4 miles of margin around the leg's own bounding box
   const south = Math.min(from.lat,to.lat)-pad, north = Math.max(from.lat,to.lat)+pad;
@@ -1379,41 +1390,62 @@ async function coastlineFor(from, to){
   try{
     const q = `[out:json][timeout:25];way["natural"="coastline"](${south},${west},${north},${east});out geom;`;
     const res = await fetchOverpass(q);
-    const segs = [];
-    (res.elements||[]).forEach(w => {
-      const g = w.geometry; if (!g) return;
-      for (let i=0;i<g.length-1;i++) segs.push([{lat:g[i].lat,lng:g[i].lon}, {lat:g[i+1].lat,lng:g[i+1].lon}]);
-    });
-    coastCache[key] = segs;
-    store.set(key, {t:Date.now(), d:segs});
-    return segs;
+    const ways = (res.elements||[])
+      .map(w => (w.geometry||[]).map(g => ({lat:g.lat, lng:g.lon})))
+      .filter(w => w.length > 1)
+      .map(w => simplifyWay(w, 80));   // 80m resolution — plenty for a boat route, keeps the graph small
+    coastCache[key] = ways;
+    store.set(key, {t:Date.now(), d:ways});
+    return ways;
   }catch(e){ console.warn('coastline', e); return []; }   // graceful: caller falls back to a straight line
 }
-// best-effort: bend a from->to leg around the nearest coastline crossing, recursing on the two halves.
-// not a real marine router — handles a single point/small peninsula well, complex coastlines may still need a manual waypoint
-async function routeAroundLand(from, to, depth){
-  depth = depth || 0;
-  if (depth >= 4) return [from, to];
-  const segs = await coastlineFor(from, to);
-  if (!segs.length) return [from, to];
-  let hit = null, hitSeg = null;
-  for (const s of segs){
-    const x = segIntersect(from, to, s[0], s[1]);
-    if (x){ hit = x; hitSeg = s; break; }
+function wayHits(way, a, b){ for (let i=0;i<way.length-1;i++) if (segIntersect(a,b,way[i],way[i+1])) return true; return false; }
+function blocked(a, b, segs){ for (const s of segs) if (segIntersect(a,b,s[0],s[1])) return true; return false; }
+async function routeAroundLand(from, to){
+  const ways = await coastlineFor(from, to);
+  if (!ways.length) return [from, to];
+  const segs = ways.flatMap(w => { const o=[]; for (let i=0;i<w.length-1;i++) o.push([w[i],w[i+1]]); return o; });
+  if (!blocked(from, to, segs)) return [from, to];   // clear already — nothing to route around
+
+  // candidate waypoints: from, to, and every vertex of every way the direct line actually crosses —
+  // that captures the full local shape of the obstacle (including a concave notch), not just one corner
+  const nodes = [from, to];
+  const seen = new Set([legRoundKey(from), legRoundKey(to)]);
+  for (const way of ways){
+    if (!wayHits(way, from, to)) continue;
+    for (const v of way){
+      const k = legRoundKey(v);
+      if (!seen.has(k)){ seen.add(k); nodes.push(v); }
+    }
   }
-  if (!hit) return [from, to];
-  const [c,d] = hitSeg;
-  const vertex = haversine(hit,c) < haversine(hit,d) ? c : d;   // nearer end of the crossing coastline segment
-  const along = bearing(c,d);
-  const waterSide = sideOfLine(boatPos(), c, d) || 1;           // the boat's own position is known to be in water
-  const perp = (along + (waterSide>0 ? 90 : -90) + 360) % 360;
-  // push further out each recursion — a real point/peninsula can extend well past a small fixed nudge,
-  // so a shallow buffer just re-hits the same crossing on the next pass instead of actually clearing it
-  const buffer = 250 * (depth+1);
-  const detour = destPoint(vertex, perp, buffer);
-  const left = await routeAroundLand(from, detour, depth+1);
-  const right = await routeAroundLand(detour, to, depth+1);
-  return [...left.slice(0,-1), ...right];
+  if (nodes.length > 400) return [from, to];   // an unreasonably complex local shape — bail out safely rather than run a huge graph
+
+  // visibility graph: an edge exists between two nodes only if the straight line between them is clear
+  const n = nodes.length, adj = Array.from({length:n}, () => []);
+  for (let i=0;i<n;i++){
+    for (let j=i+1;j<n;j++){
+      if (blocked(nodes[i], nodes[j], segs)) continue;
+      const d = haversine(nodes[i], nodes[j]);
+      adj[i].push([j,d]); adj[j].push([i,d]);
+    }
+  }
+  // Dijkstra, node 0 = from, node 1 = to
+  const dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+  dist[0] = 0;
+  for (let iter=0; iter<n; iter++){
+    let u = -1, best = Infinity;
+    for (let k=0;k<n;k++) if (!done[k] && dist[k]<best){ best = dist[k]; u = k; }
+    if (u === -1) break;
+    done[u] = true;
+    for (const [v,w] of adj[u]) if (dist[u]+w < dist[v]){ dist[v] = dist[u]+w; prev[v] = u; }
+  }
+  if (!isFinite(dist[1])) return [from, to];   // graph didn't connect from->to (shouldn't normally happen) — safe fallback
+  const path = []; let cur = 1;
+  while (cur !== -1){ path.unshift(nodes[cur]); cur = prev[cur]; }
+
+  // last-mile safety net: confirm the actual returned path is clear before trusting it
+  for (let i=0;i<path.length-1;i++) if (blocked(path[i], path[i+1], segs)) return [from, to];
+  return path;
 }
 function dockIcon(){
   const html = `<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">

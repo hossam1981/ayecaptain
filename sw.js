@@ -1,4 +1,4 @@
-const CACHE = 'bayside-v31';
+const CACHE = 'bayside-v32';
 const SHELL = ['./', './index.html', './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/boat.png',
   './icons/sunrise.png', './icons/sunset.png', './icons/ocean.png', './icons/sun-icon.png', './icons/moon-icon.png',
   './icons/mob-buoy.png',
