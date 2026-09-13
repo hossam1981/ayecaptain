@@ -1462,7 +1462,17 @@ function updateMOB(){
     mobLabel.setIcon(mobLabelIcon(distTxt));
   }
 }
+function clearMOB(){
+  mobPoint = null;
+  [mobMarker, mobLine, mobGlow, mobArrow, mobLabel, mobBuoy, mobSmoke].forEach(l => { if (l) map.removeLayer(l); });
+  mobMarker = mobLine = mobGlow = mobArrow = mobLabel = mobBuoy = mobSmoke = null;
+  $('#mobBtn').classList.remove('on');
+  $('#mobBar').classList.remove('show');
+}
 $('#mobBtn').onclick = () => {
+  // tapping again while already active clears it — the button itself is the on/off switch,
+  // same toggle pattern as Follow/Docks/etc; #mobClear stays as a second, equally direct way to clear
+  if (mobPoint){ clearMOB(); return; }
   mobPoint = boatPos();
   [mobMarker, mobLine, mobGlow, mobArrow, mobLabel, mobBuoy, mobSmoke].forEach(l => l && map.removeLayer(l));
   const from = boatPos(), pts = [[from.lat,from.lng],[mobPoint.lat,mobPoint.lng]];
@@ -1483,13 +1493,7 @@ $('#mobBtn').onclick = () => {
   if (navigator.vibrate) navigator.vibrate([300,120,300,120,300]);
   updateMOB();
 };
-$('#mobClear').onclick = () => {
-  mobPoint = null;
-  [mobMarker, mobLine, mobGlow, mobArrow, mobLabel, mobBuoy, mobSmoke].forEach(l => { if (l) map.removeLayer(l); });
-  mobMarker = mobLine = mobGlow = mobArrow = mobLabel = mobBuoy = mobSmoke = null;
-  $('#mobBtn').classList.remove('on');
-  $('#mobBar').classList.remove('show');
-};
+$('#mobClear').onclick = clearMOB;
 
 // ---------- anchor watch ----------
 const FT_PER_M = 3.28084;
