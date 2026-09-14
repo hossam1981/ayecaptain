@@ -18,14 +18,19 @@
     flutter config --enable-web
     flutter --version
     flutter pub get
-    flutter build web --release
+    # --pwa-strategy=none skips Flutter Web's built-in service worker.
+    # Without this, the browser aggressively caches the app shell and users see the OLD
+    # build even after we push a new one, until they hard-reload TWICE. For a preview branch
+    # that iterates constantly, we want fresh deploys visible immediately.
+    flutter build web --release --pwa-strategy=none
   """
 
 # Cache directives so returning visitors don't hard-refresh the whole bundle every reload
 [[headers]]
   for = "/*.js"
   [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
+    # Preview branch iterates fast — don't cache JS forever. Netlify's ETag revalidates in ~1 s.
+    Cache-Control = "public, max-age=0, must-revalidate"
 [[headers]]
   for = "/*.wasm"
   [headers.values]
