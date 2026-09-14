@@ -276,7 +276,7 @@ class _MapScreenState extends State<MapScreen> {
                       points: routeLine,
                       color: const Color(0xFFF2A93B),
                       strokeWidth: 4,
-                      pattern: const StrokePattern.dashed(segments: [10, 8]),
+                      pattern: StrokePattern.dashed(segments: const [10, 8]),
                     ),
                   ],
                 ),
