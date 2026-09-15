@@ -21,6 +21,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 void main() => runApp(const BaysideApp());
@@ -88,6 +89,107 @@ Future<Weather?> fetchWeather(LatLng at) async {
     );
   } catch (_) { return null; }
 }
+
+// ==================================================================================================
+// boat profile — the numbers everything else grades against
+// ==================================================================================================
+
+enum BoatType { jet, bowrider, center, cruiser, sail }
+const _typeNames = {BoatType.jet:'Jet boat / PWC', BoatType.bowrider:'Bowrider', BoatType.center:'Center console', BoatType.cruiser:'Cruiser', BoatType.sail:'Sail'};
+// per-type sensible defaults: [wind, gust, wave(ft), cruise(kn)]
+const _typeDefaults = {
+  BoatType.jet:      [12.0, 18.0, 1.5, 25.0],
+  BoatType.bowrider: [13.0, 19.0, 1.8, 24.0],
+  BoatType.center:   [16.0, 22.0, 2.5, 25.0],
+  BoatType.cruiser:  [18.0, 25.0, 3.0, 18.0],
+  BoatType.sail:     [22.0, 28.0, 4.0, 6.0],
+};
+
+class BoatProfile {
+  String name;
+  double? lengthFt;
+  BoatType type;
+  double cruise, wind, gust, wave, burn, tank;
+  BoatProfile({this.name = '', this.lengthFt, this.type = BoatType.bowrider,
+    this.cruise = 24.0, this.wind = 13.0, this.gust = 19.0, this.wave = 1.8,
+    this.burn = 0.0, this.tank = 0.0});
+  Map<String, dynamic> toJson() => {
+    'name': name, 'lengthFt': lengthFt, 'type': type.name,
+    'cruise': cruise, 'wind': wind, 'gust': gust, 'wave': wave, 'burn': burn, 'tank': tank,
+  };
+  static BoatProfile fromJson(Map<String, dynamic> j) => BoatProfile(
+    name: (j['name'] as String?) ?? '',
+    lengthFt: (j['lengthFt'] as num?)?.toDouble(),
+    type: BoatType.values.firstWhere((t) => t.name == j['type'], orElse: () => BoatType.bowrider),
+    cruise: (j['cruise'] as num?)?.toDouble() ?? 24.0,
+    wind: (j['wind'] as num?)?.toDouble() ?? 13.0,
+    gust: (j['gust'] as num?)?.toDouble() ?? 19.0,
+    wave: (j['wave'] as num?)?.toDouble() ?? 1.8,
+    burn: (j['burn'] as num?)?.toDouble() ?? 0.0,
+    tank: (j['tank'] as num?)?.toDouble() ?? 0.0,
+  );
+  static Future<BoatProfile> load() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final s = sp.getString('boatProfile');
+      if (s == null) return BoatProfile();
+      return fromJson(jsonDecode(s) as Map<String, dynamic>);
+    } catch (_) { return BoatProfile(); }
+  }
+  Future<void> save() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('boatProfile', jsonEncode(toJson()));
+    } catch (_) {}
+  }
+  void applyTypeDefaults(BoatType t) {
+    final d = _typeDefaults[t]!;
+    type = t; wind = d[0]; gust = d[1]; wave = d[2]; cruise = d[3];
+  }
+}
+
+// Grade a forecast against profile limits: 'g' calm, 'a' marginal (>75% of any limit), 'r' rough (over)
+String score(double? wind, double? gust, double? wave, BoatProfile p) {
+  if ((wind != null && wind > p.wind) || (gust != null && gust > p.gust) || (wave != null && wave > p.wave)) return 'r';
+  if ((wind != null && wind > p.wind * .75) || (gust != null && gust > p.gust * .75) || (wave != null && wave > p.wave * .75)) return 'a';
+  return 'g';
+}
+
+const _gradeColors = {'g': Color(0xFF22C55E), 'a': Color(0xFFF2A93B), 'r': Color(0xFFD93A2B)};
+Color _gColor(String g) => _gradeColors[g] ?? _gradeColors['g']!;
+int _gLevel(String g) => g == 'r' ? 2 : (g == 'a' ? 1 : 0);
+Color _gInterpolate(int la, int lb, double t) {
+  final level = la + (lb - la) * t;
+  final rounded = level.round().clamp(0, 2);
+  return _gColor(['g','a','r'][rounded]);
+}
+
+class WxSample { final String grade; final DateTime t; WxSample(this.grade, this.t); }
+
+// Per-waypoint forecast fetch (Open-Meteo current + marine wave), scored against the boat profile
+Future<String?> fetchWaypointGrade(LatLng at, BoatProfile p) async {
+  try {
+    final wxUrl = Uri.parse('https://api.open-meteo.com/v1/forecast?latitude=${at.latitude}&longitude=${at.longitude}'
+        '&wind_speed_unit=kn&current=wind_speed_10m,wind_gusts_10m,weather_code,precipitation');
+    final wx = await http.get(wxUrl).timeout(const Duration(seconds: 6));
+    if (wx.statusCode != 200) return null;
+    final c = (jsonDecode(wx.body) as Map<String, dynamic>)['current'] as Map<String, dynamic>?;
+    if (c == null) return null;
+    double? wave;
+    try {
+      final mrUrl = Uri.parse('https://marine-api.open-meteo.com/v1/marine?latitude=${at.latitude}&longitude=${at.longitude}&length_unit=imperial&current=wave_height');
+      final m = await http.get(mrUrl).timeout(const Duration(seconds: 6));
+      if (m.statusCode == 200) {
+        final mc = (jsonDecode(m.body) as Map<String, dynamic>)['current'] as Map<String, dynamic>?;
+        wave = (mc?['wave_height'] as num?)?.toDouble();
+      }
+    } catch (_) {}
+    return score((c['wind_speed_10m'] as num?)?.toDouble(),
+        (c['wind_gusts_10m'] as num?)?.toDouble(), wave, p);
+  } catch (_) { return null; }
+}
+
+String _gkey(LatLng p) => '${p.latitude.toStringAsFixed(2)},${p.longitude.toStringAsFixed(2)}';
 
 // ==================================================================================================
 // pre-baked land data — same asset the PWA uses, dropped into flutter-web/assets/
@@ -299,10 +401,15 @@ class _MapScreenState extends State<MapScreen> {
   bool _picking = false;
   bool _smart = true;    // smart-routes toggle (default ON in Flutter build — the pre-baked data is bundled)
   bool _navigating = false;
+  int _legIdx = 0;       // index into _waypoints of the current target leg (for nav bar + auto-advance)
   final List<_TrailPoint> _trail = [];
   final List<LatLng> _waypoints = [];
   List<LatLng>? _routedPath;   // cached smart-route (null = straight line)
   bool _routeUnverified = false;
+
+  BoatProfile _profile = BoatProfile();
+  final Map<String, WxSample> _wxAt = {};    // per-gkey grade cache, ~20 min TTL
+  final Set<String> _wxPending = {};
 
   Weather? _weather;
   Timer? _wxTimer;
@@ -315,7 +422,56 @@ class _MapScreenState extends State<MapScreen> {
     super.initState();
     _loadLand();
     _refreshWeather(_homeCenter);
-    _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) => _refreshWeather(_me ?? _homeCenter));
+    BoatProfile.load().then((p) { if (mounted) setState(() => _profile = p); });
+    _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) {
+      _refreshWeather(_me ?? _homeCenter);
+      _wxAt.clear();   // let stale grades fall through and refresh
+      _gradeRouteWaypoints();
+    });
+  }
+
+  String _gradeAt(LatLng p) {
+    final e = _wxAt[_gkey(p)];
+    if (e != null && DateTime.now().difference(e.t).inMinutes < 20) return e.grade;
+    // fall back to the boat's current grade (weather HUD) if we haven't yet fetched a per-waypoint grade
+    final w = _weather;
+    if (w == null) return 'g';
+    return score(w.windKt, w.gustKt, null, _profile);
+  }
+
+  // Break the route line into ~14 short segments per waypoint hop and colour each by the grade at
+  // the anchor waypoints, interpolating between them — same trick the PWA uses in renderRoute.
+  List<Polyline> _gradedRouteSegments(List<LatLng> pts) {
+    final out = <Polyline>[];
+    const N = 14;
+    for (int i = 0; i < pts.length - 1; i++) {
+      final a = pts[i], b = pts[i + 1];
+      final la = _gLevel(_gradeAt(a));
+      final lb = _gLevel(_gradeAt(b));
+      for (int k = 0; k < N; k++) {
+        final t0 = k / N, t1 = (k + 1) / N;
+        final p0 = LatLng(a.latitude + (b.latitude - a.latitude) * t0, a.longitude + (b.longitude - a.longitude) * t0);
+        final p1 = LatLng(a.latitude + (b.latitude - a.latitude) * t1, a.longitude + (b.longitude - a.longitude) * t1);
+        out.add(Polyline(points: [p0, p1], color: _gInterpolate(la, lb, (t0 + t1) / 2), strokeWidth: 4,
+            pattern: StrokePattern.dashed(segments: const [10, 8])));
+      }
+    }
+    return out;
+  }
+
+  Future<void> _gradeRouteWaypoints() async {
+    for (final wp in _waypoints) {
+      final k = _gkey(wp);
+      if (_wxPending.contains(k)) continue;
+      final e = _wxAt[k];
+      if (e != null && DateTime.now().difference(e.t).inMinutes < 20) continue;
+      _wxPending.add(k);
+      final g = await fetchWaypointGrade(wp, _profile);
+      _wxPending.remove(k);
+      if (g == null) continue;
+      _wxAt[k] = WxSample(g, DateTime.now());
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -380,6 +536,18 @@ class _MapScreenState extends State<MapScreen> {
     });
     // re-route on movement (smart routes cache keyed on last leg endpoints, but simplest: recompute)
     _recomputeRoute();
+    // auto-advance waypoints while actively navigating — 100 m radius is generous enough for a
+    // moving boat not to overshoot a tight fence
+    if (_navigating && _waypoints.isNotEmpty && _legIdx < _waypoints.length) {
+      final d = _haversineM(here, _waypoints[_legIdx]);
+      if (d < 100) {
+        if (_legIdx < _waypoints.length - 1) {
+          _legIdx++;
+        } else {
+          _stopRide();   // arrived at final point
+        }
+      }
+    }
     // follow the boat (and course-up rotate in nav mode)
     if (_follow) {
       _controller.move(here, math.max(_controller.camera.zoom, _navigating ? 16 : 14));
@@ -391,6 +559,7 @@ class _MapScreenState extends State<MapScreen> {
     if (!_picking) return;
     setState(() => _waypoints.add(ll));
     _recomputeRoute();
+    _gradeRouteWaypoints();   // fetch a per-point forecast in the background so segments colour up
   }
 
   Future<void> _recomputeRoute() async {
@@ -425,16 +594,37 @@ class _MapScreenState extends State<MapScreen> {
   int _etaMin() {
     final nm = _routeNm();
     if (nm <= 0) return 0;
-    final cruise = _speedKt > 1.5 ? _speedKt : 20.0;
+    final cruise = _speedKt > 1.5 ? _speedKt : _profile.cruise;
     return (nm / cruise * 60).round();
+  }
+
+  double _fuelGal() {
+    if (_profile.burn <= 0) return 0;
+    return (_etaMin() / 60.0) * _profile.burn;
   }
 
   // ---------- Start Ride ----------
   Future<void> _startRide() async {
     if (_waypoints.isEmpty) return;
-    setState(() { _navigating = true; _follow = true; _picking = false; });
+    setState(() { _navigating = true; _follow = true; _picking = false; _legIdx = 0; });
     try { await WakelockPlus.enable(); } catch (_) {}
     if (_me != null) _controller.move(_me!, math.max(_controller.camera.zoom, 16));
+  }
+
+  Future<void> _openBoatProfile() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => BoatProfileSheet(
+        initial: _profile,
+        onSave: (p) async {
+          await p.save();
+          if (mounted) setState(() { _profile = p; _wxAt.clear(); });
+          _gradeRouteWaypoints();   // re-grade against the new limits
+        },
+      ),
+    );
   }
   Future<void> _stopRide() async {
     setState(() => _navigating = false);
@@ -481,14 +671,11 @@ class _MapScreenState extends State<MapScreen> {
                     Polyline(points: _trail.map((t) => t.p).toList(), color: const Color(0xAAFFFFFF), strokeWidth: 4),
                   ]),
                 if (routeLine.length >= 2)
-                  PolylineLayer(polylines: [
-                    Polyline(
-                      points: routeLine,
-                      color: _routeUnverified ? const Color(0xAA8a94a3) : const Color(0xFFF2A93B),
-                      strokeWidth: 4,
-                      pattern: StrokePattern.dashed(segments: const [10, 8]),
-                    ),
-                  ]),
+                  PolylineLayer(polylines: _routeUnverified
+                    ? [Polyline(points: routeLine, color: const Color(0xAA8a94a3), strokeWidth: 4,
+                        pattern: StrokePattern.dashed(segments: const [10, 8]))]
+                    : _gradedRouteSegments(routeLine),
+                  ),
                 MarkerLayer(markers: [
                   for (int i = 0; i < _waypoints.length; i++)
                     Marker(
@@ -510,7 +697,17 @@ class _MapScreenState extends State<MapScreen> {
           Positioned(top: 12, left: 12, right: 12, child: _TopHud(
             speedKt: _speedKt, status: _statusText, accuracyM: _accuracyM,
             base: _base, onBaseChange: (b) => setState(() => _base = b),
+            boatName: _profile.name.isEmpty ? 'Set up your boat' : _profile.name,
+            onEditBoat: _openBoatProfile,
           )),
+          // Nav bar — only shown while navigating (mirrors the PWA's #nav)
+          if (_navigating && _waypoints.isNotEmpty && _legIdx < _waypoints.length && _me != null)
+            Positioned(top: 78, left: 12, right: 12, child: _NavBar(
+              from: _me!, target: _waypoints[_legIdx],
+              legIdx: _legIdx, totalWps: _waypoints.length,
+              nmToFinal: _routeNm(), etaMin: _etaMin(),
+              headingDeg: _heading,
+            )),
           Positioned(right: 12, bottom: 140, child: _RightRail(
             follow: _follow, picking: _picking, gpsOn: _gpsSub != null, smart: _smart,
             onFollow: () => setState(() {
@@ -522,11 +719,11 @@ class _MapScreenState extends State<MapScreen> {
             onSmart: () { setState(() => _smart = !_smart); _recomputeRoute(); },
           )),
           Positioned(left: 12, right: 12, bottom: 12, child: _BottomSheet(
-            weather: _weather, routeNm: _routeNm(), etaMin: _etaMin(),
+            weather: _weather, routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
             waypointCount: _waypoints.length, picking: _picking,
             unverified: _routeUnverified, navigating: _navigating,
-            onClearRoute: () async { setState(() { _waypoints.clear(); _picking = false; _routedPath = null; }); await _stopRide(); },
-            onUndoRoute: () { if (_waypoints.isEmpty) return; setState(() => _waypoints.removeLast()); _recomputeRoute(); },
+            onClearRoute: () async { setState(() { _waypoints.clear(); _picking = false; _routedPath = null; _legIdx = 0; }); await _stopRide(); },
+            onUndoRoute: () { if (_waypoints.isEmpty) return; setState(() { _waypoints.removeLast(); if (_legIdx >= _waypoints.length) _legIdx = math.max(0, _waypoints.length - 1); }); _recomputeRoute(); },
             onStart: _startRide, onStop: _stopRide,
           )),
         ]),
@@ -546,19 +743,68 @@ class BoatMarker extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Transform.rotate(
         angle: headingDeg * math.pi / 180,
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: active ? const Color(0xFFF2A93B) : const Color(0xFFF2A93B),
-            border: Border.all(color: active ? const Color(0xFF1F8A5B) : Colors.white, width: active ? 4 : 3),
-            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
-          ),
-          child: const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Icon(Icons.navigation, color: Colors.white, size: 26),
-          ),
+        child: SizedBox(
+          width: 44, height: 44,
+          child: Stack(alignment: Alignment.center, children: [
+            // classic top-down skiff (always there, fades OUT during Start ride)
+            AnimatedOpacity(
+              opacity: active ? 0 : 1,
+              duration: const Duration(milliseconds: 500),
+              child: Image.asset('assets/icons/boat.png', fit: BoxFit.contain),
+            ),
+            // photo-real orange RIB (fades IN during Start ride) — matches the PWA's boat crossfade
+            AnimatedOpacity(
+              opacity: active ? 1 : 0,
+              duration: const Duration(milliseconds: 500),
+              child: Image.asset('assets/icons/boat-3d.png', fit: BoxFit.contain),
+            ),
+          ]),
         ),
       );
+}
+
+// Small floating bar shown while navigating — mirrors the PWA's #nav ("steer XXX° · point N of M ·
+// to final N.N nm"). Sits just below the top HUD.
+class _NavBar extends StatelessWidget {
+  final LatLng from;
+  final LatLng target;
+  final int legIdx;
+  final int totalWps;
+  final double nmToFinal;
+  final int etaMin;
+  final double headingDeg;
+  const _NavBar({required this.from, required this.target, required this.legIdx, required this.totalWps,
+      required this.nmToFinal, required this.etaMin, required this.headingDeg});
+  @override
+  Widget build(BuildContext context) {
+    final brg = _bearingDeg(from, target);
+    final dm = _haversineM(from, target);
+    final distStr = dm < 370 ? '${(dm * 3.28).round()} ft' : '${(dm/1852).toStringAsFixed(dm/1852<10?2:1)} nm';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Transform.rotate(
+          angle: (brg - headingDeg) * math.pi / 180,
+          child: const Icon(Icons.navigation, color: Color(0xFFF2A93B), size: 26),
+        ),
+        const SizedBox(width: 10),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(distStr, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
+          const SizedBox(height: 2),
+          Text('steer ${brg.round().toString().padLeft(3, '0')}° ${_dirName(brg)} · point ${legIdx+1} of $totalWps',
+              style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
+        ]),
+        const SizedBox(width: 16),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+          Text(etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
+          const SizedBox(height: 2),
+          Text('${nmToFinal.toStringAsFixed(1)} nm to final', style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
+        ]),
+      ]),
+    );
+  }
 }
 
 class _WaypointPin extends StatelessWidget {
@@ -579,25 +825,53 @@ class _TopHud extends StatelessWidget {
   final double? accuracyM;
   final Basemap base;
   final ValueChanged<Basemap> onBaseChange;
-  const _TopHud({required this.speedKt, required this.status, required this.accuracyM, required this.base, required this.onBaseChange});
+  final String boatName;
+  final VoidCallback onEditBoat;
+  const _TopHud({required this.speedKt, required this.status, required this.accuracyM, required this.base,
+      required this.onBaseChange, required this.boatName, required this.onEditBoat});
   @override
-  Widget build(BuildContext context) => Row(children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12)),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
-              Text(speedKt.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w700, height: 1)),
-              const SizedBox(width: 4),
-              const Text('kn', style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+                Text(speedKt.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w700, height: 1)),
+                const SizedBox(width: 4),
+                const Text('kn', style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+              ]),
+              const SizedBox(height: 2),
+              Text(status, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
             ]),
-            const SizedBox(height: 2),
-            Text(status, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
-          ]),
-        ),
-        const Spacer(),
-        _BaseSwitcher(base: base, onChange: onBaseChange),
+          ),
+          const SizedBox(width: 10),
+          Flexible(child: _BoatChip(name: boatName, onTap: onEditBoat)),
+          const Spacer(),
+          _BaseSwitcher(base: base, onChange: onBaseChange),
+        ]),
       ]);
+}
+
+class _BoatChip extends StatelessWidget {
+  final String name;
+  final VoidCallback onTap;
+  const _BoatChip({required this.name, required this.onTap});
+  @override
+  Widget build(BuildContext context) => Material(
+    color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12),
+    child: InkWell(borderRadius: BorderRadius.circular(12), onTap: onTap,
+      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.directions_boat, color: Color(0xFFF2A93B), size: 18),
+          const SizedBox(width: 6),
+          Flexible(child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13))),
+          const SizedBox(width: 6),
+          const Icon(Icons.edit, color: Color(0xCCFFFFFF), size: 14),
+        ]),
+      ),
+    ),
+  );
 }
 
 class _BaseSwitcher extends StatelessWidget {
@@ -656,13 +930,132 @@ class _RightRail extends StatelessWidget {
       );
 }
 
+// Modal sheet for editing the boat profile — name/type/length + wind/gust/wave limits + fuel.
+// Type dropdown offers "Use defaults" that snap limits/cruise to the type presets.
+class BoatProfileSheet extends StatefulWidget {
+  final BoatProfile initial;
+  final Future<void> Function(BoatProfile) onSave;
+  const BoatProfileSheet({super.key, required this.initial, required this.onSave});
+  @override
+  State<BoatProfileSheet> createState() => _BoatProfileSheetState();
+}
+class _BoatProfileSheetState extends State<BoatProfileSheet> {
+  late BoatProfile p;
+  @override
+  void initState() { super.initState(); p = BoatProfile.fromJson(widget.initial.toJson()); }
+  TextEditingController _num(double v) => TextEditingController(text: v == 0 ? '' : v.toString());
+  Widget _field(String label, double value, ValueChanged<double> onChange, {String suffix = ''}) => TextField(
+    controller: _num(value),
+    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+    style: const TextStyle(color: Colors.white),
+    decoration: InputDecoration(
+      labelText: label, labelStyle: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12),
+      suffixText: suffix, suffixStyle: const TextStyle(color: Color(0xAAFFFFFF)),
+      isDense: true,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x55FFFFFF))),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x33FFFFFF))),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
+    ),
+    onChanged: (s) { final d = double.tryParse(s); if (d != null) onChange(d); },
+  );
+  @override
+  Widget build(BuildContext context) => DraggableScrollableSheet(
+    initialChildSize: 0.75, minChildSize: 0.4, maxChildSize: 0.95, expand: false,
+    builder: (ctx, scroll) => Container(
+      decoration: const BoxDecoration(color: Color(0xFF0F2A44), borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: ListView(controller: scroll, children: [
+        Center(child: Container(width: 40, height: 4, margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(color: const Color(0x66FFFFFF), borderRadius: BorderRadius.circular(2)))),
+        const Text('Your boat', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        const Text('Bayside grades forecasts against these limits and computes fuel from tank & burn rate.',
+            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+        const SizedBox(height: 16),
+        TextField(
+          controller: TextEditingController(text: p.name),
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            labelText: 'Boat name', labelStyle: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12),
+            isDense: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x55FFFFFF))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x33FFFFFF))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
+          ),
+          onChanged: (s) => p.name = s,
+        ),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: _field('Length (ft)', p.lengthFt ?? 0, (v) => setState(() => p.lengthFt = v > 0 ? v : null), suffix: 'ft')),
+          const SizedBox(width: 12),
+          Expanded(child: DropdownButtonFormField<BoatType>(
+            value: p.type,
+            dropdownColor: const Color(0xFF0F2A44),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Type', labelStyle: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12),
+              isDense: true,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x55FFFFFF))),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x33FFFFFF))),
+            ),
+            items: BoatType.values.map((t) => DropdownMenuItem(value: t, child: Text(_typeNames[t]!))).toList(),
+            onChanged: (v) { if (v != null) setState(() => p.type = v); },
+          )),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: _field('Cruise (kn)', p.cruise, (v) => setState(() => p.cruise = v), suffix: 'kn')),
+          const SizedBox(width: 12),
+          Expanded(child: Material(color: const Color(0xFF2E6F9E), borderRadius: BorderRadius.circular(8),
+            child: InkWell(borderRadius: BorderRadius.circular(8),
+              onTap: () => setState(() => p.applyTypeDefaults(p.type)),
+              child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
+                child: Center(child: Text('Use defaults for type', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)))),
+            ),
+          )),
+        ]),
+        const SizedBox(height: 20),
+        const Text('Comfort limits — Bayside warns when forecasts exceed these',
+            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: _field('Max wind', p.wind, (v) => setState(() => p.wind = v), suffix: 'kn')),
+          const SizedBox(width: 12),
+          Expanded(child: _field('Max gust', p.gust, (v) => setState(() => p.gust = v), suffix: 'kn')),
+          const SizedBox(width: 12),
+          Expanded(child: _field('Max wave', p.wave, (v) => setState(() => p.wave = v), suffix: 'ft')),
+        ]),
+        const SizedBox(height: 20),
+        const Text('Fuel — for the range ring & route fuel estimate',
+            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: _field('Burn @ cruise', p.burn, (v) => setState(() => p.burn = v), suffix: 'gal/h')),
+          const SizedBox(width: 12),
+          Expanded(child: _field('Tank size', p.tank, (v) => setState(() => p.tank = v), suffix: 'gal')),
+        ]),
+        const SizedBox(height: 24),
+        Material(color: const Color(0xFF1F8A5B), borderRadius: BorderRadius.circular(10),
+          child: InkWell(borderRadius: BorderRadius.circular(10),
+            onTap: () async { await widget.onSave(p); if (context.mounted) Navigator.of(context).pop(); },
+            child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
+              child: Center(child: Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)))),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ]),
+    ),
+  );
+}
+
 class _BottomSheet extends StatelessWidget {
   final Weather? weather;
   final double routeNm;
   final int etaMin, waypointCount;
+  final double fuelGal;
   final bool picking, unverified, navigating;
   final VoidCallback onClearRoute, onUndoRoute, onStart, onStop;
-  const _BottomSheet({required this.weather, required this.routeNm, required this.etaMin,
+  const _BottomSheet({required this.weather, required this.routeNm, required this.etaMin, required this.fuelGal,
     required this.waypointCount, required this.picking, required this.unverified, required this.navigating,
     required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop});
   @override
@@ -691,6 +1084,10 @@ class _BottomSheet extends StatelessWidget {
                   _stat('ETA', etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min'),
                   const SizedBox(width: 14),
                   _stat('Points', '$waypointCount'),
+                  if (fuelGal > 0) ...[
+                    const SizedBox(width: 14),
+                    _stat('Fuel', fuelGal < 10 ? '${fuelGal.toStringAsFixed(1)} gal' : '${fuelGal.round()} gal'),
+                  ],
                 ]),
           ),
           if (waypointCount > 0) ...[

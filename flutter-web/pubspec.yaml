@@ -15,8 +15,11 @@ dependencies:
   geolocator: ^12.0.0
   http: ^1.2.2
   wakelock_plus: ^1.2.10   # Screen Wake Lock — same fix as the PWA (Android throttles GPS when screen sleeps)
+  shared_preferences: ^2.3.2   # boat profile persistence (name/limits/tank/burn), works on web + mobile
 
 flutter:
   uses-material-design: true
   assets:
     - assets/land-njny.json   # pre-baked NOAA land polygons, shared with the PWA
+    - assets/icons/boat.png
+    - assets/icons/boat-3d.png
