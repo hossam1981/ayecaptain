@@ -23,3 +23,4 @@ flutter:
     - assets/land-njny.json   # pre-baked NOAA land polygons, shared with the PWA
     - assets/icons/boat.png
     - assets/icons/boat-3d.png
+    - assets/icons/mob-buoy.png

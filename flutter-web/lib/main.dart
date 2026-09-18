@@ -1511,14 +1511,18 @@ class _BoatWarningBanner extends StatelessWidget {
 class _MobPin extends StatelessWidget {
   const _MobPin();
   @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      color: const Color(0xFFD93A2B),
-      border: Border.all(color: Colors.white, width: 3),
-      boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
-    ),
-    child: const Icon(Icons.priority_high, color: Colors.white, size: 22),
+  Widget build(BuildContext context) => SizedBox(
+    width: 44, height: 44,
+    child: Stack(alignment: Alignment.center, children: [
+      Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color(0x33D93A2B),
+          border: Border.all(color: const Color(0xFFD93A2B), width: 2),
+        ),
+      ),
+      Image.asset('assets/icons/mob-buoy.png', width: 36, height: 36, fit: BoxFit.contain),
+    ]),
   );
 }
 
