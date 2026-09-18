@@ -68,26 +68,147 @@ const _noaaChartUrl = 'https://gis.charttools.noaa.gov/arcgis/rest/services/Mari
 class Weather {
   final double? tempF, windKt, gustKt;
   final int? windDirDeg, weatherCode;
-  const Weather({this.tempF, this.windKt, this.gustKt, this.windDirDeg, this.weatherCode});
+  // Batch A.5 additions (matches PWA #now grid + tideStrip)
+  final double? waveFt, wavePeriodS, waterTempF, precipPct;
+  final DateTime? sunset, sunrise;
+  const Weather({this.tempF, this.windKt, this.gustKt, this.windDirDeg, this.weatherCode,
+    this.waveFt, this.wavePeriodS, this.waterTempF, this.precipPct, this.sunset, this.sunrise});
 }
 
 Future<Weather?> fetchWeather(LatLng at) async {
-  final url = Uri.parse('https://api.open-meteo.com/v1/forecast?latitude=${at.latitude}&longitude=${at.longitude}'
-      '&temperature_unit=fahrenheit&wind_speed_unit=kn'
-      '&current=temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code');
+  // three endpoints in parallel: current wx, daily sun times, marine wave/water
+  final wxUrl = Uri.parse('https://api.open-meteo.com/v1/forecast?latitude=${at.latitude}&longitude=${at.longitude}'
+      '&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=auto'
+      '&current=temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code,precipitation'
+      '&daily=sunrise,sunset&forecast_days=1');
+  final mrUrl = Uri.parse('https://marine-api.open-meteo.com/v1/marine?latitude=${at.latitude}&longitude=${at.longitude}'
+      '&length_unit=imperial&current=wave_height,wave_period,sea_surface_temperature');
   try {
-    final r = await http.get(url).timeout(const Duration(seconds: 8));
-    if (r.statusCode != 200) return null;
-    final c = (jsonDecode(r.body) as Map<String, dynamic>)['current'] as Map<String, dynamic>?;
+    final rs = await Future.wait([
+      http.get(wxUrl).timeout(const Duration(seconds: 8)).catchError((_) => http.Response('', 599)),
+      http.get(mrUrl).timeout(const Duration(seconds: 8)).catchError((_) => http.Response('', 599)),
+    ]);
+    if (rs[0].statusCode != 200) return null;
+    final wj = jsonDecode(rs[0].body) as Map<String, dynamic>;
+    final c = wj['current'] as Map<String, dynamic>?;
     if (c == null) return null;
+    // daily first row → today's sunrise/sunset
+    DateTime? sr, ss;
+    final d = wj['daily'] as Map<String, dynamic>?;
+    if (d != null) {
+      final sT = (d['sunrise'] as List?)?.cast<String>();
+      final ssT = (d['sunset'] as List?)?.cast<String>();
+      if (sT != null && sT.isNotEmpty) sr = DateTime.tryParse(sT[0]);
+      if (ssT != null && ssT.isNotEmpty) ss = DateTime.tryParse(ssT[0]);
+    }
+    // marine (optional — silent fall through if it fails)
+    double? waveFt, wavePer, waterF;
+    if (rs[1].statusCode == 200) {
+      try {
+        final mc = (jsonDecode(rs[1].body) as Map<String, dynamic>)['current'] as Map<String, dynamic>?;
+        waveFt = (mc?['wave_height'] as num?)?.toDouble();
+        wavePer = (mc?['wave_period'] as num?)?.toDouble();
+        final wc = (mc?['sea_surface_temperature'] as num?)?.toDouble();
+        // marine API returns °C even when the forecast one is in °F — convert
+        if (wc != null) waterF = wc * 9 / 5 + 32;
+      } catch (_) {}
+    }
     return Weather(
       tempF: (c['temperature_2m'] as num?)?.toDouble(),
       windKt: (c['wind_speed_10m'] as num?)?.toDouble(),
       gustKt: (c['wind_gusts_10m'] as num?)?.toDouble(),
       windDirDeg: (c['wind_direction_10m'] as num?)?.toInt(),
       weatherCode: (c['weather_code'] as num?)?.toInt(),
+      precipPct: (c['precipitation'] as num?)?.toDouble(),
+      waveFt: waveFt,
+      wavePeriodS: wavePer,
+      waterTempF: waterF,
+      sunrise: sr,
+      sunset: ss,
     );
   } catch (_) { return null; }
+}
+
+// Hourly forecast for the "Best time to boat" table + best-window pill (Batch A.5).
+// Returns up to 72 hours of `HourlyPoint` — filtering to daylight rows happens in the widget.
+class HourlyPoint {
+  final DateTime t;
+  final double? tempF, windKt, gustKt, windDirDeg, precipPct;
+  final int? weatherCode;
+  const HourlyPoint({required this.t, this.tempF, this.windKt, this.gustKt,
+    this.windDirDeg, this.precipPct, this.weatherCode});
+}
+
+Future<List<HourlyPoint>> fetchHourlyForecast(LatLng at) async {
+  try {
+    final url = Uri.parse('https://api.open-meteo.com/v1/forecast?latitude=${at.latitude}&longitude=${at.longitude}'
+        '&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=auto'
+        '&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code,precipitation_probability'
+        '&forecast_days=3');
+    final r = await http.get(url).timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) return [];
+    final h = (jsonDecode(r.body) as Map<String, dynamic>)['hourly'] as Map<String, dynamic>?;
+    if (h == null) return [];
+    final times = ((h['time'] as List?) ?? []).cast<String>();
+    num? getAt(String k, int i) {
+      final v = (h[k] as List?);
+      if (v == null || i >= v.length || v[i] == null) return null;
+      return v[i] as num;
+    }
+    final out = <HourlyPoint>[];
+    for (int i = 0; i < times.length; i++) {
+      final t = DateTime.tryParse(times[i]);
+      if (t == null) continue;
+      out.add(HourlyPoint(
+        t: t,
+        tempF: getAt('temperature_2m', i)?.toDouble(),
+        windKt: getAt('wind_speed_10m', i)?.toDouble(),
+        gustKt: getAt('wind_gusts_10m', i)?.toDouble(),
+        windDirDeg: getAt('wind_direction_10m', i)?.toDouble(),
+        precipPct: getAt('precipitation_probability', i)?.toDouble(),
+        weatherCode: getAt('weather_code', i)?.toInt(),
+      ));
+    }
+    return out;
+  } catch (_) { return []; }
+}
+
+// Scan the next 24 hourly points, find the first contiguous ≥3-hour block where score()
+// returns 'g' (calm) or 'a' (marginal). Returns null when nothing suitable is found.
+class BestWindow {
+  final DateTime start, end;
+  final String level;   // 'g' or 'a'
+  const BestWindow({required this.start, required this.end, required this.level});
+}
+
+BestWindow? bestWindow(List<HourlyPoint> hourly, BoatProfile p) {
+  if (hourly.isEmpty) return null;
+  final now = DateTime.now();
+  // start from the first hour >= now
+  final start = hourly.indexWhere((h) => !h.t.isBefore(DateTime(now.year, now.month, now.day, now.hour)));
+  if (start < 0) return null;
+  final end = math.min(start + 24, hourly.length);
+  int? runStart;
+  String runLevel = 'g';
+  BestWindow? out;
+  for (int i = start; i < end; i++) {
+    final h = hourly[i];
+    final s = score(h.windKt, h.gustKt, null, p);   // no wave in hourly for now
+    if (s == 'g' || s == 'a') {
+      runStart ??= i;
+      if (s == 'a') runLevel = 'a';   // downgrade if any hour is marginal
+    } else {
+      if (runStart != null && (i - runStart) >= 3) {
+        out = BestWindow(start: hourly[runStart].t, end: hourly[i].t, level: runLevel);
+        break;
+      }
+      runStart = null; runLevel = 'g';
+    }
+  }
+  if (out == null && runStart != null && (end - runStart) >= 3) {
+    out = BestWindow(start: hourly[runStart].t, end: hourly[end - 1].t, level: runLevel);
+  }
+  return out;
 }
 
 // ==================================================================================================
@@ -579,6 +700,7 @@ class _MapScreenState extends State<MapScreen> {
   TideStation? _tideStation;
   List<TidePoint> _tides = [];
   List<DailyForecast> _daily = [];
+  List<HourlyPoint> _hourly = [];   // Batch A.5: drives "Best time to boat" table + best window pill
 
   LatLng? _mobPoint;
   LatLng? _anchorPoint;
@@ -592,16 +714,28 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _loadLand();
-    _refreshWeather(_homeCenter);
-    _refreshAlerts(_homeCenter);
-    _refreshDaily(_homeCenter);
-    _refreshTides(_homeCenter);
+    _loadLastPos().then((p) {
+      final at = p ?? _homeCenter;
+      _refreshWeather(at);
+      _refreshAlerts(at);
+      _refreshDaily(at);
+      _refreshHourly(at);
+      _refreshTides(at);
+      if (p != null && mounted) {
+        // Nudge the map to the last-known area so the user sees home water on load.
+        // FlutterMap's controller isn't valid until the widget builds, so schedule for after.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try { _controller.move(p, 12); } catch (_) {}
+        });
+      }
+    });
     BoatProfile.load().then((p) { if (mounted) setState(() => _profile = p); });
     _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) {
       final at = _me ?? _homeCenter;
       _refreshWeather(at);
       _refreshAlerts(at);
       _refreshDaily(at);
+      _refreshHourly(at);
       _refreshTides(at);
       _wxAt.clear();   // let stale grades fall through and refresh
       _gradeRouteWaypoints();
@@ -615,6 +749,31 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _refreshDaily(LatLng at) async {
     final d = await fetchDailyForecast(at);
     if (mounted && d.isNotEmpty) setState(() => _daily = d);
+  }
+  Future<void> _refreshHourly(LatLng at) async {
+    final h = await fetchHourlyForecast(at);
+    if (mounted && h.isNotEmpty) setState(() => _hourly = h);
+  }
+
+  // Batch A.5: `store.lastPos` parity — remember the last GPS fix so the next launch centres
+  // the map on home water even before the user grants location.
+  Future<LatLng?> _loadLastPos() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final s = sp.getString('lastPos');
+      if (s == null) return null;
+      final j = jsonDecode(s) as Map<String, dynamic>;
+      final lat = (j['lat'] as num?)?.toDouble();
+      final lng = (j['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) return null;
+      return LatLng(lat, lng);
+    } catch (_) { return null; }
+  }
+  Future<void> _saveLastPos(LatLng p) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('lastPos', jsonEncode({'lat': p.latitude, 'lng': p.longitude}));
+    } catch (_) {}
   }
   Future<void> _refreshTides(LatLng at) async {
     final stations = await _loadTideStations();
@@ -729,6 +888,7 @@ class _MapScreenState extends State<MapScreen> {
       final cutoff = DateTime.now().millisecondsSinceEpoch - 10 * 60 * 1000;
       _trail.removeWhere((t) => t.tMs < cutoff);
     });
+    _saveLastPos(here);   // remember for next launch so we open on home water
     // re-route on movement (smart routes cache keyed on last leg endpoints, but simplest: recompute)
     _recomputeRoute();
     // auto-advance waypoints while actively navigating — 100 m radius is generous enough for a
@@ -799,8 +959,10 @@ class _MapScreenState extends State<MapScreen> {
     }
     chk(w.windKt, _profile.wind, (v) => 'wind ${v.round()} kn');
     chk(w.gustKt, _profile.gust, (v) => 'gusts ${v.round()} kn');
-    if (over.isNotEmpty) return 'Too rough for ${_profile.name.isEmpty ? "your boat" : _profile.name} right now: ${over.join(", ")}';
-    if (near.isNotEmpty) return 'Near ${_profile.name.isEmpty ? "your boat" : _profile.name}\'s limit: ${near.join(", ")}';
+    chk(w.waveFt, _profile.wave, (v) => 'waves ${v.toStringAsFixed(1)} ft');
+    final who = _profile.name.isEmpty ? 'your boat' : _profile.name;
+    if (over.isNotEmpty) return 'Too rough for $who right now: ${over.join(", ")}';
+    if (near.isNotEmpty) return "Near $who's limit: ${near.join(", ")}";
     return null;
   }
 
@@ -811,6 +973,41 @@ class _MapScreenState extends State<MapScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => ForecastSheet(daily: _daily, tides: _tides, tideStation: _tideStation),
     );
+  }
+
+  // Placeholder for GPX import/export — real handler lands in Batch D.
+  void _gpxPlaceholder() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('GPX import/export lands in Batch D'),
+      duration: Duration(seconds: 2),
+    ));
+  }
+
+  Future<void> _openMoreTools() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => MoreToolsSheet(
+        docksOn: false,   // Batch B.5 overlay lands with real data
+        navAidsOn: false, // Batch B.5 overlay lands with real data
+        anchorOn: _anchorPoint != null,
+        fuelOn: _fuelRingOn,
+        smartOn: _smart,
+        onToggleDocks: (_) => _stubOverlayToast('Docks & fuel'),
+        onToggleNavAids: (_) => _stubOverlayToast('Nav aids'),
+        onToggleAnchor: (_) { Navigator.of(ctx).pop(); _toggleAnchor(); },
+        onToggleFuel: (_) { Navigator.of(ctx).pop(); _toggleFuelRing(); },
+        onToggleSmart: (_) { Navigator.of(ctx).pop(); setState(() => _smart = !_smart); _recomputeRoute(); },
+        onOpenForecast: () { Navigator.of(ctx).pop(); _openForecast(); },
+      ),
+    );
+  }
+  void _stubOverlayToast(String name) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('$name overlay lands in Batch B.5'),
+      duration: const Duration(seconds: 2),
+    ));
   }
 
   void _handleMapTap(TapPosition _, LatLng ll) {
@@ -1018,23 +1215,21 @@ class _MapScreenState extends State<MapScreen> {
             if (_navigating && _waypoints.isNotEmpty && _legIdx < _waypoints.length && _me != null) ...[
               const SizedBox(height: 8),
               _NavBar(from: _me!, target: _waypoints[_legIdx], legIdx: _legIdx, totalWps: _waypoints.length,
-                  nmToFinal: _routeNm(), etaMin: _etaMin(), headingDeg: _heading),
+                  nmToFinal: _routeNm(), etaMin: _etaMin(), headingDeg: _heading,
+                  cruiseKt: _profile.cruise, gal: _fuelGal(), onDone: _stopRide),
             ],
           ])),
           Positioned(right: 12, bottom: 140, child: _RightRail(
-            follow: _follow, picking: _picking, gpsOn: _gpsSub != null, smart: _smart,
-            mobOn: _mobPoint != null, anchorOn: _anchorPoint != null, fuelOn: _fuelRingOn,
+            follow: _follow, picking: _picking, gpsOn: _gpsSub != null,
+            mobOn: _mobPoint != null,
             onFollow: () => setState(() {
               _follow = !_follow;
               if (_follow && _me != null) _controller.move(_me!, math.max(_controller.camera.zoom, 14));
             }),
             onGoto: () => setState(() { _picking = !_picking; }),
             onLocate: _startGps,
-            onSmart: () { setState(() => _smart = !_smart); _recomputeRoute(); },
             onMob: _toggleMob,
-            onAnchor: _toggleAnchor,
-            onFuel: _toggleFuelRing,
-            onForecast: _openForecast,
+            onMoreTools: _openMoreTools,
           )),
           Positioned(left: 12, right: 12, bottom: 12, child: _BottomSheet(
             weather: _weather, routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
@@ -1043,6 +1238,9 @@ class _MapScreenState extends State<MapScreen> {
             onClearRoute: () async { setState(() { _waypoints.clear(); _picking = false; _routedPath = null; _legIdx = 0; }); await _stopRide(); },
             onUndoRoute: () { if (_waypoints.isEmpty) return; setState(() { _waypoints.removeLast(); if (_legIdx >= _waypoints.length) _legIdx = math.max(0, _waypoints.length - 1); }); _recomputeRoute(); },
             onStart: _startRide, onStop: _stopRide,
+            onGpx: _gpxPlaceholder, onEditProfile: _openBoatProfile,
+            warningText: _boatWarning(), window: bestWindow(_hourly, _profile),
+            hourly: _hourly, daily: _daily, profile: _profile,
           )),
         ]),
       ),
@@ -1091,35 +1289,50 @@ class _NavBar extends StatelessWidget {
   final double nmToFinal;
   final int etaMin;
   final double headingDeg;
+  final double cruiseKt;
+  final double gal;
+  final VoidCallback onDone;
   const _NavBar({required this.from, required this.target, required this.legIdx, required this.totalWps,
-      required this.nmToFinal, required this.etaMin, required this.headingDeg});
+      required this.nmToFinal, required this.etaMin, required this.headingDeg,
+      required this.cruiseKt, required this.gal, required this.onDone});
   @override
   Widget build(BuildContext context) {
     final brg = _bearingDeg(from, target);
     final dm = _haversineM(from, target);
     final distStr = dm < 370 ? '${(dm * 3.28).round()} ft' : '${(dm/1852).toStringAsFixed(dm/1852<10?2:1)} nm';
+    final galStr = gal < 10 ? '${gal.toStringAsFixed(1)} gal' : '${gal.round()} gal';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Transform.rotate(
-          angle: (brg - headingDeg) * math.pi / 180,
-          child: const Icon(Icons.navigation, color: Color(0xFFF2A93B), size: 26),
-        ),
-        const SizedBox(width: 10),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(distStr, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
-          const SizedBox(height: 2),
-          Text('steer ${brg.round().toString().padLeft(3, '0')}° ${_dirName(brg)} · point ${legIdx+1} of $totalWps',
-              style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Transform.rotate(
+            angle: (brg - headingDeg) * math.pi / 180,
+            child: const Icon(Icons.navigation, color: Color(0xFFF2A93B), size: 26),
+          ),
+          const SizedBox(width: 10),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(distStr, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
+            const SizedBox(height: 2),
+            Text('steer ${brg.round().toString().padLeft(3, '0')}° ${_dirName(brg)} · point ${legIdx+1} of $totalWps',
+                style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
+          ]),
+          const SizedBox(width: 16),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+            Text(etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
+            const SizedBox(height: 2),
+            Text('${nmToFinal.toStringAsFixed(1)} nm to final', style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
+          ]),
+          const SizedBox(width: 10),
+          Material(color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(9),
+            child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onDone,
+              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                child: Text('Done', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13))))),
         ]),
-        const SizedBox(width: 16),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-          Text(etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
-          const SizedBox(height: 2),
-          Text('${nmToFinal.toStringAsFixed(1)} nm to final', style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
-        ]),
+        const SizedBox(height: 4),
+        Text('at ${cruiseKt.round()} kn cruise · ~$galStr',
+          style: const TextStyle(fontSize: 11, color: Color(0xAAFFFFFF), fontWeight: FontWeight.w600)),
       ]),
     );
   }
@@ -1218,28 +1431,23 @@ class _BaseSwitcher extends StatelessWidget {
   }
 }
 
+// Batch A.5: right rail now matches the PWA — Follow / Go-to / Locate / ⋯ More-tools / MOB.
+// The four ad-hoc singleton buttons for fuel/anchor/forecast/smart moved into `_MoreToolsSheet`.
 class _RightRail extends StatelessWidget {
-  final bool follow, picking, gpsOn, smart, mobOn, anchorOn, fuelOn;
-  final VoidCallback onFollow, onGoto, onLocate, onSmart, onMob, onAnchor, onFuel, onForecast;
-  const _RightRail({required this.follow, required this.picking, required this.gpsOn, required this.smart,
-    required this.mobOn, required this.anchorOn, required this.fuelOn,
-    required this.onFollow, required this.onGoto, required this.onLocate, required this.onSmart,
-    required this.onMob, required this.onAnchor, required this.onFuel, required this.onForecast});
+  final bool follow, picking, gpsOn, mobOn;
+  final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools;
+  const _RightRail({required this.follow, required this.picking, required this.gpsOn, required this.mobOn,
+    required this.onFollow, required this.onGoto, required this.onLocate, required this.onMob,
+    required this.onMoreTools});
   @override
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
         _btn(icon: Icons.navigation, active: follow, onTap: onFollow, tip: 'Follow my boat'),
         const SizedBox(height: 8),
         _btn(icon: Icons.add_location_alt, active: picking, onTap: onGoto, tip: 'Go to a point'),
         const SizedBox(height: 8),
-        _btn(icon: Icons.route, active: smart, onTap: onSmart, tip: 'Smart routes (bend around land)'),
-        const SizedBox(height: 8),
         _btn(icon: gpsOn ? Icons.my_location : Icons.location_searching, active: gpsOn, onTap: onLocate, tip: 'Track my location'),
         const SizedBox(height: 8),
-        _btn(icon: Icons.local_gas_station, active: fuelOn, onTap: onFuel, tip: 'Fuel range ring'),
-        const SizedBox(height: 8),
-        _btn(icon: Icons.anchor, active: anchorOn, onTap: onAnchor, tip: 'Anchor watch'),
-        const SizedBox(height: 8),
-        _btn(icon: Icons.cloud_outlined, active: false, onTap: onForecast, tip: '7-day forecast & tides'),
+        _btn(icon: Icons.more_horiz, active: false, onTap: onMoreTools, tip: 'More tools'),
         const SizedBox(height: 8),
         _mobButton(),
       ]);
@@ -1269,6 +1477,62 @@ class _RightRail extends StatelessWidget {
           ),
         ),
       );
+}
+
+// Batch A.5: bottom-sheet popover with 5 toggles — matches the PWA's More tools sheet.
+// Anchor / Fuel / Smart routes are the real toggles wired to state. Docks & fuel and Nav aids
+// are stubs until Batch B.5 lands the overlays.
+class MoreToolsSheet extends StatelessWidget {
+  final bool docksOn, navAidsOn, anchorOn, fuelOn, smartOn;
+  final ValueChanged<bool> onToggleDocks, onToggleNavAids, onToggleAnchor, onToggleFuel, onToggleSmart;
+  final VoidCallback onOpenForecast;
+  const MoreToolsSheet({super.key,
+    required this.docksOn, required this.navAidsOn, required this.anchorOn, required this.fuelOn, required this.smartOn,
+    required this.onToggleDocks, required this.onToggleNavAids, required this.onToggleAnchor, required this.onToggleFuel, required this.onToggleSmart,
+    required this.onOpenForecast});
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(child: Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 18),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Center(child: Container(width: 40, height: 4,
+          decoration: BoxDecoration(color: const Color(0xFFDDE4EA), borderRadius: BorderRadius.circular(2)))),
+        const SizedBox(height: 12),
+        const Padding(padding: EdgeInsets.only(left: 4, bottom: 4),
+          child: Text('More tools', style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 18))),
+        _row(Icons.anchor, 'Docks & fuel', 'Marinas, ramps & fuel docks nearby (20 mi)', docksOn, onToggleDocks),
+        _row(Icons.center_focus_strong, 'Anchor watch', 'Alarm if you drift off the hook', anchorOn, onToggleAnchor),
+        _row(Icons.local_gas_station, 'Fuel range', 'Half-range ring from your tank & burn rate', fuelOn, onToggleFuel),
+        _row(Icons.location_on, 'Nav aids', 'Channel buoys & beacons nearby (20 mi)', navAidsOn, onToggleNavAids),
+        _row(Icons.route, 'Smart routes', 'Bend routes around land (experimental)', smartOn, onToggleSmart),
+        const Divider(color: Color(0xFFDDE4EA), height: 24),
+        Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
+          child: InkWell(borderRadius: BorderRadius.circular(10), onTap: onOpenForecast,
+            child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(children: [
+                Icon(Icons.cloud_outlined, color: Color(0xFF2E6F9E)),
+                SizedBox(width: 8),
+                Text('7-day forecast & tides',
+                  style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 14)),
+              ])))),
+      ]),
+    ));
+  }
+  Widget _row(IconData icon, String title, String sub, bool on, ValueChanged<bool> onTap) {
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Row(children: [
+      Container(width: 42, height: 42,
+        decoration: BoxDecoration(color: const Color(0xFFF0F5F9), shape: BoxShape.circle),
+        child: Icon(icon, color: const Color(0xFF2E6F9E))),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 15)),
+        Text(sub, style: const TextStyle(color: Color(0xFF708597), fontSize: 12)),
+      ])),
+      Switch(value: on, onChanged: onTap, activeColor: const Color(0xFF2E6F9E)),
+    ]));
+  }
 }
 
 // Modal sheet for editing the boat profile — name/type/length + wind/gust/wave limits + fuel.
@@ -1389,59 +1653,155 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
   );
 }
 
-class _BottomSheet extends StatelessWidget {
+// Batch A.5: rewrite as a stateful sheet that hosts the "Set up your boat" content
+// (weather block + best-window pill + day tabs + hourly "Best time to boat" table) plus
+// the pinned route summary row. Kept as a single widget so the callsite doesn't move.
+class _BottomSheet extends StatefulWidget {
   final Weather? weather;
   final double routeNm;
   final int etaMin, waypointCount;
   final double fuelGal;
   final bool picking, unverified, navigating;
-  final VoidCallback onClearRoute, onUndoRoute, onStart, onStop;
+  final VoidCallback onClearRoute, onUndoRoute, onStart, onStop, onGpx, onEditProfile;
+  final String? warningText;
+  final BestWindow? window;
+  final List<HourlyPoint> hourly;
+  final List<DailyForecast> daily;
+  final BoatProfile profile;
   const _BottomSheet({required this.weather, required this.routeNm, required this.etaMin, required this.fuelGal,
     required this.waypointCount, required this.picking, required this.unverified, required this.navigating,
-    required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop});
+    required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop,
+    required this.onGpx, required this.onEditProfile,
+    required this.warningText, required this.window, required this.hourly, required this.daily,
+    required this.profile});
+  @override
+  State<_BottomSheet> createState() => _BottomSheetState();
+}
+
+class _BottomSheetState extends State<_BottomSheet> {
+  int _dayIdx = 0;             // 0 = today, 1..6 = following days
+  bool _expanded = false;      // sheet peek collapsed by default until the user taps the header
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(14)),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (weather != null) Row(children: [
-          _stat('Temp', '${weather!.tempF?.round() ?? '—'}°F'),
-          const SizedBox(width: 14),
-          _stat('Wind', '${weather!.windKt?.round() ?? '—'} kn'),
-          const SizedBox(width: 14),
-          _stat('Gust', '${weather!.gustKt?.round() ?? '—'} kn'),
-          const SizedBox(width: 14),
-          _stat('Dir', _dirName(weather!.windDirDeg?.toDouble() ?? 0)),
-        ]),
-        if (weather != null) const SizedBox(height: 10),
-        Row(children: [
-          Expanded(child: waypointCount == 0
-              ? Text(picking ? 'Tap the map to drop a waypoint' : 'No route — tap Go-to to plan one',
-                  style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13))
-              : Row(children: [
-                  _stat('Route${unverified ? ' ⚠' : ''}', '${routeNm.toStringAsFixed(1)} nm'),
-                  const SizedBox(width: 14),
-                  _stat('ETA', etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min'),
-                  const SizedBox(width: 14),
-                  _stat('Points', '$waypointCount'),
-                  if (fuelGal > 0) ...[
-                    const SizedBox(width: 14),
-                    _stat('Fuel', fuelGal < 10 ? '${fuelGal.toStringAsFixed(1)} gal' : '${fuelGal.round()} gal'),
-                  ],
-                ]),
+        _routeRow(),
+        // header — "Set up your boat" / boat summary + Edit + expand/collapse
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 10, bottom: 6),
+            child: Row(children: [
+              Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xCCFFFFFF), size: 20),
+              const SizedBox(width: 6),
+              Expanded(child: Text(_headerText(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(onTap: widget.onEditProfile,
+                  child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    child: Text('Edit', style: TextStyle(color: Color(0xFF6EB6FF), fontWeight: FontWeight.w700, fontSize: 13)))),
+              ),
+            ]),
           ),
-          if (waypointCount > 0) ...[
-            _bigBtn(navigating ? 'Stop' : 'Start', navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B), navigating ? onStop : onStart),
-            const SizedBox(width: 8),
-            _smallBtn('Undo', onUndoRoute),
-            const SizedBox(width: 8),
-            _smallBtn('Clear', onClearRoute),
-          ],
-        ]),
+        ),
+        if (widget.warningText != null) _BoatWarningBanner(text: widget.warningText!),
+        if (_expanded) ..._expandedBody(),
       ]),
     );
   }
+
+  String _headerText() {
+    final p = widget.profile;
+    if (p.name.isEmpty && p.lengthFt == null) return 'Set up your boat';
+    final bits = <String>[];
+    if (p.name.isNotEmpty) bits.add(p.name);
+    if (p.lengthFt != null) bits.add('${p.lengthFt!.round()} ft');
+    bits.add('limits ${p.wind.round()} kn · ${p.wave.toStringAsFixed(1)} ft');
+    return bits.join(' · ');
+  }
+
+  Widget _routeRow() {
+    return Row(children: [
+      Expanded(child: widget.waypointCount == 0
+          ? Text(widget.picking ? 'Tap the map to drop a waypoint' : 'No route — tap Go-to to plan one',
+              style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13))
+          : Row(children: [
+              _stat('Route${widget.unverified ? ' ⚠' : ''}', '${widget.routeNm.toStringAsFixed(1)} nm'),
+              const SizedBox(width: 14),
+              _stat('ETA', widget.etaMin >= 60 ? '${widget.etaMin ~/ 60}h ${widget.etaMin % 60}m' : '${math.max(1, widget.etaMin)} min'),
+              const SizedBox(width: 14),
+              _stat('Points', '${widget.waypointCount}'),
+              if (widget.fuelGal > 0) ...[
+                const SizedBox(width: 14),
+                _stat('Fuel', widget.fuelGal < 10 ? '${widget.fuelGal.toStringAsFixed(1)} gal' : '${widget.fuelGal.round()} gal'),
+              ],
+            ]),
+      ),
+      if (widget.waypointCount > 0) ...[
+        _bigBtn(widget.navigating ? 'Stop' : 'Start',
+          widget.navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
+          widget.navigating ? widget.onStop : widget.onStart),
+        const SizedBox(width: 6),
+        _smallBtn('Undo', widget.onUndoRoute),
+        const SizedBox(width: 6),
+        _smallBtn('GPX', widget.onGpx),
+        const SizedBox(width: 6),
+        _smallBtn('Clear', widget.onClearRoute),
+      ],
+    ]);
+  }
+
+  List<Widget> _expandedBody() {
+    final w = widget.weather;
+    return [
+      const SizedBox(height: 6),
+      if (w != null) _weatherBlock(w),
+      if (widget.window != null) ...[
+        const SizedBox(height: 8),
+        _BestWindowPill(win: widget.window!),
+      ],
+      const SizedBox(height: 10),
+      _DayTabs(daily: widget.daily, selected: _dayIdx, onSelect: (i) => setState(() => _dayIdx = i)),
+      const SizedBox(height: 8),
+      Text('Best time to boat', style: TextStyle(color: Colors.white.withOpacity(.9),
+        fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
+      const SizedBox(height: 4),
+      _HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
+    ];
+  }
+
+  Widget _weatherBlock(Weather w) {
+    final isNight = w.sunset != null && DateTime.now().isAfter(w.sunset!);
+    final icon = isNight ? '🌙' : _wxIcon(w.weatherCode);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        Text(icon, style: const TextStyle(fontSize: 34)),
+        const SizedBox(width: 8),
+        Text('${w.tempF?.round() ?? '—'}°', style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w800, height: 1)),
+        const Text('F', style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 15, fontWeight: FontWeight.w700)),
+        const Spacer(),
+        Text(_condText(w.weatherCode), style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13, fontWeight: FontWeight.w600)),
+      ]),
+      const SizedBox(height: 10),
+      Wrap(spacing: 14, runSpacing: 8, children: [
+        _wxCell('Wind', '${w.windKt?.round() ?? '—'} kn ${_dirName(w.windDirDeg?.toDouble() ?? 0)}'),
+        _wxCell('Gust', '${w.gustKt?.round() ?? '—'} kn'),
+        if (w.sunset != null) _wxCell('Sunset', _fmtTime(w.sunset!)),
+        if (w.waterTempF != null) _wxCell('Water', '${w.waterTempF!.round()}°F'),
+        if (w.waveFt != null) _wxCell('Wave', '${w.waveFt!.toStringAsFixed(1)} ft'),
+        if (w.wavePeriodS != null) _wxCell('Period', '${w.wavePeriodS!.round()} s'),
+        if (w.precipPct != null && w.precipPct! > 0) _wxCell('Rain', '${w.precipPct!.round()}%'),
+      ]),
+    ]);
+  }
+
+  Widget _wxCell(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+    Text(label, style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 10, letterSpacing: 0.5)),
+    Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+  ]);
+
   Widget _stat(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
         Text(label, style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 10, letterSpacing: 0.5)),
         Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
@@ -1462,6 +1822,141 @@ class _BottomSheet extends StatelessWidget {
           ),
         ),
       );
+}
+
+String _condText(int? code) {
+  if (code == null) return '';
+  if (code == 0) return 'Clear';
+  if (code <= 2) return 'Mostly clear';
+  if (code == 3) return 'Cloudy';
+  if (code == 45 || code == 48) return 'Foggy';
+  if (code <= 57) return 'Drizzle';
+  if (code <= 67) return 'Rainy';
+  if (code <= 77) return 'Snow';
+  if (code <= 82) return 'Showers';
+  return 'Thunder';
+}
+
+String _fmtTime(DateTime t) {
+  final l = t.toLocal();
+  final h = l.hour == 0 ? 12 : (l.hour > 12 ? l.hour - 12 : l.hour);
+  final m = l.minute.toString().padLeft(2, '0');
+  final ampm = l.hour >= 12 ? 'PM' : 'AM';
+  return '$h:$m $ampm';
+}
+
+class _BestWindowPill extends StatelessWidget {
+  final BestWindow win;
+  const _BestWindowPill({required this.win});
+  @override
+  Widget build(BuildContext context) {
+    final color = win.level == 'g' ? const Color(0xFF1F8A5B) : const Color(0xFFF2A93B);
+    final label = win.level == 'g' ? 'Calm' : 'Fair';
+    final now = DateTime.now();
+    final sameDay = win.start.year == now.year && win.start.month == now.month && win.start.day == now.day;
+    final day = sameDay ? 'Today' : _weekday(win.start);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: color.withOpacity(.22),
+        border: Border.all(color: color, width: 1), borderRadius: BorderRadius.circular(999)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+        const SizedBox(width: 8),
+        Text('Best window: $day ${_fmtTime(win.start)}–${_fmtTime(win.end)} · $label',
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
+      ]),
+    );
+  }
+}
+
+String _weekday(DateTime t) {
+  const names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  return names[(t.toLocal().weekday - 1) % 7];
+}
+
+class _DayTabs extends StatelessWidget {
+  final List<DailyForecast> daily;
+  final int selected;
+  final ValueChanged<int> onSelect;
+  const _DayTabs({required this.daily, required this.selected, required this.onSelect});
+  @override
+  Widget build(BuildContext context) {
+    final labels = <String>[];
+    for (int i = 0; i < 7; i++) {
+      if (i == 0) { labels.add('Today'); continue; }
+      final t = daily.length > i ? daily[i].date : DateTime.now().add(Duration(days: i));
+      labels.add(_weekday(t));
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: List.generate(labels.length, (i) {
+        final sel = i == selected;
+        return Padding(padding: const EdgeInsets.only(right: 6),
+          child: Material(color: sel ? const Color(0xFF1466C7) : const Color(0x22FFFFFF),
+            borderRadius: BorderRadius.circular(999),
+            child: InkWell(borderRadius: BorderRadius.circular(999), onTap: () => onSelect(i),
+              child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Text(labels[i], style: TextStyle(color: sel ? Colors.white : const Color(0xCCFFFFFF),
+                  fontWeight: FontWeight.w800, fontSize: 12.5))))),
+        );
+      })),
+    );
+  }
+}
+
+class _HourlyTable extends StatelessWidget {
+  final List<HourlyPoint> hourly;
+  final int dayIdx;
+  final BoatProfile profile;
+  const _HourlyTable({required this.hourly, required this.dayIdx, required this.profile});
+  @override
+  Widget build(BuildContext context) {
+    if (hourly.isEmpty) {
+      return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('Loading hourly forecast…', style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 12)));
+    }
+    final today = DateTime.now();
+    final target = DateTime(today.year, today.month, today.day).add(Duration(days: dayIdx));
+    final startHour = dayIdx == 0 ? today.hour : 5;
+    final rows = hourly.where((h) {
+      final l = h.t.toLocal();
+      return l.year == target.year && l.month == target.month && l.day == target.day
+          && l.hour >= startHour && l.hour <= 21;
+    }).toList();
+    if (rows.isEmpty) {
+      return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('No more daylight hours today — swipe to Fri for tomorrow.',
+          style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 12)));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows.map((h) => _row(h)).toList());
+  }
+  Widget _row(HourlyPoint h) {
+    final s = score(h.windKt, h.gustKt, null, profile);
+    final color = _gradeColors[s]!;
+    final label = s == 'g' ? 'Calm' : (s == 'a' ? 'Fair' : 'Rough');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(children: [
+        SizedBox(width: 46, child: Text(_hourLabel(h.t), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
+        Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+        const SizedBox(width: 6),
+        SizedBox(width: 40, child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 11))),
+        Text(_wxIcon(h.weatherCode), style: const TextStyle(fontSize: 14)),
+        const SizedBox(width: 4),
+        SizedBox(width: 36, child: Text('${h.tempF?.round() ?? '—'}°', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700))),
+        SizedBox(width: 70, child: Text('${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}', style: const TextStyle(color: Colors.white, fontSize: 11))),
+        SizedBox(width: 42, child: Text('g${h.gustKt?.round() ?? '—'}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 11))),
+        if (h.precipPct != null && h.precipPct! > 0)
+          Text('${h.precipPct!.round()}%', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 11)),
+      ]),
+    );
+  }
+  String _hourLabel(DateTime t) {
+    final l = t.toLocal();
+    final h = l.hour == 0 ? 12 : (l.hour > 12 ? l.hour - 12 : l.hour);
+    final ampm = l.hour >= 12 ? 'PM' : 'AM';
+    return '$h $ampm';
+  }
 }
 
 // ==================================================================================================
