@@ -472,6 +472,247 @@ String _wxIcon(int? code) {
 }
 
 // ==================================================================================================
+// Batch B.5 — chart overlays: docks & fuel (OSM), nav aids (OSM), tidal currents (NOAA)
+// ==================================================================================================
+
+const _overpassMirrors = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+
+// Rough conversion from statute miles → geographic bounding box (~1° lat ≈ 69 mi).
+// At mid-latitudes this is close enough for a fetch radius.
+({double south, double west, double north, double east}) _bboxMi(LatLng at, double mi) {
+  final dLat = mi / 69.0;
+  final dLng = mi / (69.0 * math.cos(at.latitude * math.pi / 180));
+  return (south: at.latitude - dLat, west: at.longitude - dLng,
+          north: at.latitude + dLat, east: at.longitude + dLng);
+}
+
+Future<String?> _overpassQuery(String query) async {
+  for (final url in _overpassMirrors) {
+    try {
+      final r = await http.post(Uri.parse(url),
+        body: {'data': query}).timeout(const Duration(seconds: 12));
+      if (r.statusCode == 200) return r.body;
+    } catch (_) {}
+  }
+  return null;
+}
+
+// ---------- docks & fuel (marinas, ramps, fuel docks) ----------
+
+enum DockKind { marina, slipway, fuel }
+
+class Dock {
+  final String name;
+  final DockKind kind;
+  final LatLng ll;
+  Dock({required this.name, required this.kind, required this.ll});
+  Map<String, dynamic> toJson() => {'name': name, 'kind': kind.name, 'lat': ll.latitude, 'lng': ll.longitude};
+  static Dock fromJson(Map<String, dynamic> j) => Dock(
+    name: (j['name'] as String?) ?? '',
+    kind: DockKind.values.firstWhere((k) => k.name == j['kind'], orElse: () => DockKind.marina),
+    ll: LatLng((j['lat'] as num).toDouble(), (j['lng'] as num).toDouble()),
+  );
+}
+
+Future<List<Dock>> fetchDocks(LatLng at) async {
+  // 7-day cache keyed on the rough tile (0.5°) so nearby fixes hit the same cache.
+  final key = 'docks_${at.latitude.toStringAsFixed(1)}_${at.longitude.toStringAsFixed(1)}';
+  try {
+    final sp = await SharedPreferences.getInstance();
+    final cached = sp.getString(key);
+    if (cached != null) {
+      final j = jsonDecode(cached) as Map<String, dynamic>;
+      final ts = DateTime.fromMillisecondsSinceEpoch(j['t'] as int);
+      if (DateTime.now().difference(ts).inDays < 7) {
+        return (j['docks'] as List).map((e) => Dock.fromJson(e as Map<String, dynamic>)).toList();
+      }
+    }
+  } catch (_) {}
+  final b = _bboxMi(at, 20);
+  final q = '''
+[out:json][timeout:15];
+(
+  node["leisure"="marina"](${b.south},${b.west},${b.north},${b.east});
+  node["leisure"="slipway"](${b.south},${b.west},${b.north},${b.east});
+  node["seamark:type"="fuel"](${b.south},${b.west},${b.north},${b.east});
+  way["leisure"="marina"](${b.south},${b.west},${b.north},${b.east});
+);
+out center 60;''';
+  final body = await _overpassQuery(q);
+  if (body == null) return [];
+  final out = <Dock>[];
+  try {
+    final j = jsonDecode(body) as Map<String, dynamic>;
+    final els = (j['elements'] as List?) ?? [];
+    for (final e in els) {
+      final m = e as Map<String, dynamic>;
+      final tags = (m['tags'] as Map?) ?? {};
+      double? lat = (m['lat'] as num?)?.toDouble();
+      double? lng = (m['lon'] as num?)?.toDouble();
+      if (lat == null && m['center'] is Map) {
+        lat = ((m['center'] as Map)['lat'] as num?)?.toDouble();
+        lng = ((m['center'] as Map)['lon'] as num?)?.toDouble();
+      }
+      if (lat == null || lng == null) continue;
+      DockKind k = DockKind.marina;
+      if (tags['seamark:type'] == 'fuel') k = DockKind.fuel;
+      else if (tags['leisure'] == 'slipway') k = DockKind.slipway;
+      out.add(Dock(name: (tags['name'] as String?) ?? _defaultDockName(k), kind: k, ll: LatLng(lat, lng)));
+    }
+  } catch (_) {}
+  try {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(key, jsonEncode({'t': DateTime.now().millisecondsSinceEpoch,
+      'docks': out.map((d) => d.toJson()).toList()}));
+  } catch (_) {}
+  return out;
+}
+String _defaultDockName(DockKind k) => k == DockKind.fuel ? 'Fuel dock' : (k == DockKind.slipway ? 'Boat ramp' : 'Marina');
+
+// ---------- nav aids (channel buoys + beacons) ----------
+
+class NavAid {
+  final String name;
+  final String category;   // "red" / "green" / "amber"
+  final LatLng ll;
+  NavAid({required this.name, required this.category, required this.ll});
+  Map<String, dynamic> toJson() => {'name': name, 'cat': category, 'lat': ll.latitude, 'lng': ll.longitude};
+  static NavAid fromJson(Map<String, dynamic> j) => NavAid(
+    name: (j['name'] as String?) ?? '',
+    category: (j['cat'] as String?) ?? 'amber',
+    ll: LatLng((j['lat'] as num).toDouble(), (j['lng'] as num).toDouble()),
+  );
+}
+
+String _seamarkColor(Map tags) {
+  // seamark:buoy_lateral:colour = red / green / red;green / green;red
+  final k = tags['seamark:buoy_lateral:colour'] ?? tags['seamark:beacon_lateral:colour'] ?? tags['seamark:light:colour'];
+  if (k == null) return 'amber';
+  final s = k.toString().toLowerCase();
+  if (s.contains('red')) return 'red';
+  if (s.contains('green')) return 'green';
+  return 'amber';
+}
+
+Future<List<NavAid>> fetchNavAids(LatLng at) async {
+  final key = 'navaids_${at.latitude.toStringAsFixed(1)}_${at.longitude.toStringAsFixed(1)}';
+  try {
+    final sp = await SharedPreferences.getInstance();
+    final cached = sp.getString(key);
+    if (cached != null) {
+      final j = jsonDecode(cached) as Map<String, dynamic>;
+      final ts = DateTime.fromMillisecondsSinceEpoch(j['t'] as int);
+      if (DateTime.now().difference(ts).inDays < 30) {
+        return (j['aids'] as List).map((e) => NavAid.fromJson(e as Map<String, dynamic>)).toList();
+      }
+    }
+  } catch (_) {}
+  final b = _bboxMi(at, 20);
+  final q = '''
+[out:json][timeout:15];
+(
+  node["seamark:type"="buoy_lateral"](${b.south},${b.west},${b.north},${b.east});
+  node["seamark:type"="beacon_lateral"](${b.south},${b.west},${b.north},${b.east});
+);
+out 120;''';
+  final body = await _overpassQuery(q);
+  if (body == null) return [];
+  final out = <NavAid>[];
+  try {
+    final j = jsonDecode(body) as Map<String, dynamic>;
+    final els = (j['elements'] as List?) ?? [];
+    for (final e in els) {
+      final m = e as Map<String, dynamic>;
+      final lat = (m['lat'] as num?)?.toDouble();
+      final lng = (m['lon'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      final tags = (m['tags'] as Map?) ?? {};
+      out.add(NavAid(
+        name: (tags['seamark:name'] as String?) ?? (tags['name'] as String?) ?? 'Buoy',
+        category: _seamarkColor(tags),
+        ll: LatLng(lat, lng),
+      ));
+    }
+  } catch (_) {}
+  try {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(key, jsonEncode({'t': DateTime.now().millisecondsSinceEpoch,
+      'aids': out.map((a) => a.toJson()).toList()}));
+  } catch (_) {}
+  return out;
+}
+
+// ---------- tidal currents (NOAA current-predictions) ----------
+
+class TidalCurrent {
+  final LatLng ll;
+  final double velocityKt;   // signed: + = flood, - = ebb
+  final double directionDeg; // set direction (0-360)
+  final String stationName;
+  const TidalCurrent({required this.ll, required this.velocityKt, required this.directionDeg, required this.stationName});
+}
+
+// Nearest current station: NOAA CO-OPS metadata + current-predictions endpoint.
+Future<TidalCurrent?> fetchTidalCurrent(LatLng at) async {
+  try {
+    // 1) find nearest current-predictions station within 40 mi
+    final metaUrl = Uri.parse('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=currentpredictions');
+    final r = await http.get(metaUrl).timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final stations = (j['stations'] as List?) ?? [];
+    Map<String, dynamic>? best;
+    double bestD = 40 * 1609.34;
+    for (final s in stations) {
+      final m = s as Map<String, dynamic>;
+      final lat = (m['lat'] as num?)?.toDouble();
+      final lng = (m['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      final d = _haversineM(at, LatLng(lat, lng));
+      if (d < bestD) { bestD = d; best = m; }
+    }
+    if (best == null) return null;
+    final id = best['id']?.toString();
+    if (id == null) return null;
+    // 2) query current predictions for now
+    final now = DateTime.now().toUtc();
+    final begin = now.subtract(const Duration(minutes: 30));
+    String fmt(DateTime t) => '${t.year}${t.month.toString().padLeft(2,'0')}${t.day.toString().padLeft(2,'0')} ${t.hour.toString().padLeft(2,'0')}:${t.minute.toString().padLeft(2,'0')}';
+    final predUrl = Uri.parse('https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=currents_predictions&interval=6&units=english&time_zone=gmt&format=json'
+        '&station=$id&begin_date=${fmt(begin)}&end_date=${fmt(now.add(const Duration(hours: 1)))}&bin=1');
+    final p = await http.get(predUrl).timeout(const Duration(seconds: 8));
+    if (p.statusCode != 200) return null;
+    final pj = jsonDecode(p.body) as Map<String, dynamic>;
+    final preds = (pj['current_predictions']?['cp'] as List?) ?? [];
+    if (preds.isEmpty) return null;
+    // pick the sample closest to now
+    Map<String, dynamic>? closest;
+    Duration bestDt = const Duration(hours: 999);
+    for (final s in preds) {
+      final m = s as Map<String, dynamic>;
+      final t = DateTime.tryParse((m['Time'] as String?) ?? '');
+      if (t == null) continue;
+      final dt = t.difference(now).abs();
+      if (dt < bestDt) { bestDt = dt; closest = m; }
+    }
+    if (closest == null) return null;
+    final v = (closest['Velocity_Major'] as num?)?.toDouble();
+    final dir = (closest['meanFloodDir'] as num?)?.toDouble() ?? (closest['Bin'] as num?)?.toDouble();
+    if (v == null || dir == null) return null;
+    // signed velocity: NOAA reports negative for ebb via Velocity_Major
+    return TidalCurrent(
+      ll: LatLng((best['lat'] as num).toDouble(), (best['lng'] as num).toDouble()),
+      velocityKt: v,
+      directionDeg: v >= 0 ? dir : (dir + 180) % 360,
+      stationName: (best['name'] as String?) ?? 'Current',
+    );
+  } catch (_) { return null; }
+}
+
+// ==================================================================================================
 // pre-baked land data — same asset the PWA uses, dropped into flutter-web/assets/
 // ==================================================================================================
 
@@ -708,6 +949,13 @@ class _MapScreenState extends State<MapScreen> {
   bool _anchorBreached = false;
   bool _fuelRingOn = false;
 
+  // Batch B.5 overlays
+  bool _docksOn = false;
+  bool _navAidsOn = false;
+  List<Dock> _docks = [];
+  List<NavAid> _navAids = [];
+  TidalCurrent? _tidalCurrent;
+
   static const _homeCenter = LatLng(40.457, -74.15);
 
   @override
@@ -721,6 +969,7 @@ class _MapScreenState extends State<MapScreen> {
       _refreshDaily(at);
       _refreshHourly(at);
       _refreshTides(at);
+      _refreshTidalCurrent(at);
       if (p != null && mounted) {
         // Nudge the map to the last-known area so the user sees home water on load.
         // FlutterMap's controller isn't valid until the widget builds, so schedule for after.
@@ -737,6 +986,9 @@ class _MapScreenState extends State<MapScreen> {
       _refreshDaily(at);
       _refreshHourly(at);
       _refreshTides(at);
+      _refreshTidalCurrent(at);
+      if (_docksOn) _refreshDocks(at);
+      if (_navAidsOn) _refreshNavAids(at);
       _wxAt.clear();   // let stale grades fall through and refresh
       _gradeRouteWaypoints();
     });
@@ -753,6 +1005,18 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _refreshHourly(LatLng at) async {
     final h = await fetchHourlyForecast(at);
     if (mounted && h.isNotEmpty) setState(() => _hourly = h);
+  }
+  Future<void> _refreshDocks(LatLng at) async {
+    final d = await fetchDocks(at);
+    if (mounted) setState(() => _docks = d);
+  }
+  Future<void> _refreshNavAids(LatLng at) async {
+    final a = await fetchNavAids(at);
+    if (mounted) setState(() => _navAids = a);
+  }
+  Future<void> _refreshTidalCurrent(LatLng at) async {
+    final c = await fetchTidalCurrent(at);
+    if (mounted) setState(() => _tidalCurrent = c);
   }
 
   // Batch A.5: `store.lastPos` parity — remember the last GPS fix so the next launch centres
@@ -988,26 +1252,28 @@ class _MapScreenState extends State<MapScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => MoreToolsSheet(
-        docksOn: false,   // Batch B.5 overlay lands with real data
-        navAidsOn: false, // Batch B.5 overlay lands with real data
+      builder: (ctx) => StatefulBuilder(builder: (sctx, setSheetState) => MoreToolsSheet(
+        docksOn: _docksOn,
+        navAidsOn: _navAidsOn,
         anchorOn: _anchorPoint != null,
         fuelOn: _fuelRingOn,
         smartOn: _smart,
-        onToggleDocks: (_) => _stubOverlayToast('Docks & fuel'),
-        onToggleNavAids: (_) => _stubOverlayToast('Nav aids'),
+        onToggleDocks: (v) {
+          setSheetState(() {});
+          setState(() => _docksOn = v);
+          if (v) _refreshDocks(_me ?? _homeCenter);
+        },
+        onToggleNavAids: (v) {
+          setSheetState(() {});
+          setState(() => _navAidsOn = v);
+          if (v) _refreshNavAids(_me ?? _homeCenter);
+        },
         onToggleAnchor: (_) { Navigator.of(ctx).pop(); _toggleAnchor(); },
         onToggleFuel: (_) { Navigator.of(ctx).pop(); _toggleFuelRing(); },
         onToggleSmart: (_) { Navigator.of(ctx).pop(); setState(() => _smart = !_smart); _recomputeRoute(); },
         onOpenForecast: () { Navigator.of(ctx).pop(); _openForecast(); },
-      ),
+      )),
     );
-  }
-  void _stubOverlayToast(String name) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('$name overlay lands in Batch B.5'),
-      duration: const Duration(seconds: 2),
-    ));
   }
 
   void _handleMapTap(TapPosition _, LatLng ll) {
@@ -1015,6 +1281,19 @@ class _MapScreenState extends State<MapScreen> {
     setState(() => _waypoints.add(ll));
     _recomputeRoute();
     _gradeRouteWaypoints();   // fetch a per-point forecast in the background so segments colour up
+  }
+
+  // "Route here" from a Dock callout: replace the current route with a single leg to that dock.
+  void _routeToPoint(LatLng at) {
+    setState(() {
+      _waypoints
+        ..clear()
+        ..add(at);
+      _legIdx = 0;
+      _picking = false;
+    });
+    _recomputeRoute();
+    _gradeRouteWaypoints();
   }
 
   Future<void> _recomputeRoute() async {
@@ -1107,7 +1386,8 @@ class _MapScreenState extends State<MapScreen> {
             curve: Curves.easeInOut,
             transformAlignment: const Alignment(0, 0.2),
             transform: tiltMatrix,
-            child: FlutterMap(
+            child: Stack(children: [
+              FlutterMap(
               mapController: _controller,
               options: MapOptions(
                 initialCenter: _homeCenter,
@@ -1119,7 +1399,9 @@ class _MapScreenState extends State<MapScreen> {
               ),
               children: [
                 TileLayer(urlTemplate: _tileUrl(_base), userAgentPackageName: 'net.bayside.flutter'),
-                if (_base == Basemap.chart)
+                // NOAA ENC MarineChart on every non-plain-Map basemap — matches the PWA
+                // which overlays it on Chart, Sat and Dark alike (index.html:535, 543-545).
+                if (_base != Basemap.map)
                   TileLayer(urlTemplate: _noaaChartUrl, userAgentPackageName: 'net.bayside.flutter'),
                 if (_trail.length > 1)
                   PolylineLayer(polylines: [
@@ -1159,6 +1441,24 @@ class _MapScreenState extends State<MapScreen> {
                         pattern: StrokePattern.dashed(segments: const [6, 6])),
                   ]),
                 MarkerLayer(markers: [
+                  if (_docksOn) for (final d in _docks)
+                    Marker(
+                      point: d.ll,
+                      width: 28, height: 28,
+                      child: _DockPin(kind: d.kind, name: d.name, onRouteHere: () => _routeToPoint(d.ll)),
+                    ),
+                  if (_navAidsOn) for (final a in _navAids)
+                    Marker(
+                      point: a.ll,
+                      width: 20, height: 24,
+                      child: _NavAidPin(category: a.category, name: a.name),
+                    ),
+                  if (_tidalCurrent != null)
+                    Marker(
+                      point: _tidalCurrent!.ll,
+                      width: 44, height: 44,
+                      child: _TidalCurrentArrow(sample: _tidalCurrent!),
+                    ),
                   for (int i = 0; i < _waypoints.length; i++)
                     Marker(
                       point: _waypoints[i],
@@ -1180,12 +1480,31 @@ class _MapScreenState extends State<MapScreen> {
                   if (_me != null)
                     Marker(
                       point: _me!,
-                      width: 44, height: 44,
+                      width: 56, height: 56,
                       child: BoatMarker(headingDeg: _heading, active: _navigating),
+                    )
+                  else
+                    // Ghost boat at the map centre so users can see where the boat *would* be
+                    // once GPS is granted — mirrors the PWA "search" state HUD.
+                    Marker(
+                      point: _homeCenter,
+                      width: 56, height: 56,
+                      child: const BoatMarker(headingDeg: 0, ghost: true),
                     ),
                 ]),
               ],
-            ),
+              ),
+              // Weather-animation canvas — wind streaks + rain particles, driven by live wx.
+              // Sits above the map inside the same tilt Transform so it feels like weather over
+              // the water rather than the screen.
+              Positioned.fill(child: IgnorePointer(child: FxCanvas(
+                windKt: _weather?.windKt ?? 0,
+                gustKt: _weather?.gustKt ?? 0,
+                windDirDeg: (_weather?.windDirDeg ?? 0).toDouble(),
+                precipPct: _weather?.precipPct ?? 0,
+                boatSpeedKt: _speedKt,
+              ))),
+            ]),
           ),
           // HUD (never tilts — always flat)
           Positioned(top: 12, left: 12, right: 12, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1252,31 +1571,179 @@ class _MapScreenState extends State<MapScreen> {
 // widgets
 // ==================================================================================================
 
+// Batch B.5: weather-animation canvas. Full-viewport overlay above the map, ignoring pointer
+// events. Wind streaks scale density with (wind + gust*0.5) and slant along wind direction;
+// rain drops appear when precipPct > 0. Wake spray is a placeholder — needs boat screen-projection
+// which is nontrivial with `flutter_map` and will land in Batch C.
+class FxCanvas extends StatefulWidget {
+  final double windKt, gustKt, windDirDeg, precipPct, boatSpeedKt;
+  const FxCanvas({super.key, required this.windKt, required this.gustKt, required this.windDirDeg,
+    required this.precipPct, required this.boatSpeedKt});
+  @override
+  State<FxCanvas> createState() => _FxCanvasState();
+}
+class _FxCanvasState extends State<FxCanvas> with SingleTickerProviderStateMixin {
+  late final _tick = createTicker(_step);
+  final math.Random _rng = math.Random();
+  final List<_WindStreak> _streaks = [];
+  final List<_RainDrop> _drops = [];
+  int _lastMs = 0;
+  Size _size = Size.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick.start();
+  }
+  @override
+  void dispose() { _tick.dispose(); super.dispose(); }
+
+  int _targetStreaks() {
+    final eff = widget.windKt + widget.gustKt * 0.4;
+    return math.min(120, (eff * 3.5).round());
+  }
+  int _targetDrops() {
+    if (widget.precipPct <= 0) return 0;
+    return math.min(140, (widget.precipPct * 1.8).round());
+  }
+
+  void _step(Duration elapsed) {
+    if (_size == Size.zero) { setState(() {}); return; }
+    final now = elapsed.inMilliseconds;
+    final dt = _lastMs == 0 ? 0.016 : math.min(0.05, (now - _lastMs) / 1000);
+    _lastMs = now;
+    // top-up streaks/drops toward the target counts
+    while (_streaks.length < _targetStreaks()) _streaks.add(_spawnStreak());
+    while (_streaks.length > _targetStreaks()) _streaks.removeLast();
+    while (_drops.length < _targetDrops()) _drops.add(_spawnDrop());
+    while (_drops.length > _targetDrops()) _drops.removeLast();
+    // wind vector — screen x/y for a "wind is BLOWING TOWARD" motion vector.
+    // Meteorology gives dir wind comes FROM, so the streak travels toward dir+180.
+    final rad = (widget.windDirDeg + 180) * math.pi / 180;
+    final vx = math.sin(rad) * (widget.windKt + widget.gustKt * 0.5) * 6;
+    final vy = -math.cos(rad) * (widget.windKt + widget.gustKt * 0.5) * 6;
+    for (final s in _streaks) {
+      s.x += vx * dt;
+      s.y += vy * dt;
+      if (s.x < -20 || s.x > _size.width + 20 || s.y < -20 || s.y > _size.height + 20) {
+        _resetStreak(s);
+      }
+    }
+    for (final d in _drops) {
+      d.x += vx * 0.15 * dt;
+      d.y += d.speed * dt;
+      if (d.y > _size.height + 4) { d.x = _rng.nextDouble() * _size.width; d.y = -8; }
+    }
+    setState(() {});
+  }
+
+  _WindStreak _spawnStreak() {
+    final s = _WindStreak(0, 0, 8 + _rng.nextDouble() * 20, .3 + _rng.nextDouble() * .5);
+    _resetStreak(s);
+    return s;
+  }
+  void _resetStreak(_WindStreak s) {
+    s.x = _rng.nextDouble() * (_size.width + 40) - 20;
+    s.y = _rng.nextDouble() * (_size.height + 40) - 20;
+  }
+  _RainDrop _spawnDrop() => _RainDrop(
+    _rng.nextDouble() * _size.width,
+    _rng.nextDouble() * _size.height,
+    260 + _rng.nextDouble() * 140,
+  );
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (ctx, cs) {
+    final s = Size(cs.maxWidth, cs.maxHeight);
+    if (s != _size) _size = s;
+    return CustomPaint(painter: _FxPainter(
+      streaks: _streaks, drops: _drops, windDirDeg: widget.windDirDeg,
+      precipPct: widget.precipPct,
+    ), size: s);
+  });
+}
+
+class _WindStreak {
+  double x, y, length, alpha;
+  _WindStreak(this.x, this.y, this.length, this.alpha);
+}
+class _RainDrop {
+  double x, y, speed;
+  _RainDrop(this.x, this.y, this.speed);
+}
+class _FxPainter extends CustomPainter {
+  final List<_WindStreak> streaks;
+  final List<_RainDrop> drops;
+  final double windDirDeg, precipPct;
+  _FxPainter({required this.streaks, required this.drops, required this.windDirDeg, required this.precipPct});
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Streaks — direction the wind is BLOWING TOWARD (dir + 180).
+    final rad = (windDirDeg + 180) * math.pi / 180;
+    final dx = math.sin(rad), dy = -math.cos(rad);
+    final streakPaint = Paint()..strokeWidth = 1.3..strokeCap = StrokeCap.round;
+    for (final s in streaks) {
+      streakPaint.color = Colors.white.withOpacity(.16 * s.alpha);
+      canvas.drawLine(Offset(s.x, s.y),
+        Offset(s.x + dx * s.length, s.y + dy * s.length), streakPaint);
+    }
+    // Rain drops — small vertical lines with a slight wind lean.
+    if (precipPct > 0) {
+      final rainPaint = Paint()..strokeWidth = 1.4..strokeCap = StrokeCap.round
+        ..color = Colors.white.withOpacity(math.min(.36, .12 + precipPct / 600));
+      for (final d in drops) {
+        canvas.drawLine(Offset(d.x, d.y),
+          Offset(d.x + dx * 3, d.y + 8), rainPaint);
+      }
+    }
+  }
+  @override
+  bool shouldRepaint(covariant _FxPainter old) => true;   // frame-driven repaint
+}
+
 class BoatMarker extends StatelessWidget {
   final double headingDeg;
   final bool active;
-  const BoatMarker({super.key, required this.headingDeg, this.active = false});
+  final bool ghost;   // true = grey "GPS not fixed" placeholder centred on the map
+  const BoatMarker({super.key, required this.headingDeg, this.active = false, this.ghost = false});
   @override
-  Widget build(BuildContext context) => Transform.rotate(
-        angle: headingDeg * math.pi / 180,
-        child: SizedBox(
-          width: 44, height: 44,
-          child: Stack(alignment: Alignment.center, children: [
-            // classic top-down skiff (always there, fades OUT during Start ride)
-            AnimatedOpacity(
+  Widget build(BuildContext context) {
+    final haloColor = ghost ? const Color(0x66FFFFFF) : const Color(0x66F2A93B);
+    return Transform.rotate(
+      angle: headingDeg * math.pi / 180,
+      child: SizedBox(
+        width: 56, height: 56,
+        child: Stack(alignment: Alignment.center, children: [
+          // Always-visible halo ring so the boat stands out at low zoom (was invisible when
+          // the RIB detail scaled down to a couple of pixels).
+          Container(
+            width: 56, height: 56,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: haloColor.withOpacity(.18),
+              border: Border.all(color: haloColor, width: 2),
+              boxShadow: [BoxShadow(color: haloColor.withOpacity(.35), blurRadius: 10)],
+            ),
+          ),
+          // classic top-down skiff (always there, fades OUT during Start ride)
+          Opacity(
+            opacity: ghost ? .35 : 1,
+            child: AnimatedOpacity(
               opacity: active ? 0 : 1,
               duration: const Duration(milliseconds: 500),
-              child: Image.asset('assets/icons/boat.png', fit: BoxFit.contain),
+              child: Image.asset('assets/icons/boat.png', fit: BoxFit.contain, width: 40, height: 40),
             ),
-            // photo-real orange RIB (fades IN during Start ride) — matches the PWA's boat crossfade
-            AnimatedOpacity(
-              opacity: active ? 1 : 0,
-              duration: const Duration(milliseconds: 500),
-              child: Image.asset('assets/icons/boat-3d.png', fit: BoxFit.contain),
-            ),
-          ]),
-        ),
-      );
+          ),
+          // photo-real orange RIB (fades IN during Start ride) — matches the PWA's boat crossfade
+          if (!ghost) AnimatedOpacity(
+            opacity: active ? 1 : 0,
+            duration: const Duration(milliseconds: 500),
+            child: Image.asset('assets/icons/boat-3d.png', fit: BoxFit.contain, width: 40, height: 40),
+          ),
+        ]),
+      ),
+    );
+  }
 }
 
 // Small floating bar shown while navigating — mirrors the PWA's #nav ("steer XXX° · point N of M ·
@@ -1348,6 +1815,104 @@ class _WaypointPin extends StatelessWidget {
         color: isDest ? const Color(0xFFD93A2B) : const Color(0xFFF2A93B),
         shadows: const [Shadow(color: Colors.black45, blurRadius: 4)],
       );
+}
+
+// Batch B.5 — chart overlay markers
+class _DockPin extends StatelessWidget {
+  final DockKind kind;
+  final String name;
+  final VoidCallback onRouteHere;
+  const _DockPin({required this.kind, required this.name, required this.onRouteHere});
+  @override
+  Widget build(BuildContext context) {
+    final color = kind == DockKind.fuel ? const Color(0xFF1F8A5B)
+        : (kind == DockKind.slipway ? const Color(0xFF2E6F9E) : const Color(0xFF6B4FC6));
+    final icon = kind == DockKind.fuel ? Icons.local_gas_station
+        : (kind == DockKind.slipway ? Icons.directions_boat : Icons.anchor);
+    return Tooltip(
+      message: name,
+      child: InkWell(
+        onTap: () => _openDockCallout(context, name, kind, onRouteHere),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: color, width: 2),
+            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 3)],
+          ),
+          child: Padding(padding: const EdgeInsets.all(3), child: Icon(icon, color: color, size: 16)),
+        ),
+      ),
+    );
+  }
+  static void _openDockCallout(BuildContext c, String name, DockKind kind, VoidCallback onRouteHere) {
+    showModalBottomSheet<void>(context: c, backgroundColor: Colors.transparent,
+      builder: (bc) => SafeArea(child: Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14)),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(name, style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 17)),
+          const SizedBox(height: 4),
+          Text(kind == DockKind.fuel ? 'Fuel dock' : (kind == DockKind.slipway ? 'Boat ramp / slipway' : 'Marina'),
+            style: const TextStyle(color: Color(0xFF708597), fontSize: 12)),
+          const SizedBox(height: 12),
+          Material(color: const Color(0xFF1F8A5B), borderRadius: BorderRadius.circular(10),
+            child: InkWell(borderRadius: BorderRadius.circular(10), onTap: () { Navigator.of(bc).pop(); onRouteHere(); },
+              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Text('Route here', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800))))),
+        ]),
+      )));
+  }
+}
+
+class _NavAidPin extends StatelessWidget {
+  final String category;   // "red", "green", "amber"
+  final String name;
+  const _NavAidPin({required this.category, required this.name});
+  @override
+  Widget build(BuildContext context) {
+    final color = category == 'red' ? const Color(0xFFD93A2B)
+      : (category == 'green' ? const Color(0xFF1F8A5B) : const Color(0xFFF2A93B));
+    return Tooltip(
+      message: name,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 12, height: 12,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: color,
+            border: Border.all(color: Colors.white, width: 1.5),
+            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)])),
+        Container(width: 1.5, height: 8, color: color),
+      ]),
+    );
+  }
+}
+
+class _TidalCurrentArrow extends StatelessWidget {
+  final TidalCurrent sample;
+  const _TidalCurrentArrow({required this.sample});
+  @override
+  Widget build(BuildContext context) {
+    final v = sample.velocityKt.abs();
+    final slack = v < 0.15;
+    final color = slack ? const Color(0xFF708597)
+      : (sample.velocityKt >= 0 ? const Color(0xFF2E6F9E) : const Color(0xFF6B4FC6));
+    if (slack) {
+      return Tooltip(message: '${sample.stationName}\nSlack',
+        child: Container(width: 10, height: 10,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: color,
+            border: Border.all(color: Colors.white, width: 1.5))));
+    }
+    final size = math.min(40.0, 24 + v * 4);
+    return Tooltip(
+      message: '${sample.stationName}\n${sample.velocityKt >= 0 ? "Flood" : "Ebb"} · ${v.toStringAsFixed(1)} kn',
+      child: Transform.rotate(
+        angle: sample.directionDeg * math.pi / 180,
+        child: Icon(Icons.arrow_upward, color: color, size: size,
+          shadows: const [Shadow(color: Colors.black45, blurRadius: 3)]),
+      ),
+    );
+  }
 }
 
 class _TopHud extends StatelessWidget {
