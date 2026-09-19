@@ -14,6 +14,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -412,6 +413,34 @@ Future<List<TidePoint>> fetchTides(TideStation s) async {
       );
     }).toList();
   } catch (_) { return []; }
+}
+
+// Cosine-eased tide-curve interpolation — port of the PWA cosineCurve() at index.html:857-863.
+// Fills a smooth curve between consecutive hi/lo pairs by sampling every 30 minutes with
+// f = (1 - cos(π · Δt/Δ)) / 2. Feeds the SVG-like tide painter in TidesSheet.
+class _TideSample {
+  final DateTime t;
+  final double v;
+  const _TideSample(this.t, this.v);
+}
+List<_TideSample> cosineTideCurve(List<TidePoint> hilo) {
+  if (hilo.length < 2) return [];
+  final out = <_TideSample>[];
+  const step = Duration(minutes: 30);
+  for (int i = 0; i < hilo.length - 1; i++) {
+    final a = hilo[i], b = hilo[i + 1];
+    final total = b.t.difference(a.t).inMilliseconds;
+    if (total <= 0) continue;
+    var t = a.t;
+    while (t.isBefore(b.t)) {
+      final dt = t.difference(a.t).inMilliseconds / total;
+      final f = (1 - math.cos(math.pi * dt)) / 2;
+      out.add(_TideSample(t, a.v + (b.v - a.v) * f));
+      t = t.add(step);
+    }
+  }
+  if (hilo.isNotEmpty) out.add(_TideSample(hilo.last.t, hilo.last.v));
+  return out;
 }
 
 // ==================================================================================================
@@ -956,6 +985,9 @@ class _MapScreenState extends State<MapScreen> {
   List<NavAid> _navAids = [];
   TidalCurrent? _tidalCurrent;
 
+  // Batch B.6 tide unit preference — 'ft' or 'm', persisted like the PWA's tideUnit key.
+  String _tideUnit = 'ft';
+
   static const _homeCenter = LatLng(40.457, -74.15);
 
   @override
@@ -979,6 +1011,11 @@ class _MapScreenState extends State<MapScreen> {
       }
     });
     BoatProfile.load().then((p) { if (mounted) setState(() => _profile = p); });
+    // Restore last-chosen tide unit (ft/m).
+    SharedPreferences.getInstance().then((sp) {
+      final u = sp.getString('tideUnit');
+      if (u != null && (u == 'ft' || u == 'm') && mounted) setState(() => _tideUnit = u);
+    });
     _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) {
       final at = _me ?? _homeCenter;
       _refreshWeather(at);
@@ -1239,6 +1276,27 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  // Batch B.6 — polished tide dashboard, separated from the plain 7-day forecast sheet.
+  Future<void> _openTides() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => TidesSheet(
+        station: _tideStation, tides: _tides,
+        sunrise: _weather?.sunrise, sunset: _weather?.sunset,
+        initialUnit: _tideUnit,
+        onUnitChanged: (u) async {
+          setState(() => _tideUnit = u);
+          try {
+            final sp = await SharedPreferences.getInstance();
+            await sp.setString('tideUnit', u);
+          } catch (_) {}
+        },
+      ),
+    );
+  }
+
   // Placeholder for GPX import/export — real handler lands in Batch D.
   void _gpxPlaceholder() {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1272,6 +1330,7 @@ class _MapScreenState extends State<MapScreen> {
         onToggleFuel: (_) { Navigator.of(ctx).pop(); _toggleFuelRing(); },
         onToggleSmart: (_) { Navigator.of(ctx).pop(); setState(() => _smart = !_smart); _recomputeRoute(); },
         onOpenForecast: () { Navigator.of(ctx).pop(); _openForecast(); },
+        onOpenTides: () { Navigator.of(ctx).pop(); _openTides(); },
       )),
     );
   }
@@ -2051,10 +2110,11 @@ class MoreToolsSheet extends StatelessWidget {
   final bool docksOn, navAidsOn, anchorOn, fuelOn, smartOn;
   final ValueChanged<bool> onToggleDocks, onToggleNavAids, onToggleAnchor, onToggleFuel, onToggleSmart;
   final VoidCallback onOpenForecast;
+  final VoidCallback onOpenTides;
   const MoreToolsSheet({super.key,
     required this.docksOn, required this.navAidsOn, required this.anchorOn, required this.fuelOn, required this.smartOn,
     required this.onToggleDocks, required this.onToggleNavAids, required this.onToggleAnchor, required this.onToggleFuel, required this.onToggleSmart,
-    required this.onOpenForecast});
+    required this.onOpenForecast, required this.onOpenTides});
   @override
   Widget build(BuildContext context) {
     return SafeArea(child: Container(
@@ -2073,15 +2133,25 @@ class MoreToolsSheet extends StatelessWidget {
         _row(Icons.location_on, 'Nav aids', 'Channel buoys & beacons nearby (20 mi)', navAidsOn, onToggleNavAids),
         _row(Icons.route, 'Smart routes', 'Bend routes around land (experimental)', smartOn, onToggleSmart),
         const Divider(color: Color(0xFFDDE4EA), height: 24),
-        Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
-          child: InkWell(borderRadius: BorderRadius.circular(10), onTap: onOpenForecast,
-            child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(children: [
-                Icon(Icons.cloud_outlined, color: Color(0xFF2E6F9E)),
-                SizedBox(width: 8),
-                Text('7-day forecast & tides',
-                  style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 14)),
-              ])))),
+        Row(children: [
+          Expanded(child: Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
+            child: InkWell(borderRadius: BorderRadius.circular(10), onTap: onOpenTides,
+              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(children: [
+                  Icon(Icons.waves, color: Color(0xFF2E6F9E)),
+                  SizedBox(width: 8),
+                  Text('Tides', style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 14)),
+                ]))))),
+          const SizedBox(width: 8),
+          Expanded(child: Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
+            child: InkWell(borderRadius: BorderRadius.circular(10), onTap: onOpenForecast,
+              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(children: [
+                  Icon(Icons.cloud_outlined, color: Color(0xFF2E6F9E)),
+                  SizedBox(width: 8),
+                  Text('7-day forecast', style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 14)),
+                ]))))),
+        ]),
       ]),
     ));
   }
@@ -2704,6 +2774,403 @@ String _dayName(DateTime d) {
   return names[(d.weekday - 1) % 7];
 }
 String _pad(int n) => n.toString().padLeft(2, '0');
+
+// ==================================================================================================
+// Batch B.6 — tide dashboard: SVG-style curve + sunrise/sunset icons + ocean band + Now pill + hi/lo cards.
+// Ports index.html:865-963 (renderTide) and the visual language of the PWA screenshot.
+// ==================================================================================================
+
+class TidesSheet extends StatefulWidget {
+  final TideStation? station;
+  final List<TidePoint> tides;
+  final DateTime? sunrise, sunset;
+  final String initialUnit;
+  final ValueChanged<String>? onUnitChanged;
+  const TidesSheet({super.key, required this.station, required this.tides,
+    this.sunrise, this.sunset, this.initialUnit = 'ft', this.onUnitChanged});
+  @override
+  State<TidesSheet> createState() => _TidesSheetState();
+}
+
+class _TidesSheetState extends State<TidesSheet> {
+  late String _unit;
+  ui.Image? _sunrise, _sunset, _ocean;
+  @override
+  void initState() {
+    super.initState();
+    _unit = widget.initialUnit;
+    _loadImage('assets/icons/sunrise.png').then((i) { if (mounted) setState(() => _sunrise = i); });
+    _loadImage('assets/icons/sunset.png').then((i) { if (mounted) setState(() => _sunset = i); });
+    _loadImage('assets/icons/ocean.png').then((i) { if (mounted) setState(() => _ocean = i); });
+  }
+  Future<ui.Image?> _loadImage(String assetPath) async {
+    try {
+      final bd = await rootBundle.load(assetPath);
+      final codec = await ui.instantiateImageCodec(bd.buffer.asUint8List());
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } catch (_) { return null; }
+  }
+
+  void _setUnit(String u) {
+    setState(() => _unit = u);
+    widget.onUnitChanged?.call(u);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tides = widget.tides;
+    final curve = cosineTideCurve(tides);
+    final now = DateTime.now();
+    // Pick a 24-hour window centred (roughly) on now — matches the PWA's default view.
+    final t0 = curve.isNotEmpty
+        ? curve.firstWhere((s) => !s.t.isBefore(now.subtract(const Duration(hours: 6))), orElse: () => curve.first).t
+        : now.subtract(const Duration(hours: 6));
+    final t1 = t0.add(const Duration(hours: 24));
+    final windowCurve = curve.where((s) => !s.t.isBefore(t0) && !s.t.isAfter(t1)).toList();
+    final windowHilo = tides.where((p) => !p.t.isBefore(t0) && !p.t.isAfter(t1)).toList();
+    final nextFour = tides.where((p) => !p.t.isBefore(now)).take(4).toList();
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85, minChildSize: 0.5, maxChildSize: 0.95, expand: false,
+      builder: (ctx, scroll) => Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(begin: Alignment(0, -1), end: Alignment(0, 1),
+            colors: [Color(0xFF0B2740), Color(0xFF061A2D)]),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: ListView(controller: scroll, children: [
+          Center(child: Container(width: 40, height: 4, margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(color: const Color(0x66FFFFFF), borderRadius: BorderRadius.circular(2)))),
+          _header(),
+          const SizedBox(height: 10),
+          _legend(),
+          const SizedBox(height: 10),
+          AspectRatio(
+            aspectRatio: 360 / 220,
+            child: CustomPaint(painter: _TidePainter(
+              curve: windowCurve, hilo: windowHilo,
+              t0: t0, t1: t1, now: now,
+              sunrise: widget.sunrise, sunset: widget.sunset,
+              sunriseImg: _sunrise, sunsetImg: _sunset, oceanImg: _ocean,
+              unit: _unit,
+            )),
+          ),
+          const SizedBox(height: 14),
+          _hiLoCards(nextFour),
+          const SizedBox(height: 12),
+          _footer(),
+        ]),
+      ),
+    );
+  }
+
+  Widget _header() {
+    final s = widget.station;
+    final today = DateTime.now();
+    final dateStr = '${_dayName(today)}, ${_monthName(today.month)} ${today.day}, ${today.year}';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Container(width: 12, height: 12, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF1F8AE5))),
+        const SizedBox(width: 8),
+        Expanded(child: Text(s?.name ?? 'No station', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+        _unitToggle(),
+      ]),
+      if (s != null) Padding(padding: const EdgeInsets.only(top: 2),
+        child: Text('${s.lat.toStringAsFixed(4)}° N, ${s.lng.toStringAsFixed(4)}° W',
+          style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 12))),
+      Padding(padding: const EdgeInsets.only(top: 8),
+        child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(color: const Color(0xFF1466C7), borderRadius: BorderRadius.circular(10)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Text('📅  ', style: TextStyle(fontSize: 13)),
+            Text(dateStr, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
+          ]))),
+    ]);
+  }
+
+  Widget _unitToggle() {
+    Widget chip(String u) {
+      final on = _unit == u;
+      return Material(color: on ? const Color(0xFF1466C7) : Colors.transparent,
+        borderRadius: BorderRadius.circular(9),
+        child: InkWell(borderRadius: BorderRadius.circular(9), onTap: () => _setUnit(u),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Text(u, style: TextStyle(color: on ? Colors.white : const Color(0xFF9CC1DE),
+              fontWeight: FontWeight.w800, fontSize: 12)))));
+    }
+    return Container(padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(color: const Color(0x22FFFFFF), borderRadius: BorderRadius.circular(10)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [chip('ft'), chip('m')]));
+  }
+
+  Widget _legend() {
+    Widget dot(Color c, String l, String sub) => Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: c)),
+      const SizedBox(width: 6),
+      Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(l, style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 12)),
+        Text(sub, style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
+      ]),
+    ]);
+    return Wrap(spacing: 22, runSpacing: 6, children: [
+      dot(const Color(0xFF22C55E), 'Calm', 'Good conditions'),
+      dot(const Color(0xFFF2A93B), 'Fair', 'Use caution'),
+      dot(const Color(0xFFD93A2B), 'Rough', 'Challenging'),
+    ]);
+  }
+
+  Widget _hiLoCards(List<TidePoint> pts) {
+    Widget card(TidePoint p) {
+      final isHigh = p.type == 'H';
+      final color = isHigh ? const Color(0xFF35E96A) : const Color(0xFFFF5A55);
+      return Container(padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: const Color(0xFF0B2C47),
+          border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(16),
+          boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 14, offset: Offset(0, 6))]),
+        child: Row(children: [
+          Container(width: 34, height: 34,
+            decoration: BoxDecoration(shape: BoxShape.circle,
+              border: Border.all(color: color, width: 2)),
+            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 18)),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(isHigh ? 'High Tide' : 'Low Tide', style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11, fontWeight: FontWeight.w600)),
+            Text(_fmtTime(p.t), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+            Text('${_fmtV(p.v)} $_unit', style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11)),
+          ])),
+        ]));
+    }
+    if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
+      child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 12)));
+    return GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2, crossAxisSpacing: 9, mainAxisSpacing: 9, childAspectRatio: 2.2,
+      children: pts.map(card).toList());
+  }
+
+  Widget _footer() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Text('⚓ ', style: TextStyle(fontSize: 12)),
+        const Text('Plan Better. Boat Safer.', style: TextStyle(color: Color(0xEEFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
+        const Spacer(),
+        Text('≈ Tide Data · ${widget.station?.name ?? "—"}',
+          style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)),
+      ]),
+      const SizedBox(height: 4),
+      const Text('NOAA CO-OPS astronomical predictions · updates every 20 min',
+        style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
+    ]);
+  }
+
+  double _fmtVal(double v) => _unit == 'm' ? v * 0.3048 : v;
+  String _fmtV(double v) => _fmtVal(v).toStringAsFixed(1);
+}
+
+String _monthName(int m) {
+  const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return names[(m - 1).clamp(0, 11)];
+}
+
+class _TidePainter extends CustomPainter {
+  final List<_TideSample> curve;
+  final List<TidePoint> hilo;
+  final DateTime t0, t1, now;
+  final DateTime? sunrise, sunset;
+  final ui.Image? sunriseImg, sunsetImg, oceanImg;
+  final String unit;
+  _TidePainter({required this.curve, required this.hilo, required this.t0, required this.t1, required this.now,
+    this.sunrise, this.sunset, this.sunriseImg, this.sunsetImg, this.oceanImg, required this.unit});
+
+  double _u(double v) => unit == 'm' ? v * 0.3048 : v;
+  String _fv(double v) => '${_u(v).toStringAsFixed(1)} $unit';
+  double _rangeMs(DateTime t) => t.difference(t0).inMilliseconds.toDouble();
+  double _totalMs() => t1.difference(t0).inMilliseconds.toDouble();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (curve.isEmpty) {
+      _drawPlaceholder(canvas, size);
+      return;
+    }
+    // Same margin geometry as the PWA (index.html:886).
+    const mL = 30.0, mR = 10.0, mT = 42.0, mB = 26.0;
+    final plotW = size.width - mL - mR;
+    final plotH = size.height - mT - mB;
+    // Y range: pad vmin-2.3 / vmax+0.9 (index.html:888).
+    double vmin = curve.first.v, vmax = curve.first.v;
+    for (final s in curve) { if (s.v < vmin) vmin = s.v; if (s.v > vmax) vmax = s.v; }
+    vmin -= 2.3; vmax += 0.9;
+    if (vmax - vmin < 0.5) vmax = vmin + 0.5;
+    final base = mT + plotH;
+    double x(DateTime t) => mL + _rangeMs(t) / _totalMs() * plotW;
+    double y(double v) => mT + (1 - (v - vmin) / (vmax - vmin)) * plotH;
+
+    // 1) Background rounded clip (rx 6 like PWA plotClip).
+    final bgRect = Rect.fromLTWH(mL, mT, plotW, plotH);
+    final bgRRect = RRect.fromRectAndRadius(bgRect, const Radius.circular(8));
+    canvas.save();
+    canvas.clipRRect(bgRRect);
+    // Fill dark bg gradient
+    canvas.drawRect(bgRect, Paint()..shader = const LinearGradient(
+      begin: Alignment.topCenter, end: Alignment.bottomCenter,
+      colors: [Color(0xFF0B2A44), Color(0xFF061A2D)]).createShader(bgRect));
+
+    // 2) Grid lines every 2 tide units.
+    final grid = Paint()..color = const Color(0xFF1D4C6A).withOpacity(.5)..strokeWidth = 0.7;
+    final vFirst = (vmin / 2).ceil() * 2.0;
+    for (double v = vFirst; v <= vmax; v += 2) {
+      final gy = y(v);
+      canvas.drawLine(Offset(mL, gy), Offset(mL + plotW, gy), grid);
+    }
+    // X-ticks every 12 h (12 AM, 12 PM) — draw thin vertical guide.
+    var tick = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
+    while (tick.isBefore(t1)) {
+      if (!tick.isBefore(t0)) {
+        final gx = x(tick);
+        canvas.drawLine(Offset(gx, mT), Offset(gx, base), grid);
+      }
+      tick = tick.add(const Duration(hours: 12));
+    }
+
+    // 3) Sunrise/Sunset images at the mean-tide horizon.
+    final meanV = curve.fold<double>(0, (a, s) => a + s.v) / curve.length;
+    final horizonY = y(meanV);
+    void drawSun(ui.Image? img, DateTime? t) {
+      if (img == null || t == null) return;
+      if (t.isBefore(t0.add(const Duration(minutes: 3))) || t.isAfter(t1.subtract(const Duration(minutes: 3)))) return;
+      const sw = 78.0;
+      final sh = sw * img.height / img.width;
+      final xc = x(t);
+      // waterline at 80% down (PWA magic wl=0.80)
+      final rect = Rect.fromLTWH(xc - sw / 2, horizonY - sh * 0.80, sw, sh);
+      canvas.drawImageRect(img, Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+        rect, Paint()..color = Colors.white.withOpacity(.95));
+    }
+    drawSun(sunriseImg, sunrise);
+    drawSun(sunsetImg, sunset);
+
+    // 4) Ocean band under the horizon.
+    if (oceanImg != null) {
+      final rect = Rect.fromLTWH(mL, horizonY - 5, plotW, (base - horizonY) + 14);
+      canvas.drawImageRect(oceanImg!,
+        Rect.fromLTWH(0, 0, oceanImg!.width.toDouble(), oceanImg!.height.toDouble()),
+        rect, Paint()..color = Colors.white.withOpacity(.8));
+    }
+
+    // 5) Tide fill path (blue gradient).
+    final fillPath = Path()..moveTo(x(curve.first.t), base);
+    for (final s in curve) { fillPath.lineTo(x(s.t), y(s.v)); }
+    fillPath.lineTo(x(curve.last.t), base);
+    fillPath.close();
+    canvas.drawPath(fillPath, Paint()..shader = LinearGradient(
+      begin: Alignment.topCenter, end: Alignment.bottomCenter,
+      colors: [const Color(0x5933B8FF), const Color(0x291476A8), const Color(0x0506273F)],
+      stops: const [0, .55, 1]).createShader(bgRect));
+
+    // 6) Tide curve — cyan with a soft glow (draw twice, second thicker/blurred).
+    final curvePath = Path()..moveTo(x(curve.first.t), y(curve.first.v));
+    for (int i = 1; i < curve.length; i++) { curvePath.lineTo(x(curve[i].t), y(curve[i].v)); }
+    final glow = Paint()..color = const Color(0xFF2DB7FF).withOpacity(.55)
+      ..style = PaintingStyle.stroke..strokeWidth = 6
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawPath(curvePath, glow);
+    canvas.drawPath(curvePath, Paint()..color = const Color(0xFF2DB7FF)
+      ..style = PaintingStyle.stroke..strokeWidth = 3.2..strokeCap = StrokeCap.round);
+
+    canvas.restore();   // end clipRRect
+
+    // 7) Hi/Lo dots + labels (unclipped so labels can peek above).
+    double? lastLx;
+    for (final p in hilo) {
+      if (p.t.isBefore(t0) || p.t.isAfter(t1)) continue;
+      final px = x(p.t), py = y(p.v);
+      final isH = p.type == 'H';
+      final color = isH ? const Color(0xFF23DD67) : const Color(0xFFFF514F);
+      canvas.drawCircle(Offset(px, py), 5.5, Paint()..color = color);
+      canvas.drawCircle(Offset(px, py), 5.5,
+        Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.6);
+      // labels (collision guard: skip if within 50 px of the previous label)
+      if (lastLx == null || (px - lastLx).abs() >= 50) {
+        _text(canvas, _fv(p.v), Offset(px, py - 22), 11, FontWeight.w700, color, center: true);
+        _text(canvas, _fmtTime(p.t), Offset(px, py + 12), 10, FontWeight.w600, const Color(0xFF9CC1DE), center: true);
+        lastLx = px;
+      }
+    }
+
+    // 8) Now indicator — dashed vertical + circle + pill (only if now is inside window).
+    if (!now.isBefore(t0) && !now.isAfter(t1)) {
+      final nx = x(now).clamp(mL + 8, mL + plotW - 8);
+      // find sample nearest now
+      _TideSample nearest = curve.first;
+      var bestDt = curve.first.t.difference(now).abs();
+      for (final s in curve) {
+        final dt = s.t.difference(now).abs();
+        if (dt < bestDt) { bestDt = dt; nearest = s; }
+      }
+      final ny = y(nearest.v);
+      // dashed vertical line
+      final dash = Paint()..color = const Color(0xFFD7EFFF).withOpacity(.7)..strokeWidth = 1;
+      double yD = ny;
+      while (yD < base) {
+        canvas.drawLine(Offset(nx.toDouble(), yD), Offset(nx.toDouble(), math.min(yD + 4, base)), dash);
+        yD += 8;
+      }
+      // circle on the curve
+      canvas.drawCircle(Offset(nx.toDouble(), ny), 6, Paint()..color = const Color(0xFF146DD7));
+      canvas.drawCircle(Offset(nx.toDouble(), ny), 6,
+        Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.6);
+      // pill above the circle
+      final tipX = nx.clamp(mL + 30, mL + plotW - 30).toDouble();
+      final tipY = math.max<double>(mT + 16, ny - 34);
+      final pillRect = RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(tipX, tipY), width: 66, height: 32),
+        const Radius.circular(9));
+      canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF1271E7));
+      canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF58A7FF)
+        ..style = PaintingStyle.stroke..strokeWidth = 1.2);
+      _text(canvas, 'Now', Offset(tipX, tipY - 10), 8.5, FontWeight.w700, Colors.white, center: true);
+      _text(canvas, _fv(nearest.v), Offset(tipX, tipY + 3), 11, FontWeight.w800, Colors.white, center: true);
+    }
+
+    // 9) Y-axis label and x-tick times.
+    _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 9, FontWeight.w600, const Color(0xAA9CC1DE), center: true, rotate: -math.pi / 2);
+    var tt = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
+    while (tt.isBefore(t1)) {
+      if (!tt.isBefore(t0)) {
+        final gx = x(tt);
+        _text(canvas, tt.hour == 0 ? '12 AM' : '${tt.hour == 12 ? 12 : tt.hour % 12} ${tt.hour < 12 ? "AM" : "PM"}',
+          Offset(gx, base + 12), 9, FontWeight.w600, const Color(0xFFA9CAE2), center: true);
+      }
+      tt = tt.add(const Duration(hours: 12));
+    }
+  }
+
+  void _text(Canvas canvas, String text, Offset at, double size, FontWeight w, Color c,
+      {bool center = false, double rotate = 0}) {
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: TextStyle(color: c, fontSize: size, fontWeight: w)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    canvas.save();
+    canvas.translate(at.dx, at.dy);
+    if (rotate != 0) canvas.rotate(rotate);
+    tp.paint(canvas, center ? Offset(-tp.width / 2, -tp.height / 2) : Offset.zero);
+    canvas.restore();
+  }
+
+  void _drawPlaceholder(Canvas canvas, Size size) {
+    final tp = TextPainter(
+      text: const TextSpan(text: 'Loading tide predictions…',
+        style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 12)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2));
+  }
+
+  @override
+  bool shouldRepaint(covariant _TidePainter old) => old.curve != curve || old.now != now
+    || old.unit != unit || old.sunriseImg != sunriseImg || old.sunsetImg != sunsetImg || old.oceanImg != oceanImg;
+}
 
 // ==================================================================================================
 // helpers

@@ -24,3 +24,6 @@ flutter:
     - assets/icons/boat.png
     - assets/icons/boat-3d.png
     - assets/icons/mob-buoy.png
+    - assets/icons/sunrise.png
+    - assets/icons/sunset.png
+    - assets/icons/ocean.png
