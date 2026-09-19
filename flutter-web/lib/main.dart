@@ -3058,7 +3058,7 @@ class _TidePainter extends CustomPainter {
     }
 
     // 5) Tide fill path (blue gradient).
-    final fillPath = Path()..moveTo(x(curve.first.t), base);
+    final fillPath = ui.Path()..moveTo(x(curve.first.t), base);
     for (final s in curve) { fillPath.lineTo(x(s.t), y(s.v)); }
     fillPath.lineTo(x(curve.last.t), base);
     fillPath.close();
@@ -3068,7 +3068,7 @@ class _TidePainter extends CustomPainter {
       stops: const [0, .55, 1]).createShader(bgRect));
 
     // 6) Tide curve — cyan with a soft glow (draw twice, second thicker/blurred).
-    final curvePath = Path()..moveTo(x(curve.first.t), y(curve.first.v));
+    final curvePath = ui.Path()..moveTo(x(curve.first.t), y(curve.first.v));
     for (int i = 1; i < curve.length; i++) { curvePath.lineTo(x(curve[i].t), y(curve[i].v)); }
     final glow = Paint()..color = const Color(0xFF2DB7FF).withOpacity(.55)
       ..style = PaintingStyle.stroke..strokeWidth = 6
