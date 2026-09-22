@@ -1613,9 +1613,10 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ])),
           // Tap-catcher — a transparent full-screen layer that closes the sheet when the user
-          // taps outside it. Rendered ONLY while the sheet is expanded. Placed BEFORE the
-          // right rail + HUD + sheet so those still receive taps (Stack hit-tests in reverse).
-          if (_sheetExpanded)
+          // taps outside it. Rendered ONLY while the sheet is expanded AND we're not in
+          // waypoint-picking mode (Goto). When picking, taps must go through to the map so
+          // the pin drops in one gesture — the map's onTap already handles collapse-on-drop.
+          if (_sheetExpanded && !_picking)
             Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => _sheetExpanded = false))),
           Positioned(right: 12, bottom: 140, child: _RightRail(
