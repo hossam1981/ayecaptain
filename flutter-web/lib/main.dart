@@ -1565,8 +1565,12 @@ class _MapScreenState extends State<MapScreen> {
               ))),
             ]),
           ),
-          // HUD (never tilts — always flat)
-          Positioned(top: 12, left: 12, right: 12, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          // HUD (never tilts — always flat). On wide screens (≥ 820 px) pin the column to the
+          // left with a 460 px cap so it doesn't stretch to the right rail — matches the PWA.
+          Positioned(top: 12, left: 12,
+            right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
+            width: MediaQuery.sizeOf(context).width >= 820 ? 460 : null,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             _TopHud(
               speedKt: _speedKt, status: _statusText, accuracyM: _accuracyM,
               base: _base, onBaseChange: (b) => setState(() => _base = b),
@@ -1609,7 +1613,10 @@ class _MapScreenState extends State<MapScreen> {
             onMob: _toggleMob,
             onMoreTools: _openMoreTools,
           )),
-          Positioned(left: 12, right: 12, bottom: 12, child: _BottomSheet(
+          Positioned(left: 12, bottom: 12,
+            right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
+            width: MediaQuery.sizeOf(context).width >= 820 ? 460 : null,
+            child: _BottomSheet(
             weather: _weather, routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
             waypointCount: _waypoints.length, picking: _picking,
             unverified: _routeUnverified, navigating: _navigating,
