@@ -1015,7 +1015,16 @@ class _MapScreenState extends State<MapScreen> {
         });
       }
     });
-    BoatProfile.load().then((p) { if (mounted) setState(() => _profile = p); });
+    BoatProfile.load().then((p) {
+      if (!mounted) return;
+      setState(() => _profile = p);
+      // PWA index.html:500 — after 1.5 s on first launch (no saved profile), open the modal.
+      if (p.name.isEmpty && p.lengthFt == null) {
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted && _profile.name.isEmpty && _profile.lengthFt == null) _openBoatProfile();
+        });
+      }
+    });
     // Restore last-chosen tide unit (ft/m).
     SharedPreferences.getInstance().then((sp) {
       final u = sp.getString('tideUnit');
@@ -1253,8 +1262,9 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // If the current weather is over any of the boat's profile limits (or ≥75% of them), return a
-  // human sentence saying so — matches the PWA's boatwarn.
-  String? _boatWarning() {
+  // (text, severity) pair. Severity 'over' → red banner, 'near' → amber. Matches the PWA
+  // `#boatwarn` default red (index.html:224) with `.a` amber class for the near case.
+  ({String text, String severity})? _boatWarning() {
     final w = _weather;
     if (w == null) return null;
     final over = <String>[], near = <String>[];
@@ -1267,8 +1277,8 @@ class _MapScreenState extends State<MapScreen> {
     chk(w.gustKt, _profile.gust, (v) => 'gusts ${v.round()} kn');
     chk(w.waveFt, _profile.wave, (v) => 'waves ${v.toStringAsFixed(1)} ft');
     final who = _profile.name.isEmpty ? 'your boat' : _profile.name;
-    if (over.isNotEmpty) return 'Too rough for $who right now: ${over.join(", ")}';
-    if (near.isNotEmpty) return "Near $who's limit: ${near.join(", ")}";
+    if (over.isNotEmpty) return (text: 'Too rough for $who right now: ${over.join(", ")}', severity: 'over');
+    if (near.isNotEmpty) return (text: "Near $who's limit: ${near.join(", ")}", severity: 'near');
     return null;
   }
 
@@ -1532,7 +1542,8 @@ class _MapScreenState extends State<MapScreen> {
                     Marker(
                       point: _waypoints[i],
                       width: 32, height: 32,
-                      child: _WaypointPin(isDest: i == _waypoints.length - 1),
+                      child: _WaypointPin(isDest: i == _waypoints.length - 1,
+                        grade: _gradeAt(_waypoints[i])),
                     ),
                   if (_mobPoint != null)
                     Marker(
@@ -1585,8 +1596,6 @@ class _MapScreenState extends State<MapScreen> {
             _TopHud(
               speedKt: _speedKt, status: _statusText, accuracyM: _accuracyM,
               base: _base, onBaseChange: (b) => setState(() => _base = b),
-              boatName: _profile.name.isEmpty ? 'Set up your boat' : _profile.name,
-              onEditBoat: _openBoatProfile,
             ),
             if (_alert != null) ...[
               const SizedBox(height: 8),
@@ -1594,7 +1603,7 @@ class _MapScreenState extends State<MapScreen> {
             ],
             if (_boatWarning() != null) ...[
               const SizedBox(height: 8),
-              _BoatWarningBanner(text: _boatWarning()!),
+              _BoatWarningBanner(text: _boatWarning()!.text, severity: _boatWarning()!.severity),
             ],
             if (_mobPoint != null && _me != null) ...[
               const SizedBox(height: 8),
@@ -1626,7 +1635,8 @@ class _MapScreenState extends State<MapScreen> {
               _follow = !_follow;
               if (_follow && _me != null) _controller.move(_me!, math.max(_controller.camera.zoom, 14));
             }),
-            onGoto: () => setState(() { _picking = !_picking; }),
+            // PWA index.html:1413 — turning picking on closes the sheet so the map is unobstructed.
+            onGoto: () => setState(() { _picking = !_picking; if (_picking) _sheetExpanded = false; }),
             onLocate: _startGps,
             onMob: _toggleMob,
             onMoreTools: _openMoreTools,
@@ -1894,12 +1904,13 @@ class _NavBar extends StatelessWidget {
 
 class _WaypointPin extends StatelessWidget {
   final bool isDest;
-  const _WaypointPin({required this.isDest});
+  final String grade;   // 'g' = calm/green, 'a' = fair/amber, 'r' = rough/red
+  const _WaypointPin({required this.isDest, this.grade = 'a'});
   @override
   Widget build(BuildContext context) => Icon(
         Icons.location_on,
         size: isDest ? 32 : 26,
-        color: isDest ? const Color(0xFFD93A2B) : const Color(0xFFF2A93B),
+        color: _gradeColors[grade] ?? const Color(0xFFF2A93B),
         shadows: const [Shadow(color: Colors.black45, blurRadius: 4)],
       );
 }
@@ -2008,10 +2019,8 @@ class _TopHud extends StatelessWidget {
   final double? accuracyM;
   final Basemap base;
   final ValueChanged<Basemap> onBaseChange;
-  final String boatName;
-  final VoidCallback onEditBoat;
   const _TopHud({required this.speedKt, required this.status, required this.accuracyM, required this.base,
-      required this.onBaseChange, required this.boatName, required this.onEditBoat});
+      required this.onBaseChange});
   @override
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
@@ -2028,33 +2037,12 @@ class _TopHud extends StatelessWidget {
               Text(status, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
             ]),
           ),
-          const SizedBox(width: 10),
-          Flexible(child: _BoatChip(name: boatName, onTap: onEditBoat)),
+          // PWA has no separate boat chip in the top HUD — boat identity lives in the sheet
+          // header only (index.html speed HUD has just kn + status line).
           const Spacer(),
           _BaseSwitcher(base: base, onChange: onBaseChange),
         ]),
       ]);
-}
-
-class _BoatChip extends StatelessWidget {
-  final String name;
-  final VoidCallback onTap;
-  const _BoatChip({required this.name, required this.onTap});
-  @override
-  Widget build(BuildContext context) => Material(
-    color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12),
-    child: InkWell(borderRadius: BorderRadius.circular(12), onTap: onTap,
-      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.directions_boat, color: Color(0xFFF2A93B), size: 18),
-          const SizedBox(width: 6),
-          Flexible(child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13))),
-          const SizedBox(width: 6),
-          const Icon(Icons.edit, color: Color(0xCCFFFFFF), size: 14),
-        ]),
-      ),
-    ),
-  );
 }
 
 class _BaseSwitcher extends StatelessWidget {
@@ -2103,8 +2091,9 @@ class _RightRail extends StatelessWidget {
         const SizedBox(height: 8),
         _mobButton(),
       ]);
+  // PWA rail: default WHITE 44 px circle + sea icon; active flips to sea bg + white icon.
   Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip}) => Material(
-        color: active ? const Color(0xFF2E6F9E) : const Color(0xFFF4F8FA),
+        color: active ? const Color(0xFF2E6F9E) : Colors.white,
         shape: const CircleBorder(),
         elevation: 3,
         child: Tooltip(
@@ -2326,7 +2315,7 @@ class _BottomSheet extends StatefulWidget {
   final double fuelGal;
   final bool picking, unverified, navigating;
   final VoidCallback onClearRoute, onUndoRoute, onStart, onStop, onGpx, onEditProfile;
-  final String? warningText;
+  final ({String text, String severity})? warningText;
   final BestWindow? window;
   final List<HourlyPoint> hourly;
   final List<DailyForecast> daily;
@@ -2345,6 +2334,7 @@ class _BottomSheet extends StatefulWidget {
 
 class _BottomSheetState extends State<_BottomSheet> {
   int _dayIdx = 0;             // 0 = today, 1..6 = following days
+  double _dragDy = 0;          // accumulated vertical drag for swipe-to-toggle
   bool get _expanded => widget.expanded;
   void _setExpanded(bool v) => widget.onExpandedChanged(v);
   @override
@@ -2352,17 +2342,30 @@ class _BottomSheetState extends State<_BottomSheet> {
     // PWA: `max-height:86vh` (index.html:79) — cap the expanded body so the sheet doesn't
     // swallow the whole screen, and wrap in a scroll view so the user can reach every row.
     final maxExpandedH = MediaQuery.sizeOf(context).height * 0.86;
-    return Container(
+    return GestureDetector(
+      // PWA index.html:1974 swipe handler — dy<-40 opens, dy>40 closes.
+      onVerticalDragStart: (_) => _dragDy = 0,
+      onVerticalDragUpdate: (d) => _dragDy += d.delta.dy,
+      onVerticalDragEnd: (_) {
+        if (_dragDy < -40 && !_expanded) _setExpanded(true);
+        else if (_dragDy > 40 && _expanded) _setExpanded(false);
+        _dragDy = 0;
+      },
+      child: Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(14)),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Grab handle — matches the PWA #grab (index.html:81) — a 40x5 rounded rect at 28% opacity.
+        // Grab handle — mirrors the PWA #grab (index.html:81-82): 40×5 pill inside a 24 px
+        // tap zone. PWA uses `rgba(15,42,68,.28)` on a light paper sheet; our sheet is dark
+        // navy, so we bump the opacity so the pill is still readable.
         Center(child: InkWell(
           onTap: () => _setExpanded(!_expanded),
           borderRadius: BorderRadius.circular(3),
-          child: Container(width: 40, height: 5,
-            margin: const EdgeInsets.only(top: 2, bottom: 8),
-            decoration: BoxDecoration(color: const Color(0x47FFFFFF), borderRadius: BorderRadius.circular(3))),
+          child: SizedBox(width: 60, height: 24, child: Center(
+            child: Container(width: 40, height: 5,
+              decoration: BoxDecoration(color: const Color(0x66FFFFFF),
+                borderRadius: BorderRadius.circular(3))),
+          )),
         )),
         _routeRow(),
         // header — "Set up your boat" / boat summary + Edit + expand/collapse
@@ -2383,15 +2386,25 @@ class _BottomSheetState extends State<_BottomSheet> {
             ]),
           ),
         ),
-        if (widget.warningText != null) _BoatWarningBanner(text: widget.warningText!),
-        if (_expanded) Flexible(child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: maxExpandedH),
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-              children: _expandedBody()),
-          ),
-        )),
+        if (widget.warningText != null) _BoatWarningBanner(
+          text: widget.warningText!.text, severity: widget.warningText!.severity),
+        // PWA index.html:79 `transition: transform .28s cubic-bezier(.2,.8,.2,1)`.
+        AnimatedSize(
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: _expanded
+            ? ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxExpandedH),
+                child: SingleChildScrollView(
+                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+                    children: _expandedBody()),
+                ),
+              )
+            : const SizedBox.shrink(),
+        ),
       ]),
+      ),
     );
   }
 
@@ -2405,34 +2418,41 @@ class _BottomSheetState extends State<_BottomSheet> {
     return bits.join(' · ');
   }
 
+  // PWA index.html:315-322 : LEFT compact one-line summary that ellipses,
+  // RIGHT small buttons pinned. Never wraps to a second line.
   Widget _routeRow() {
-    return Row(children: [
-      Expanded(child: widget.waypointCount == 0
-          ? Text(widget.picking ? 'Tap the map to drop a waypoint' : 'No route — tap Go-to to plan one',
-              style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13))
-          : Row(children: [
-              _stat('Route${widget.unverified ? ' ⚠' : ''}', '${widget.routeNm.toStringAsFixed(1)} nm'),
-              const SizedBox(width: 14),
-              _stat('ETA', widget.etaMin >= 60 ? '${widget.etaMin ~/ 60}h ${widget.etaMin % 60}m' : '${math.max(1, widget.etaMin)} min'),
-              const SizedBox(width: 14),
-              _stat('Points', '${widget.waypointCount}'),
-              if (widget.fuelGal > 0) ...[
-                const SizedBox(width: 14),
-                _stat('Fuel', widget.fuelGal < 10 ? '${widget.fuelGal.toStringAsFixed(1)} gal' : '${widget.fuelGal.round()} gal'),
-              ],
-            ]),
-      ),
-      if (widget.waypointCount > 0) ...[
+    if (widget.waypointCount == 0) {
+      return Text(widget.picking ? 'Tap the map to drop a waypoint' : 'No route — tap Go-to to plan one',
+        style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13));
+    }
+    final eta = widget.etaMin >= 60
+      ? '${widget.etaMin ~/ 60}h ${widget.etaMin % 60}m'
+      : '${math.max(1, widget.etaMin)} min';
+    final fuel = widget.fuelGal > 0
+      ? ' · ~${widget.fuelGal < 10 ? widget.fuelGal.toStringAsFixed(1) : widget.fuelGal.round()} gal'
+      : '';
+    final summary = '${widget.waypointCount} pts · '
+      '${widget.routeNm.toStringAsFixed(1)} nm · $eta$fuel';
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        if (widget.unverified) const Padding(padding: EdgeInsets.only(right: 4),
+          child: Text('⚠', style: TextStyle(color: Color(0xFFF2A93B), fontSize: 14))),
+        Expanded(child: Text(summary,
+          maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700))),
+      ]),
+      const SizedBox(height: 8),
+      Row(children: [
         _bigBtn(widget.navigating ? 'Stop' : 'Start',
           widget.navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
           widget.navigating ? widget.onStop : widget.onStart),
         const SizedBox(width: 6),
-        _smallBtn('Undo', widget.onUndoRoute),
+        Expanded(child: _smallBtn('Undo', widget.onUndoRoute)),
         const SizedBox(width: 6),
-        _smallBtn('GPX', widget.onGpx),
+        Expanded(child: _smallBtn('GPX', widget.onGpx)),
         const SizedBox(width: 6),
-        _smallBtn('Clear', widget.onClearRoute),
-      ],
+        Expanded(child: _smallBtn('Clear', widget.onClearRoute)),
+      ]),
     ]);
   }
 
@@ -2459,16 +2479,24 @@ class _BottomSheetState extends State<_BottomSheet> {
     final isNight = w.sunset != null && DateTime.now().isAfter(w.sunset!);
     final icon = isNight ? '🌙' : _wxIcon(w.weatherCode);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-        Text(icon, style: const TextStyle(fontSize: 34)),
+      // PWA: temp 42 pt weight-700 + condition small top-right (index.html #wxhead).
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(icon, style: const TextStyle(fontSize: 38)),
         const SizedBox(width: 8),
-        Text('${w.tempF?.round() ?? '—'}°', style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w800, height: 1)),
-        const Text('F', style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 15, fontWeight: FontWeight.w700)),
+        Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
+          child: Text('${w.tempF?.round() ?? '—'}°',
+            style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, height: 1))),
+        const SizedBox(width: 2),
+        const Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
+          child: Text('F', style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 15, fontWeight: FontWeight.w700))),
         const Spacer(),
-        Text(_condText(w.weatherCode), style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13, fontWeight: FontWeight.w600)),
+        Padding(padding: const EdgeInsets.only(top: 2),
+          child: Text(_condText(w.weatherCode),
+            style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 14, fontWeight: FontWeight.w600))),
       ]),
       const SizedBox(height: 10),
-      Wrap(spacing: 14, runSpacing: 8, children: [
+      // PWA grid gap 12 px.
+      Wrap(spacing: 12, runSpacing: 8, children: [
         _wxCell('Wind', '${w.windKt?.round() ?? '—'} kn ${_dirName(w.windDirDeg?.toDouble() ?? 0)}'),
         _wxCell('Gust', '${w.gustKt?.round() ?? '—'} kn'),
         if (w.sunset != null) _wxCell('Sunset', _fmtTime(w.sunset!)),
@@ -2501,7 +2529,8 @@ class _BottomSheetState extends State<_BottomSheet> {
         color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(9),
         child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            child: Text(label, textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
           ),
         ),
       );
@@ -2570,17 +2599,19 @@ class _DayTabs extends StatelessWidget {
       final t = daily.length > i ? daily[i].date : DateTime.now().add(Duration(days: i));
       labels.add(_weekday(t));
     }
+    // PWA: 8 px gap between pills; inactive text at ~55% opacity.
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(children: List.generate(labels.length, (i) {
         final sel = i == selected;
-        return Padding(padding: const EdgeInsets.only(right: 6),
-          child: Material(color: sel ? const Color(0xFF1466C7) : const Color(0x22FFFFFF),
+        return Padding(padding: const EdgeInsets.only(right: 8),
+          child: Material(color: sel ? const Color(0xFF1466C7) : Colors.transparent,
             borderRadius: BorderRadius.circular(999),
             child: InkWell(borderRadius: BorderRadius.circular(999), onTap: () => onSelect(i),
               child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Text(labels[i], style: TextStyle(color: sel ? Colors.white : const Color(0xCCFFFFFF),
-                  fontWeight: FontWeight.w800, fontSize: 12.5))))),
+                child: Text(labels[i], style: TextStyle(
+                  color: sel ? Colors.white : const Color(0xFFFFFFFF).withOpacity(.55),
+                  fontWeight: FontWeight.w700, fontSize: 13))))),
         );
       })),
     );
@@ -2646,44 +2677,71 @@ class _HourlyTable extends StatelessWidget {
 // Batch B widgets (alerts, MOB, anchor HUD, forecast sheet)
 // ==================================================================================================
 
-class _AlertBanner extends StatelessWidget {
+// PWA index.html:62-63 `#alert small{max-height:0}` collapses to a headline; `.open` reveals
+// the full description. Tap toggles.
+class _AlertBanner extends StatefulWidget {
   final NwsAlert alert;
   final VoidCallback onDismiss;
   const _AlertBanner({required this.alert, required this.onDismiss});
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    decoration: BoxDecoration(
-      color: alert.isSevere ? const Color(0xE6D93A2B) : const Color(0xE6F2A93B),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Row(children: [
-      const Icon(Icons.warning_amber_rounded, color: Colors.white),
-      const SizedBox(width: 8),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        Text(alert.event, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
-        if (alert.headline.isNotEmpty)
-          Text(alert.headline, maxLines: 2, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11)),
-      ])),
-      IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 18), onPressed: onDismiss, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 30, minHeight: 30)),
-    ]),
-  );
+  State<_AlertBanner> createState() => _AlertBannerState();
+}
+class _AlertBannerState extends State<_AlertBanner> {
+  bool _open = false;
+  @override
+  Widget build(BuildContext context) {
+    final bg = widget.alert.isSevere ? const Color(0xE6D93A2B) : const Color(0xE6F2A93B);
+    return Material(color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => setState(() => _open = !_open),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
+          child: Row(children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(widget.alert.event, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+              if (widget.alert.headline.isNotEmpty)
+                Text(widget.alert.headline,
+                  maxLines: _open ? null : 2,
+                  overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis,
+                  style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11)),
+              if (_open && widget.alert.description.isNotEmpty) Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(widget.alert.description,
+                  style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11, height: 1.35)),
+              ),
+            ])),
+            IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 18),
+              onPressed: widget.onDismiss, padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 30, minHeight: 30)),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 class _BoatWarningBanner extends StatelessWidget {
   final String text;
-  const _BoatWarningBanner({required this.text});
+  final String severity;   // 'over' → red (default), 'near' → amber (PWA `.a` class)
+  const _BoatWarningBanner({required this.text, this.severity = 'over'});
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(color: const Color(0xE6F2A93B), borderRadius: BorderRadius.circular(12)),
-    child: Row(children: [
-      const Icon(Icons.info_outline, color: Colors.white, size: 18),
-      const SizedBox(width: 8),
-      Expanded(child: Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
-    ]),
-  );
+  Widget build(BuildContext context) {
+    // PWA index.html:224 `#boatwarn{background:var(--red)}`; amber only for the `.a` class.
+    final bg = severity == 'near' ? const Color(0xE6F2A93B) : const Color(0xE6D93A2B);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
+      child: Row(children: [
+        const Icon(Icons.info_outline, color: Colors.white, size: 18),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
+      ]),
+    );
+  }
 }
 
 class _MobPin extends StatelessWidget {
