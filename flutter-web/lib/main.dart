@@ -988,6 +988,11 @@ class _MapScreenState extends State<MapScreen> {
   // Batch B.6 tide unit preference — 'ft' or 'm', persisted like the PWA's tideUnit key.
   String _tideUnit = 'ft';
 
+  // Bottom-sheet expanded state — lifted from _BottomSheet so a full-screen tap-catcher can
+  // collapse it. Matches the PWA behaviour where any waypoint-drop or picking mode closes
+  // the sheet (index.html:1413, 1606).
+  bool _sheetExpanded = false;
+
   static const _homeCenter = LatLng(40.457, -74.15);
 
   @override
@@ -1336,8 +1341,13 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _handleMapTap(TapPosition _, LatLng ll) {
-    if (!_picking) return;
-    setState(() => _waypoints.add(ll));
+    if (!_picking) {
+      // PWA: any interaction with the map area closes the expanded sheet
+      // (index.html:1413 clears on picking mode, :1606 clears on route drop).
+      if (_sheetExpanded) setState(() => _sheetExpanded = false);
+      return;
+    }
+    setState(() { _waypoints.add(ll); _sheetExpanded = false; });
     _recomputeRoute();
     _gradeRouteWaypoints();   // fetch a per-point forecast in the background so segments colour up
   }
@@ -1566,10 +1576,11 @@ class _MapScreenState extends State<MapScreen> {
             ]),
           ),
           // HUD (never tilts — always flat). On wide screens (≥ 820 px) pin the column to the
-          // left with a 460 px cap so it doesn't stretch to the right rail — matches the PWA.
+          // left with a 390 px cap so it doesn't stretch to the right rail — matches the PWA
+          // #sheet desktop width at index.html:273.
           Positioned(top: 12, left: 12,
             right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
-            width: MediaQuery.sizeOf(context).width >= 820 ? 460 : null,
+            width: MediaQuery.sizeOf(context).width >= 820 ? 390 : null,
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             _TopHud(
               speedKt: _speedKt, status: _statusText, accuracyM: _accuracyM,
@@ -1601,6 +1612,12 @@ class _MapScreenState extends State<MapScreen> {
                   cruiseKt: _profile.cruise, gal: _fuelGal(), onDone: _stopRide),
             ],
           ])),
+          // Tap-catcher — a transparent full-screen layer that closes the sheet when the user
+          // taps outside it. Rendered ONLY while the sheet is expanded. Placed BEFORE the
+          // right rail + HUD + sheet so those still receive taps (Stack hit-tests in reverse).
+          if (_sheetExpanded)
+            Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _sheetExpanded = false))),
           Positioned(right: 12, bottom: 140, child: _RightRail(
             follow: _follow, picking: _picking, gpsOn: _gpsSub != null,
             mobOn: _mobPoint != null,
@@ -1613,9 +1630,10 @@ class _MapScreenState extends State<MapScreen> {
             onMob: _toggleMob,
             onMoreTools: _openMoreTools,
           )),
+          // PWA desktop CSS (index.html:273): `#sheet{left:12px;right:auto;width:390px;...}`
           Positioned(left: 12, bottom: 12,
             right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
-            width: MediaQuery.sizeOf(context).width >= 820 ? 460 : null,
+            width: MediaQuery.sizeOf(context).width >= 820 ? 390 : null,
             child: _BottomSheet(
             weather: _weather, routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
             waypointCount: _waypoints.length, picking: _picking,
@@ -1626,6 +1644,8 @@ class _MapScreenState extends State<MapScreen> {
             onGpx: _gpxPlaceholder, onEditProfile: _openBoatProfile,
             warningText: _boatWarning(), window: bestWindow(_hourly, _profile),
             hourly: _hourly, daily: _daily, profile: _profile,
+            expanded: _sheetExpanded,
+            onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
           )),
         ]),
       ),
@@ -2310,29 +2330,43 @@ class _BottomSheet extends StatefulWidget {
   final List<HourlyPoint> hourly;
   final List<DailyForecast> daily;
   final BoatProfile profile;
+  final bool expanded;
+  final ValueChanged<bool> onExpandedChanged;
   const _BottomSheet({required this.weather, required this.routeNm, required this.etaMin, required this.fuelGal,
     required this.waypointCount, required this.picking, required this.unverified, required this.navigating,
     required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop,
     required this.onGpx, required this.onEditProfile,
     required this.warningText, required this.window, required this.hourly, required this.daily,
-    required this.profile});
+    required this.profile, required this.expanded, required this.onExpandedChanged});
   @override
   State<_BottomSheet> createState() => _BottomSheetState();
 }
 
 class _BottomSheetState extends State<_BottomSheet> {
   int _dayIdx = 0;             // 0 = today, 1..6 = following days
-  bool _expanded = false;      // sheet peek collapsed by default until the user taps the header
+  bool get _expanded => widget.expanded;
+  void _setExpanded(bool v) => widget.onExpandedChanged(v);
   @override
   Widget build(BuildContext context) {
+    // PWA: `max-height:86vh` (index.html:79) — cap the expanded body so the sheet doesn't
+    // swallow the whole screen, and wrap in a scroll view so the user can reach every row.
+    final maxExpandedH = MediaQuery.sizeOf(context).height * 0.86;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(14)),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Grab handle — matches the PWA #grab (index.html:81) — a 40x5 rounded rect at 28% opacity.
+        Center(child: InkWell(
+          onTap: () => _setExpanded(!_expanded),
+          borderRadius: BorderRadius.circular(3),
+          child: Container(width: 40, height: 5,
+            margin: const EdgeInsets.only(top: 2, bottom: 8),
+            decoration: BoxDecoration(color: const Color(0x47FFFFFF), borderRadius: BorderRadius.circular(3))),
+        )),
         _routeRow(),
         // header — "Set up your boat" / boat summary + Edit + expand/collapse
         InkWell(
-          onTap: () => setState(() => _expanded = !_expanded),
+          onTap: () => _setExpanded(!_expanded),
           child: Padding(
             padding: const EdgeInsets.only(top: 10, bottom: 6),
             child: Row(children: [
@@ -2349,7 +2383,13 @@ class _BottomSheetState extends State<_BottomSheet> {
           ),
         ),
         if (widget.warningText != null) _BoatWarningBanner(text: widget.warningText!),
-        if (_expanded) ..._expandedBody(),
+        if (_expanded) Flexible(child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxExpandedH),
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+              children: _expandedBody()),
+          ),
+        )),
       ]),
     );
   }
