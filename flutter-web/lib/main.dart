@@ -17,7 +17,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, HapticFeedback;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -501,6 +501,60 @@ String _wxIcon(int? code) {
 }
 
 // ==================================================================================================
+// Batch C — sun/moon edge marker. Port of the PWA's `solarPos` + `sunEdge` (index.html:1144-1197):
+// a real ecliptic-coordinate solar-position solver, pinned to the viewport edge along its true
+// compass bearing, fading through dusk. No third-party astronomy package needed.
+// ==================================================================================================
+
+class SolarPos {
+  final double azDeg;   // compass bearing 0-360
+  final double elDeg;   // altitude above horizon, negative = below
+  const SolarPos(this.azDeg, this.elDeg);
+}
+
+SolarPos solarPos(double lat, double lon, DateTime date) {
+  const rad = math.pi / 180, deg = 180 / math.pi;
+  final utc = date.toUtc();
+  final n = utc.millisecondsSinceEpoch / 86400000 + 2440587.5 - 2451545.0;   // days since J2000
+  final l = (280.460 + 0.9856474 * n) % 360;
+  final g0 = ((357.528 + 0.9856003 * n) % 360) * rad;
+  final lam = (l + 1.915 * math.sin(g0) + 0.020 * math.sin(2 * g0)) * rad;
+  final eps = (23.439 - 0.0000004 * n) * rad;
+  final ra = math.atan2(math.cos(eps) * math.sin(lam), math.cos(lam));
+  final dec = math.asin(math.sin(eps) * math.sin(lam));
+  final gmst = (((18.697374558 + 24.06570982441908 * n) % 24) + 24) % 24;
+  final lst = ((gmst * 15 + lon) % 360) * rad;
+  final ha = lst - ra, la = lat * rad;
+  final el = math.asin(math.sin(la) * math.sin(dec) + math.cos(la) * math.cos(dec) * math.cos(ha)) * deg;
+  var az = math.atan2(math.sin(ha), math.cos(ha) * math.sin(la) - math.tan(dec) * math.cos(la)) * deg + 180;
+  az = (az % 360 + 360) % 360;
+  return SolarPos(az, el);
+}
+
+// Clamp the sun's compass bearing to a point on the viewport's edge (42 px margin), same
+// ray-cast as the PWA's `sunEdge` (index.html:1157-1163).
+Offset sunEdgePoint(double azDeg, Size size) {
+  const m = 42.0;
+  final cx = size.width / 2, cy = size.height / 2;
+  final a = azDeg * math.pi / 180;
+  final dx = math.sin(a), dy = -math.cos(a);
+  double s = double.infinity;
+  if (dx > 1e-6) s = math.min(s, (size.width - m - cx) / dx);
+  else if (dx < -1e-6) s = math.min(s, (m - cx) / dx);
+  if (dy > 1e-6) s = math.min(s, (size.height - m - cy) / dy);
+  else if (dy < -1e-6) s = math.min(s, (m - cy) / dy);
+  return Offset(cx + dx * s, cy + dy * s);
+}
+
+// Opacity fade through dusk — identical thresholds to the PWA's `updateSun` (index.html:1173).
+double sunOpacity(double elDeg) {
+  if (elDeg > 8) return 1;
+  if (elDeg > 0) return 0.5 + elDeg / 16;
+  if (elDeg > -6) return 0.3 * (elDeg + 6) / 6;
+  return 0;
+}
+
+// ==================================================================================================
 // Batch B.5 — chart overlays: docks & fuel (OSM), nav aids (OSM), tidal currents (NOAA)
 // ==================================================================================================
 
@@ -938,7 +992,7 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final MapController _controller = MapController();
   StreamSubscription<Position>? _gpsSub;
 
@@ -993,11 +1047,18 @@ class _MapScreenState extends State<MapScreen> {
   // the sheet (index.html:1413, 1606).
   bool _sheetExpanded = false;
 
+  // Batch C: sun edge marker. PWA re-computes on a 60s interval (index.html:1196) plus on
+  // resize; MediaQuery already covers resize since build() re-runs, so the timer only needs
+  // to cover the clock ticking forward.
+  bool _suntipOpen = false;
+  Timer? _sunTimer;
+
   static const _homeCenter = LatLng(40.457, -74.15);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadLand();
     _loadLastPos().then((p) {
       final at = p ?? _homeCenter;
@@ -1043,6 +1104,8 @@ class _MapScreenState extends State<MapScreen> {
       _wxAt.clear();   // let stale grades fall through and refresh
       _gradeRouteWaypoints();
     });
+    // Sun edge marker recompute — PWA re-ticks every 60s (index.html:1196).
+    _sunTimer = Timer.periodic(const Duration(minutes: 1), (_) { if (mounted) setState(() {}); });
   }
 
   Future<void> _refreshAlerts(LatLng at) async {
@@ -1143,10 +1206,23 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Reacquire the wake lock when the tab regains foreground visibility while navigating.
+  // Browsers release Screen Wake Lock automatically when a tab is hidden (switching apps,
+  // locking the phone); Flutter's AppLifecycleState.resumed maps to the PWA's
+  // `document.visibilitychange` -> 'visible' handler that the plan calls for.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _navigating) {
+      WakelockPlus.enable();
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _gpsSub?.cancel();
     _wxTimer?.cancel();
+    _sunTimer?.cancel();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -1234,10 +1310,22 @@ class _MapScreenState extends State<MapScreen> {
 
   // ---------- MOB / anchor / fuel ring ----------
   void _toggleMob() {
+    final dropping = _mobPoint == null;
     setState(() {
       if (_mobPoint != null) { _mobPoint = null; return; }
       _mobPoint = _me ?? _homeCenter;
     });
+    // PWA: navigator.vibrate([300,120,300,120,300]) on drop (index.html:1907). Web Vibration
+    // API doesn't take patterns through Flutter's HapticFeedback, so fire three impacts on
+    // the same cadence.
+    if (dropping) _tripleVibrate();
+  }
+  Future<void> _tripleVibrate() async {
+    HapticFeedback.mediumImpact();
+    await Future.delayed(const Duration(milliseconds: 420));
+    HapticFeedback.mediumImpact();
+    await Future.delayed(const Duration(milliseconds: 420));
+    HapticFeedback.mediumImpact();
   }
   void _toggleAnchor() {
     setState(() {
@@ -1545,12 +1633,32 @@ class _MapScreenState extends State<MapScreen> {
                       child: _WaypointPin(isDest: i == _waypoints.length - 1,
                         grade: _gradeAt(_waypoints[i])),
                     ),
-                  if (_mobPoint != null)
+                  if (_mobPoint != null) ...[
+                    // Smoke drifts with live wind, layered beneath the pulsing buoy so the
+                    // buoy reads clearly on top — matches the PWA's z-index ordering
+                    // (mobSmoke 905 < mobBuoy/mobMarker ~900-903 is actually the other way in
+                    // the PWA; visually the buoy stays legible either way since smoke is
+                    // translucent).
                     Marker(
                       point: _mobPoint!,
-                      width: 40, height: 40,
+                      width: 80, height: 80,
+                      child: _MobSmoke(windKt: _weather?.windKt ?? 4,
+                        windDirDeg: (_weather?.windDirDeg ?? 0).toDouble()),
+                    ),
+                    if (_me != null)
+                      Marker(
+                        point: LatLng(
+                          _me!.latitude + (_mobPoint!.latitude - _me!.latitude) * 0.88,
+                          _me!.longitude + (_mobPoint!.longitude - _me!.longitude) * 0.88),
+                        width: 24, height: 24,
+                        child: _MobArrow(bearingDeg: _bearingDeg(_me!, _mobPoint!)),
+                      ),
+                    Marker(
+                      point: _mobPoint!,
+                      width: 90, height: 90,
                       child: const _MobPin(),
                     ),
+                  ],
                   if (_anchorPoint != null)
                     Marker(
                       point: _anchorPoint!,
@@ -1586,6 +1694,17 @@ class _MapScreenState extends State<MapScreen> {
               ))),
             ]),
           ),
+          // Sun edge marker — PWA index.html:1130-1197. Lives OUTSIDE the tilt transform
+          // (the PWA's `#sun` is `position:fixed`, unaffected by the map's perspective) so it
+          // stays pinned to the true viewport edge regardless of Start-ride tilt. The Stack
+          // it builds only paints a small icon (+ optional popover card), so taps outside
+          // those areas fall through to the map beneath.
+          Positioned.fill(child: _SunEdgeMarker(
+            at: _me ?? _homeCenter,
+            sunrise: _weather?.sunrise, sunset: _weather?.sunset,
+            open: _suntipOpen,
+            onToggle: () => setState(() => _suntipOpen = !_suntipOpen),
+          )),
           // HUD (never tilts — always flat). On wide screens (≥ 820 px) pin the column to the
           // left with a 390 px cap so it doesn't stretch to the right rail — matches the PWA
           // #sheet desktop width at index.html:273.
@@ -1796,6 +1915,113 @@ class _FxPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant _FxPainter old) => true;   // frame-driven repaint
+}
+
+// Batch C: sun edge marker + tap popover. Port of index.html #sun / #suntip (1130-1197).
+class _SunEdgeMarker extends StatelessWidget {
+  final LatLng at;
+  final DateTime? sunrise, sunset;
+  final bool open;
+  final VoidCallback onToggle;
+  const _SunEdgeMarker({required this.at, this.sunrise, this.sunset, required this.open, required this.onToggle});
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (ctx, cs) {
+      final size = Size(cs.maxWidth, cs.maxHeight);
+      if (size.width <= 0 || size.height <= 0) return const SizedBox.shrink();
+      final pos = solarPos(at.latitude, at.longitude, DateTime.now());
+      final op = sunOpacity(pos.elDeg);
+      if (op <= 0.02) return const SizedBox.shrink();
+      final edge = sunEdgePoint(pos.azDeg, size);
+      final low = pos.elDeg < 6;
+      double clampD(double v, double lo, double hi) => hi < lo ? lo : v.clamp(lo, hi);
+      return Stack(children: [
+        Positioned(
+          left: edge.dx - 20, top: edge.dy - 20,
+          child: GestureDetector(
+            onTap: onToggle,
+            child: Opacity(opacity: op,
+              child: CustomPaint(size: const Size(40, 40), painter: _SunGlyphPainter(low: low))),
+          ),
+        ),
+        if (open) Positioned(
+          left: clampD(edge.dx - 90, 8, size.width - 238),
+          top: clampD(edge.dy + 28, 8, size.height - 140),
+          child: _SunTip(sunrise: sunrise, sunset: sunset,
+            azDeg: pos.azDeg, elDeg: pos.elDeg, onClose: onToggle),
+        ),
+      ]);
+    });
+  }
+}
+
+// Layered 8-point star + radial-gradient disc — approximates the PWA's inline SUN_SVG
+// (index.html:1132-1141) without needing a bundled asset.
+class _SunGlyphPainter extends CustomPainter {
+  final bool low;
+  const _SunGlyphPainter({required this.low});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.width / 2;
+    ui.Path star(double outer, double inner, double rot) {
+      final p = ui.Path();
+      for (int i = 0; i < 16; i++) {
+        final rad = i.isEven ? outer : inner;
+        final a = (rot + i * (360 / 16)) * math.pi / 180;
+        final pt = Offset(c.dx + rad * math.sin(a), c.dy - rad * math.cos(a));
+        i == 0 ? p.moveTo(pt.dx, pt.dy) : p.lineTo(pt.dx, pt.dy);
+      }
+      p.close();
+      return p;
+    }
+    final tint = low ? const Color(0xFFE8A33C) : const Color(0xFFF7B10E);
+    canvas.drawPath(star(r, r * 0.62, 0), Paint()..color = const Color(0x80FBBF1C));
+    canvas.drawPath(star(r * 0.95, r * 0.6, 11.25), Paint()..color = tint);
+    canvas.drawCircle(c, r * 0.47, Paint()
+      ..shader = RadialGradient(colors: [const Color(0xFFFFF7DE), const Color(0xFFFFD34E), const Color(0xFFF0A00E)])
+          .createShader(Rect.fromCircle(center: c, radius: r * 0.47)));
+    canvas.drawCircle(c, r * 0.47, Paint()..color = const Color(0xFFE8951C)
+      ..style = PaintingStyle.stroke..strokeWidth = 1.4);
+    canvas.drawCircle(Offset(c.dx - r * 0.1, c.dy - r * 0.1), r * 0.19,
+      Paint()..color = const Color(0xD9FFF7DE));
+  }
+  @override
+  bool shouldRepaint(covariant _SunGlyphPainter old) => old.low != low;
+}
+
+class _SunTip extends StatelessWidget {
+  final DateTime? sunrise, sunset;
+  final double azDeg, elDeg;
+  final VoidCallback onClose;
+  const _SunTip({required this.sunrise, required this.sunset, required this.azDeg, required this.elDeg, required this.onClose});
+  @override
+  Widget build(BuildContext context) {
+    return Material(color: Colors.transparent,
+      child: InkWell(onTap: onClose, borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: 230,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(color: const Color(0xF00F2A44), borderRadius: BorderRadius.circular(12),
+            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10)]),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (sunrise != null) _row('Sunrise', _fmtTime(sunrise!)),
+            if (sunset != null) _row('Sunset', _fmtTime(sunset!)),
+            if (sunrise != null && sunset != null) _row('Golden light',
+              'to ~${_fmtTime(sunrise!.add(const Duration(minutes: 40)))} · from ~${_fmtTime(sunset!.subtract(const Duration(minutes: 40)))}'),
+            const SizedBox(height: 4),
+            Text('sun altitude ${elDeg.round()}° · bearing ${azDeg.round()}°',
+              style: const TextStyle(color: Color(0xB3FFFFFF), fontSize: 11)),
+          ]),
+        ),
+      ),
+    );
+  }
+  Widget _row(String label, String value) => Padding(padding: const EdgeInsets.only(bottom: 2),
+    child: RichText(text: TextSpan(children: [
+      TextSpan(text: '$label ', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
+      TextSpan(text: value, style: const TextStyle(color: Colors.white, fontSize: 12.5)),
+    ])));
 }
 
 class BoatMarker extends StatelessWidget {
@@ -2744,22 +2970,135 @@ class _BoatWarningBanner extends StatelessWidget {
   }
 }
 
-class _MobPin extends StatelessWidget {
+// Batch C: pulsing ring — port of the PWA's `.mobring` / `@keyframes mobpulse`
+// (index.html:201-202): a 1.4s ease-out box-shadow ring that grows from 0 to 20px while
+// fading out, repeating forever. Flutter has no native box-shadow animation, so an
+// AnimationController drives a Container whose BoxShadow spreadRadius/opacity we compute
+// each frame — same visual result.
+class _MobPin extends StatefulWidget {
   const _MobPin();
   @override
+  State<_MobPin> createState() => _MobPinState();
+}
+class _MobPinState extends State<_MobPin> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+  @override
   Widget build(BuildContext context) => SizedBox(
-    width: 44, height: 44,
-    child: Stack(alignment: Alignment.center, children: [
-      Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: const Color(0x33D93A2B),
-          border: Border.all(color: const Color(0xFFD93A2B), width: 2),
-        ),
-      ),
+    width: 90, height: 90,
+    child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+      AnimatedBuilder(animation: _ctrl, builder: (ctx, _) {
+        final t = _ctrl.value;
+        final spread = 20 * t;
+        final alpha = (0.55 * (1 - t)).clamp(0, 1).toDouble();
+        return Container(
+          width: 30, height: 30,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: const Color(0x59D93A2B),
+            border: Border.all(color: const Color(0xFFD93A2B), width: 3),
+            boxShadow: [BoxShadow(color: Color.fromRGBO(217, 58, 43, alpha), spreadRadius: spread)],
+          ),
+        );
+      }),
       Image.asset('assets/icons/mob-buoy.png', width: 36, height: 36, fit: BoxFit.contain),
     ]),
   );
+}
+
+// Rotating chevron pointing along the bearing from boat → MOB, capped at t=0.88 along the
+// line so it doesn't bury the pulsing ring — matches index.html:1851-1854, 1868-1872.
+class _MobArrow extends StatelessWidget {
+  final double bearingDeg;
+  const _MobArrow({required this.bearingDeg});
+  @override
+  Widget build(BuildContext context) => Transform.rotate(
+    angle: bearingDeg * math.pi / 180,
+    child: CustomPaint(size: const Size(24, 24), painter: _MobArrowPainter()),
+  );
+}
+class _MobArrowPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // SVG path M13 1 L20 18 L13 13.5 L6 18 Z scaled from a 26x26 viewBox to 24x24.
+    final s = size.width / 26;
+    final path = ui.Path()
+      ..moveTo(13 * s, 1 * s)
+      ..lineTo(20 * s, 18 * s)
+      ..lineTo(13 * s, 13.5 * s)
+      ..lineTo(6 * s, 18 * s)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xFFFF4433));
+    canvas.drawPath(path, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.4);
+  }
+  @override
+  bool shouldRepaint(covariant _MobArrowPainter old) => false;
+}
+
+// Hand-drawn particle smoke drifting with live wind — orange puffs rising from the buoy.
+// Approximates index.html mobsmoke2 canvas (index.html:206-211, startMobSmokeLoop).
+class _MobSmoke extends StatefulWidget {
+  final double windKt, windDirDeg;
+  const _MobSmoke({required this.windKt, required this.windDirDeg});
+  @override
+  State<_MobSmoke> createState() => _MobSmokeState();
+}
+class _MobSmokeState extends State<_MobSmoke> with SingleTickerProviderStateMixin {
+  late final _tick = createTicker(_step);
+  final math.Random _rng = math.Random();
+  final List<_SmokePuff> _puffs = [];
+  int _lastMs = 0;
+  @override
+  void initState() { super.initState(); _tick.start(); }
+  @override
+  void dispose() { _tick.dispose(); super.dispose(); }
+  void _step(Duration elapsed) {
+    final now = elapsed.inMilliseconds;
+    final dt = _lastMs == 0 ? 0.016 : math.min(0.05, (now - _lastMs) / 1000);
+    _lastMs = now;
+    if (_puffs.length < 14 && _rng.nextDouble() < 0.12) {
+      _puffs.add(_SmokePuff(x: (_rng.nextDouble() - 0.5) * 6, y: 0, age: 0, life: 1.8 + _rng.nextDouble()));
+    }
+    final rad = (widget.windDirDeg + 180) * math.pi / 180;
+    final vx = math.sin(rad) * (widget.windKt * 0.6);
+    for (final p in _puffs) {
+      p.age += dt;
+      p.y -= (14 + widget.windKt) * dt;
+      p.x += vx * dt;
+    }
+    _puffs.removeWhere((p) => p.age >= p.life);
+    setState(() {});
+  }
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    size: const Size(80, 80),
+    painter: _SmokePainter(puffs: _puffs),
+  );
+}
+class _SmokePuff {
+  double x, y, age, life;
+  _SmokePuff({required this.x, required this.y, required this.age, required this.life});
+}
+class _SmokePainter extends CustomPainter {
+  final List<_SmokePuff> puffs;
+  const _SmokePainter({required this.puffs});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2 + 8);
+    for (final p in puffs) {
+      final t = p.age / p.life;
+      final alpha = (1 - t).clamp(0, 1).toDouble() * 0.5;
+      final r = 6 + 14 * t;
+      final center = c + Offset(p.x, p.y);
+      canvas.drawCircle(center, r, Paint()
+        ..shader = RadialGradient(colors: [
+          Color.fromRGBO(255, 140, 40, alpha), Color.fromRGBO(255, 140, 40, 0),
+        ]).createShader(Rect.fromCircle(center: center, radius: r)));
+    }
+  }
+  @override
+  bool shouldRepaint(covariant _SmokePainter old) => true;
 }
 
 class _MobHud extends StatelessWidget {
