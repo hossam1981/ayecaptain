@@ -232,12 +232,14 @@ class BoatProfile {
   double? lengthFt;
   BoatType type;
   double cruise, wind, gust, wave, burn, tank;
+  double? draftFt;   // PWA index.html:425 — not yet used by any grading logic, just carried/persisted
   BoatProfile({this.name = '', this.lengthFt, this.type = BoatType.bowrider,
     this.cruise = 24.0, this.wind = 13.0, this.gust = 19.0, this.wave = 1.8,
-    this.burn = 0.0, this.tank = 0.0});
+    this.burn = 0.0, this.tank = 0.0, this.draftFt});
   Map<String, dynamic> toJson() => {
     'name': name, 'lengthFt': lengthFt, 'type': type.name,
     'cruise': cruise, 'wind': wind, 'gust': gust, 'wave': wave, 'burn': burn, 'tank': tank,
+    'draftFt': draftFt,
   };
   static BoatProfile fromJson(Map<String, dynamic> j) => BoatProfile(
     name: (j['name'] as String?) ?? '',
@@ -249,6 +251,7 @@ class BoatProfile {
     wave: (j['wave'] as num?)?.toDouble() ?? 1.8,
     burn: (j['burn'] as num?)?.toDouble() ?? 0.0,
     tank: (j['tank'] as num?)?.toDouble() ?? 0.0,
+    draftFt: (j['draftFt'] as num?)?.toDouble(),
   );
   static Future<BoatProfile> load() async {
     try {
@@ -1041,7 +1044,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   double? _accuracyM;
   bool _follow = true;
   bool _picking = false;
-  bool _smart = true;    // smart-routes toggle (default ON in Flutter build — the pre-baked data is bundled)
+  // Default OFF — matches the PWA exactly (index.html:1391: "Off by default: legs are plain
+  // straight lines, exactly as the app worked before"). An earlier Flutter-only rationale for
+  // defaulting this on predates the "copy the PWA identically" rule; corrected here.
+  bool _smart = false;
   bool _navigating = false;
   int _legIdx = 0;       // index into _waypoints of the current target leg (for nav bar + auto-advance)
   final List<_TrailPoint> _trail = [];
@@ -1729,6 +1735,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 windDirDeg: (_weather?.windDirDeg ?? 0).toDouble(),
                 precipPct: _weather?.precipPct ?? 0,
                 boatSpeedKt: _speedKt,
+                lightBasemap: _base == Basemap.map || _base == Basemap.chart,
               ))),
             ]),
           ),
@@ -1839,8 +1846,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 // which is nontrivial with `flutter_map` and will land in Batch C.
 class FxCanvas extends StatefulWidget {
   final double windKt, gustKt, windDirDeg, precipPct, boatSpeedKt;
+  final bool lightBasemap;   // Map/Chart = true (dark streaks), Sat/Dark = false (white streaks)
   const FxCanvas({super.key, required this.windKt, required this.gustKt, required this.windDirDeg,
-    required this.precipPct, required this.boatSpeedKt});
+    required this.precipPct, required this.boatSpeedKt, this.lightBasemap = true});
   @override
   State<FxCanvas> createState() => _FxCanvasState();
 }
@@ -1920,7 +1928,7 @@ class _FxCanvasState extends State<FxCanvas> with SingleTickerProviderStateMixin
     if (s != _size) _size = s;
     return CustomPaint(painter: _FxPainter(
       streaks: _streaks, drops: _drops, windDirDeg: widget.windDirDeg,
-      precipPct: widget.precipPct,
+      precipPct: widget.precipPct, lightBasemap: widget.lightBasemap,
     ), size: s);
   });
 }
@@ -1937,22 +1945,29 @@ class _FxPainter extends CustomPainter {
   final List<_WindStreak> streaks;
   final List<_RainDrop> drops;
   final double windDirDeg, precipPct;
-  _FxPainter({required this.streaks, required this.drops, required this.windDirDeg, required this.precipPct});
+  final bool lightBasemap;
+  _FxPainter({required this.streaks, required this.drops, required this.windDirDeg, required this.precipPct,
+    required this.lightBasemap});
   @override
   void paint(Canvas canvas, Size size) {
     // Streaks — direction the wind is BLOWING TOWARD (dir + 180).
     final rad = (windDirDeg + 180) * math.pi / 180;
     final dx = math.sin(rad), dy = -math.cos(rad);
-    final streakPaint = Paint()..strokeWidth = 1.3..strokeCap = StrokeCap.round;
+    // PWA index.html:1071: dark navy 50% on Map/Chart, white 70% on Sat/Dark — Flutter's
+    // earlier white-only ~5-13% opacity was nearly invisible against a detailed basemap.
+    final streakColor = lightBasemap
+      ? const Color(0xFF0F2A44).withOpacity(.5)
+      : Colors.white.withOpacity(.7);
+    final streakPaint = Paint()..color = streakColor..strokeWidth = 1.3..strokeCap = StrokeCap.round;
     for (final s in streaks) {
-      streakPaint.color = Colors.white.withOpacity(.16 * s.alpha);
       canvas.drawLine(Offset(s.x, s.y),
         Offset(s.x + dx * s.length, s.y + dy * s.length), streakPaint);
     }
     // Rain drops — small vertical lines with a slight wind lean.
     if (precipPct > 0) {
+      // Was capped at .36 max (barely visible) — PWA rain reaches up to .85 (index.html:1082).
       final rainPaint = Paint()..strokeWidth = 1.4..strokeCap = StrokeCap.round
-        ..color = Colors.white.withOpacity(math.min(.36, .12 + precipPct / 600));
+        ..color = const Color(0xFF78AADC).withOpacity(math.min(.75, .3 + precipPct / 130));
       for (final d in drops) {
         canvas.drawLine(Offset(d.x, d.y),
           Offset(d.x + dx * 3, d.y + 8), rainPaint);
@@ -1994,8 +2009,15 @@ class _SunEdgeMarker extends StatelessWidget {
             left: edge.dx - 20, top: edge.dy - 20,
             child: GestureDetector(
               onTap: onToggle,
+              // Always painted on top of the HUD/sheet (see the Stack ordering at the call
+              // site) so a soft shadow plate reads as an intentional floating badge rather
+              // than a glitch when it happens to land over banner text.
               child: Opacity(opacity: op,
-                child: CustomPaint(size: const Size(40, 40), painter: _SunGlyphPainter(low: low))),
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 10, spreadRadius: 1)]),
+                  child: CustomPaint(size: const Size(40, 40), painter: _SunGlyphPainter(low: low)),
+                )),
             ),
           ),
           if (open) Positioned(
@@ -2018,7 +2040,11 @@ class _SunEdgeMarker extends StatelessWidget {
           child: GestureDetector(
             onTap: onToggle,
             child: Opacity(opacity: op,
-              child: CustomPaint(size: const Size(40, 40), painter: _MoonGlyphPainter(illum: moon.illum))),
+              child: DecoratedBox(
+                decoration: const BoxDecoration(shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 10, spreadRadius: 1)]),
+                child: CustomPaint(size: const Size(40, 40), painter: _MoonGlyphPainter(illum: moon.illum)),
+              )),
           ),
         ),
         if (open) Positioned(
@@ -2593,16 +2619,20 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
         ]),
         const SizedBox(height: 12),
         Row(children: [
+          // PWA pairs Cruise + Draft on one row (index.html:424-425).
           Expanded(child: _field('Cruise (kn)', p.cruise, (v) => setState(() => p.cruise = v), suffix: 'kn')),
           const SizedBox(width: 12),
-          Expanded(child: Material(color: const Color(0xFF2E6F9E), borderRadius: BorderRadius.circular(8),
-            child: InkWell(borderRadius: BorderRadius.circular(8),
-              onTap: () => setState(() => p.applyTypeDefaults(p.type)),
-              child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
-                child: Center(child: Text('Use defaults for type', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)))),
-            ),
-          )),
+          Expanded(child: _field('Draft (ft)', p.draftFt ?? 0,
+            (v) => setState(() => p.draftFt = v > 0 ? v : null), suffix: 'ft')),
         ]),
+        const SizedBox(height: 12),
+        Material(color: const Color(0xFF2E6F9E), borderRadius: BorderRadius.circular(8),
+          child: InkWell(borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => p.applyTypeDefaults(p.type)),
+            child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
+              child: Center(child: Text('Use defaults for type', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)))),
+          ),
+        ),
         const SizedBox(height: 20),
         const Text('Comfort limits — Bayside warns when forecasts exceed these',
             style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
