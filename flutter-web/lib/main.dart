@@ -509,7 +509,8 @@ String _wxIcon(int? code) {
 class SolarPos {
   final double azDeg;   // compass bearing 0-360
   final double elDeg;   // altitude above horizon, negative = below
-  const SolarPos(this.azDeg, this.elDeg);
+  final double eclipticLonDeg;   // geocentric ecliptic longitude — feeds the moon-phase calc
+  const SolarPos(this.azDeg, this.elDeg, this.eclipticLonDeg);
 }
 
 SolarPos solarPos(double lat, double lon, DateTime date) {
@@ -528,8 +529,45 @@ SolarPos solarPos(double lat, double lon, DateTime date) {
   final el = math.asin(math.sin(la) * math.sin(dec) + math.cos(la) * math.cos(dec) * math.cos(ha)) * deg;
   var az = math.atan2(math.sin(ha), math.cos(ha) * math.sin(la) - math.tan(dec) * math.cos(la)) * deg + 180;
   az = (az % 360 + 360) % 360;
-  return SolarPos(az, el);
+  final eclipticLonDeg = ((lam * deg) % 360 + 360) % 360;
+  return SolarPos(az, el, eclipticLonDeg);
 }
+
+// Standard low-precision lunar position (mean orbital elements, ~0.3° accuracy) — structurally
+// mirrors solarPos above (same LST/hour-angle/az/el formulas) so the two share one convention.
+// Illumination fraction comes from the geocentric elongation between the Moon's and Sun's
+// ecliptic longitudes — accurate enough to pick a crescent/gibbous/full glyph.
+class MoonPos {
+  final double azDeg, elDeg, illum;
+  const MoonPos(this.azDeg, this.elDeg, this.illum);
+}
+
+MoonPos moonPos(double lat, double lon, DateTime date, double sunEclipticLonDeg) {
+  const rad = math.pi / 180, deg = 180 / math.pi;
+  final utc = date.toUtc();
+  final n = utc.millisecondsSinceEpoch / 86400000 + 2440587.5 - 2451545.0;
+  final lMoon = (218.316 + 13.176396 * n) % 360;
+  final mMoon = ((134.963 + 13.064993 * n) % 360) * rad;
+  final f = ((93.272 + 13.229350 * n) % 360) * rad;
+  final lam = (lMoon + 6.289 * math.sin(mMoon)) * rad;
+  final bet = 5.128 * math.sin(f) * rad;
+  final eps = (23.439 - 0.0000004 * n) * rad;
+  final ra = math.atan2(math.sin(lam) * math.cos(eps) - math.tan(bet) * math.sin(eps), math.cos(lam));
+  final dec = math.asin(math.sin(bet) * math.cos(eps) + math.cos(bet) * math.sin(eps) * math.sin(lam));
+  final gmst = (((18.697374558 + 24.06570982441908 * n) % 24) + 24) % 24;
+  final lst = ((gmst * 15 + lon) % 360) * rad;
+  final ha = lst - ra, la = lat * rad;
+  final el = math.asin(math.sin(la) * math.sin(dec) + math.cos(la) * math.cos(dec) * math.cos(ha)) * deg;
+  var az = math.atan2(math.sin(ha), math.cos(ha) * math.sin(la) - math.tan(dec) * math.cos(la)) * deg + 180;
+  az = (az % 360 + 360) % 360;
+  final elongDeg = ((lam * deg - sunEclipticLonDeg) % 360 + 360) % 360;
+  final illum = (1 - math.cos(elongDeg * rad)) / 2;
+  return MoonPos(az, el, illum);
+}
+
+// Reuses the same dusk-fade curve as the sun (no PWA reference — the moon marker is a
+// deliberate enhancement beyond the PWA, per the user's explicit call).
+double moonOpacity(double elDeg) => sunOpacity(elDeg);
 
 // Clamp the sun's compass bearing to a point on the viewport's edge (42 px margin), same
 // ray-cast as the PWA's `sunEdge` (index.html:1157-1163).
@@ -1918,6 +1956,10 @@ class _FxPainter extends CustomPainter {
 }
 
 // Batch C: sun edge marker + tap popover. Port of index.html #sun / #suntip (1130-1197).
+// Switches between the sun glyph (day) and a phase-accurate moon glyph (night) using the
+// same day/night threshold the PWA's weather header already uses for its icon swap
+// (index.html:677: `night = solarPos(...).el < -0.83`). The moon marker itself is a
+// deliberate enhancement beyond the PWA — the PWA's #sun simply disappears at night.
 class _SunEdgeMarker extends StatelessWidget {
   final LatLng at;
   final DateTime? sunrise, sunset;
@@ -1929,30 +1971,82 @@ class _SunEdgeMarker extends StatelessWidget {
     return LayoutBuilder(builder: (ctx, cs) {
       final size = Size(cs.maxWidth, cs.maxHeight);
       if (size.width <= 0 || size.height <= 0) return const SizedBox.shrink();
-      final pos = solarPos(at.latitude, at.longitude, DateTime.now());
-      final op = sunOpacity(pos.elDeg);
-      if (op <= 0.02) return const SizedBox.shrink();
-      final edge = sunEdgePoint(pos.azDeg, size);
-      final low = pos.elDeg < 6;
+      final now = DateTime.now();
+      final sun = solarPos(at.latitude, at.longitude, now);
+      final isNight = sun.elDeg < -0.83;
       double clampD(double v, double lo, double hi) => hi < lo ? lo : v.clamp(lo, hi);
+
+      if (!isNight) {
+        final op = sunOpacity(sun.elDeg);
+        if (op <= 0.02) return const SizedBox.shrink();
+        final edge = sunEdgePoint(sun.azDeg, size);
+        final low = sun.elDeg < 6;
+        return Stack(children: [
+          Positioned(
+            left: edge.dx - 20, top: edge.dy - 20,
+            child: GestureDetector(
+              onTap: onToggle,
+              child: Opacity(opacity: op,
+                child: CustomPaint(size: const Size(40, 40), painter: _SunGlyphPainter(low: low))),
+            ),
+          ),
+          if (open) Positioned(
+            left: clampD(edge.dx - 90, 8, size.width - 238),
+            top: clampD(edge.dy + 28, 8, size.height - 140),
+            child: _SunTip(sunrise: sunrise, sunset: sunset,
+              azDeg: sun.azDeg, elDeg: sun.elDeg, bodyLabel: 'sun', extra: null, onClose: onToggle),
+          ),
+        ]);
+      }
+
+      // Night — show the moon at its own real position, faded through the same dusk curve.
+      final moon = moonPos(at.latitude, at.longitude, now, sun.eclipticLonDeg);
+      final op = moonOpacity(moon.elDeg);
+      if (op <= 0.02) return const SizedBox.shrink();
+      final edge = sunEdgePoint(moon.azDeg, size);
       return Stack(children: [
         Positioned(
           left: edge.dx - 20, top: edge.dy - 20,
           child: GestureDetector(
             onTap: onToggle,
             child: Opacity(opacity: op,
-              child: CustomPaint(size: const Size(40, 40), painter: _SunGlyphPainter(low: low))),
+              child: CustomPaint(size: const Size(40, 40), painter: _MoonGlyphPainter(illum: moon.illum))),
           ),
         ),
         if (open) Positioned(
           left: clampD(edge.dx - 90, 8, size.width - 238),
           top: clampD(edge.dy + 28, 8, size.height - 140),
           child: _SunTip(sunrise: sunrise, sunset: sunset,
-            azDeg: pos.azDeg, elDeg: pos.elDeg, onClose: onToggle),
+            azDeg: moon.azDeg, elDeg: moon.elDeg, bodyLabel: 'moon',
+            extra: '${(moon.illum * 100).round()}% illuminated', onClose: onToggle),
         ),
       ]);
     });
   }
+}
+
+// Grey disc with a dark terminator shadow whose offset encodes the illumination fraction —
+// a standard schematic moon-phase glyph (full at illum≈1, thin crescent near illum≈0).
+class _MoonGlyphPainter extends CustomPainter {
+  final double illum;   // 0 (new) .. 1 (full)
+  const _MoonGlyphPainter({required this.illum});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.width / 2 * 0.85;
+    canvas.drawCircle(c, r, Paint()
+      ..shader = RadialGradient(colors: [const Color(0xFFF4F3EE), const Color(0xFFD9D6CC), const Color(0xFFB9B6AC)])
+          .createShader(Rect.fromCircle(center: c, radius: r)));
+    canvas.drawCircle(c, r, Paint()..color = const Color(0xFF8A8778)..style = PaintingStyle.stroke..strokeWidth = 1.1);
+    // shadow disc slides from fully covering (new moon) to fully off (full moon)
+    final shadowOffset = r * 2 * (1 - illum);
+    canvas.save();
+    canvas.clipPath(ui.Path()..addOval(Rect.fromCircle(center: c, radius: r)));
+    canvas.drawCircle(Offset(c.dx + shadowOffset - r, c.dy), r, Paint()..color = const Color(0xE60F2A44));
+    canvas.restore();
+  }
+  @override
+  bool shouldRepaint(covariant _MoonGlyphPainter old) => old.illum != illum;
 }
 
 // Layered 8-point star + radial-gradient disc — approximates the PWA's inline SUN_SVG
@@ -1993,8 +2087,11 @@ class _SunGlyphPainter extends CustomPainter {
 class _SunTip extends StatelessWidget {
   final DateTime? sunrise, sunset;
   final double azDeg, elDeg;
+  final String bodyLabel;   // 'sun' or 'moon' — used in the altitude/bearing caption
+  final String? extra;      // extra line shown above the caption (e.g. moon illumination %)
   final VoidCallback onClose;
-  const _SunTip({required this.sunrise, required this.sunset, required this.azDeg, required this.elDeg, required this.onClose});
+  const _SunTip({required this.sunrise, required this.sunset, required this.azDeg, required this.elDeg,
+    this.bodyLabel = 'sun', this.extra, required this.onClose});
   @override
   Widget build(BuildContext context) {
     return Material(color: Colors.transparent,
@@ -2009,8 +2106,9 @@ class _SunTip extends StatelessWidget {
             if (sunset != null) _row('Sunset', _fmtTime(sunset!)),
             if (sunrise != null && sunset != null) _row('Golden light',
               'to ~${_fmtTime(sunrise!.add(const Duration(minutes: 40)))} · from ~${_fmtTime(sunset!.subtract(const Duration(minutes: 40)))}'),
+            if (extra != null) _row('Moon', extra!),
             const SizedBox(height: 4),
-            Text('sun altitude ${elDeg.round()}° · bearing ${azDeg.round()}°',
+            Text('$bodyLabel altitude ${elDeg.round()}° · bearing ${azDeg.round()}°',
               style: const TextStyle(color: Color(0xB3FFFFFF), fontSize: 11)),
           ]),
         ),
