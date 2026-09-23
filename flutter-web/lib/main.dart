@@ -1736,13 +1736,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           // (the PWA's `#sun` is `position:fixed`, unaffected by the map's perspective) so it
           // stays pinned to the true viewport edge regardless of Start-ride tilt. The Stack
           // it builds only paints a small icon (+ optional popover card), so taps outside
-          // those areas fall through to the map beneath.
-          Positioned.fill(child: _SunEdgeMarker(
-            at: _me ?? _homeCenter,
-            sunrise: _weather?.sunrise, sunset: _weather?.sunset,
-            open: _suntipOpen,
-            onToggle: () => setState(() => _suntipOpen = !_suntipOpen),
-          )),
+          // those areas fall through to the map beneath. NOTE: placed at the END of this
+          // Stack (see below, after the bottom sheet) — earlier it sat here, ahead of the
+          // HUD/sheet, and got silently painted OVER whenever the sun/moon's true bearing
+          // pointed toward the persistent top or bottom chrome (e.g. the moon at ~180°
+          // azimuth lands dead-centre at the bottom edge, exactly behind the sheet's peek).
           // HUD (never tilts — always flat). On wide screens (≥ 820 px) pin the column to the
           // left with a 390 px cap so it doesn't stretch to the right rail — matches the PWA
           // #sheet desktop width at index.html:273.
@@ -1814,6 +1812,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             hourly: _hourly, daily: _daily, profile: _profile,
             expanded: _sheetExpanded,
             onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
+          )),
+          // Painted LAST so it's always on top of the HUD/rail/sheet, regardless of which
+          // edge the sun or moon's true bearing points toward. Its Stack only paints a small
+          // icon (+ optional popover card), so taps elsewhere still fall through to the UI
+          // beneath it.
+          Positioned.fill(child: _SunEdgeMarker(
+            at: _me ?? _homeCenter,
+            sunrise: _weather?.sunrise, sunset: _weather?.sunset,
+            open: _suntipOpen,
+            onToggle: () => setState(() => _suntipOpen = !_suntipOpen),
           )),
         ]),
       ),
