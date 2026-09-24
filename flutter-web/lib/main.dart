@@ -1686,15 +1686,29 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       borderStrokeWidth: 2,
                     ),
                   if (_anchorPoint != null)
+                    // Fill only here — PWA's anchor circle border is DASHED
+                    // (dashArray:'6 8', index.html:1934), which CircleMarker can't draw;
+                    // the dashed ring itself is a separate PolylineLayer just below.
                     CircleMarker(
                       point: _anchorPoint!,
                       radius: _anchorRadiusFt * 0.3048,
                       useRadiusInMeter: true,
-                      color: _anchorBreached ? const Color(0x33D93A2B) : const Color(0x1A2E6F9E),
-                      borderColor: _anchorBreached ? const Color(0xFFD93A2B) : const Color(0xFF2E6F9E),
-                      borderStrokeWidth: 2,
+                      color: _anchorBreached ? const Color(0x33D93A2B) : const Color(0x0F0F2A44),
+                      borderStrokeWidth: 0,
                     ),
                 ]),
+                // Dashed anchor-watch ring — PWA: L.circle(..., {color:'#0F2A44', weight:2,
+                // dashArray:'6 8', fillOpacity:.06}) (index.html:1934). CircleMarker has no
+                // dash support, so the outline is drawn as a many-point dashed Polyline circle.
+                if (_anchorPoint != null)
+                  PolylineLayer(polylines: [
+                    Polyline(
+                      points: _circlePoints(_anchorPoint!, _anchorRadiusFt * 0.3048),
+                      color: _anchorBreached ? const Color(0xFFD93A2B) : const Color(0xFF0F2A44),
+                      strokeWidth: 2,
+                      pattern: StrokePattern.dashed(segments: const [6, 8]),
+                    ),
+                  ]),
                 // MOB dashed line back from boat to the pin
                 if (_mobPoint != null && _me != null)
                   PolylineLayer(polylines: [
@@ -2479,6 +2493,11 @@ class _NavAidPin extends StatelessWidget {
   }
 }
 
+// PWA curIcon() (index.html:818-823): a custom chevron SVG, base 26x26, scaled uniformly by
+// clamp(speed/2.2, 0.65, 1.5) — NOT a size-varying icon, a CSS `transform:scale()` on a fixed
+// shape. Colour is ALWAYS #2E6F9E (blue) regardless of flood vs ebb — only the arrow's rotation
+// (meanFloodDir / meanEbbDir) and the popup text distinguish direction, there's no colour code.
+// Flutter's prior version used a generic Material arrow icon and wrongly recoloured ebb purple.
 class _TidalCurrentArrow extends StatelessWidget {
   final TidalCurrent sample;
   const _TidalCurrentArrow({required this.sample});
@@ -2486,24 +2505,43 @@ class _TidalCurrentArrow extends StatelessWidget {
   Widget build(BuildContext context) {
     final v = sample.velocityKt.abs();
     final slack = v < 0.15;
-    final color = slack ? const Color(0xFF708597)
-      : (sample.velocityKt >= 0 ? const Color(0xFF2E6F9E) : const Color(0xFF6B4FC6));
     if (slack) {
-      return Tooltip(message: '${sample.stationName}\nSlack',
-        child: Container(width: 10, height: 10,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: color,
-            border: Border.all(color: Colors.white, width: 1.5))));
+      // PWA slack marker: 11x11 blue circle, 2px white border (index.html:842).
+      return Tooltip(message: '${sample.stationName}\nSlack water',
+        child: Container(width: 11, height: 11,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF2E6F9E),
+            border: Border.all(color: Colors.white, width: 2))));
     }
-    final size = math.min(40.0, 24 + v * 4);
+    final scale = (v / 2.2).clamp(0.65, 1.5).toDouble();
     return Tooltip(
       message: '${sample.stationName}\n${sample.velocityKt >= 0 ? "Flood" : "Ebb"} · ${v.toStringAsFixed(1)} kn',
       child: Transform.rotate(
         angle: sample.directionDeg * math.pi / 180,
-        child: Icon(Icons.arrow_upward, color: color, size: size,
-          shadows: const [Shadow(color: Colors.black45, blurRadius: 3)]),
+        child: Transform.scale(
+          scale: scale,
+          child: CustomPaint(size: const Size(26, 26), painter: const _CurrentArrowPainter()),
+        ),
       ),
     );
   }
+}
+
+class _CurrentArrowPainter extends CustomPainter {
+  const _CurrentArrowPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    // M13 2 L19 17 L13 13 L7 17 Z — index.html:820.
+    final path = ui.Path()
+      ..moveTo(13, 2)
+      ..lineTo(19, 17)
+      ..lineTo(13, 13)
+      ..lineTo(7, 17)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xFF2E6F9E));
+    canvas.drawPath(path, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.2);
+  }
+  @override
+  bool shouldRepaint(covariant _CurrentArrowPainter old) => false;
 }
 
 class _TopHud extends StatelessWidget {
@@ -4006,6 +4044,21 @@ class _TrailPoint {
   final LatLng p;
   final int tMs;
   _TrailPoint(this.p, this.tMs);
+}
+
+// Approximates a circle of `radiusM` around `center` as a closed loop of lat/lng points, so a
+// dashed Polyline can draw a dashed ring — flutter_map's CircleMarker has no dash support.
+List<LatLng> _circlePoints(LatLng center, double radiusM, {int steps = 72}) {
+  const earthR = 6371000.0;
+  final latRad = center.latitude * math.pi / 180;
+  final points = <LatLng>[];
+  for (int i = 0; i <= steps; i++) {
+    final angle = (i / steps) * 2 * math.pi;
+    final dLat = (radiusM * math.cos(angle)) / earthR;
+    final dLng = (radiusM * math.sin(angle)) / (earthR * math.cos(latRad));
+    points.add(LatLng(center.latitude + dLat * 180 / math.pi, center.longitude + dLng * 180 / math.pi));
+  }
+  return points;
 }
 
 double _bearingDeg(LatLng a, LatLng b) {
