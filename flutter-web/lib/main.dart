@@ -614,10 +614,17 @@ const _overpassMirrors = [
 }
 
 Future<String?> _overpassQuery(String query) async {
+  // PWA (index.html:1622): `fetch(url, {method:'POST', body: q})` — the raw query STRING as
+  // the body (browser defaults to text/plain). Passing a Map here instead form-encodes it as
+  // `data=<query>` under application/x-www-form-urlencoded, which Overpass can't parse as a
+  // valid query — its error response lacks CORS headers, and the browser reports that as a
+  // blanket "blocked by CORS policy" failure that masked the real cause. Send the query as a
+  // raw String body to match the PWA exactly.
   for (final url in _overpassMirrors) {
     try {
-      final r = await http.post(Uri.parse(url),
-        body: {'data': query}).timeout(const Duration(seconds: 12));
+      // Client timeout kept well above the query's own [timeout:12] so the two don't race —
+      // the server should always finish (or itself time out) before we give up on it.
+      final r = await http.post(Uri.parse(url), body: query).timeout(const Duration(seconds: 20));
       if (r.statusCode == 200) return r.body;
     } catch (_) {}
   }
@@ -657,7 +664,7 @@ Future<List<Dock>> fetchDocks(LatLng at) async {
   } catch (_) {}
   final b = _bboxMi(at, 20);
   final q = '''
-[out:json][timeout:15];
+[out:json][timeout:12];
 (
   node["leisure"="marina"](${b.south},${b.west},${b.north},${b.east});
   node["leisure"="slipway"](${b.south},${b.west},${b.north},${b.east});
@@ -736,7 +743,7 @@ Future<List<NavAid>> fetchNavAids(LatLng at) async {
   } catch (_) {}
   final b = _bboxMi(at, 20);
   final q = '''
-[out:json][timeout:15];
+[out:json][timeout:12];
 (
   node["seamark:type"="buoy_lateral"](${b.south},${b.west},${b.north},${b.east});
   node["seamark:type"="beacon_lateral"](${b.south},${b.west},${b.north},${b.east});
