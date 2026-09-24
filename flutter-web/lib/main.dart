@@ -2747,16 +2747,19 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
   @override
   void initState() { super.initState(); p = BoatProfile.fromJson(widget.initial.toJson()); }
   TextEditingController _num(double v) => TextEditingController(text: v == 0 ? '' : v.toString());
+  // PWA #pform input (index.html:182): white bg, ink text, light navy border; labels are
+  // var(--sea) (index.html:181). Was wrongly white-on-dark.
   Widget _field(String label, double value, ValueChanged<double> onChange, {String suffix = ''}) => TextField(
     controller: _num(value),
     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-    style: const TextStyle(color: Colors.white),
+    style: const TextStyle(color: Color(0xFF0F2A44)),
     decoration: InputDecoration(
-      labelText: label, labelStyle: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12),
-      suffixText: suffix, suffixStyle: const TextStyle(color: Color(0xAAFFFFFF)),
+      filled: true, fillColor: Colors.white,
+      labelText: label, labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
+      suffixText: suffix, suffixStyle: const TextStyle(color: Color(0xAA0F2A44)),
       isDense: true,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x55FFFFFF))),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x33FFFFFF))),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
       focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
     ),
     onChanged: (s) { final d = double.tryParse(s); if (d != null) onChange(d); },
@@ -2765,24 +2768,26 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
   Widget build(BuildContext context) => DraggableScrollableSheet(
     initialChildSize: 0.75, minChildSize: 0.4, maxChildSize: 0.95, expand: false,
     builder: (ctx, scroll) => Container(
-      decoration: const BoxDecoration(color: Color(0xFF0F2A44), borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      // PWA #pform (index.html:178): background:var(--paper) #F4F8FA — was wrongly dark navy.
+      decoration: const BoxDecoration(color: Color(0xFFF4F8FA), borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: ListView(controller: scroll, children: [
         Center(child: Container(width: 40, height: 4, margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(color: const Color(0x66FFFFFF), borderRadius: BorderRadius.circular(2)))),
-        const Text('Your boat', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+          decoration: BoxDecoration(color: const Color(0x470F2A44), borderRadius: BorderRadius.circular(2)))),
+        const Text('Your boat', style: TextStyle(color: Color(0xFF0F2A44), fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
-        const Text('Bayside grades forecasts against these limits and computes fuel from tank & burn rate.',
-            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+        Text('Bayside grades forecasts against these limits and computes fuel from tank & burn rate.',
+            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12)),
         const SizedBox(height: 16),
         TextField(
           controller: TextEditingController(text: p.name),
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: Color(0xFF0F2A44)),
           decoration: InputDecoration(
-            labelText: 'Boat name', labelStyle: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12),
+            filled: true, fillColor: Colors.white,
+            labelText: 'Boat name', labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
             isDense: true,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x55FFFFFF))),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x33FFFFFF))),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
             focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
           ),
           onChanged: (s) => p.name = s,
@@ -2793,13 +2798,14 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           const SizedBox(width: 12),
           Expanded(child: DropdownButtonFormField<BoatType>(
             value: p.type,
-            dropdownColor: const Color(0xFF0F2A44),
-            style: const TextStyle(color: Colors.white),
+            dropdownColor: Colors.white,
+            style: const TextStyle(color: Color(0xFF0F2A44)),
             decoration: InputDecoration(
-              labelText: 'Type', labelStyle: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12),
+              filled: true, fillColor: Colors.white,
+              labelText: 'Type', labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
               isDense: true,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x55FFFFFF))),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x33FFFFFF))),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
             ),
             items: BoatType.values.map((t) => DropdownMenuItem(value: t, child: Text(_typeNames[t]!))).toList(),
             onChanged: (v) { if (v != null) setState(() => p.type = v); },
@@ -2822,8 +2828,8 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           ),
         ),
         const SizedBox(height: 20),
-        const Text('Comfort limits — Bayside warns when forecasts exceed these',
-            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
+        Text('Comfort limits — Bayside warns when forecasts exceed these',
+            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12, fontWeight: FontWeight.w700)),
         const SizedBox(height: 10),
         Row(children: [
           Expanded(child: _field('Max wind', p.wind, (v) => setState(() => p.wind = v), suffix: 'kn')),
@@ -2833,8 +2839,8 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           Expanded(child: _field('Max wave', p.wave, (v) => setState(() => p.wave = v), suffix: 'ft')),
         ]),
         const SizedBox(height: 20),
-        const Text('Fuel — for the range ring & route fuel estimate',
-            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
+        Text('Fuel — for the range ring & route fuel estimate',
+            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12, fontWeight: FontWeight.w700)),
         const SizedBox(height: 10),
         Row(children: [
           Expanded(child: _field('Burn @ cruise', p.burn, (v) => setState(() => p.burn = v), suffix: 'gal/h')),
@@ -2842,11 +2848,13 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           Expanded(child: _field('Tank size', p.tank, (v) => setState(() => p.tank = v), suffix: 'gal')),
         ]),
         const SizedBox(height: 24),
-        Material(color: const Color(0xFF1F8A5B), borderRadius: BorderRadius.circular(10),
+        // PWA #pform .save (index.html:184): background:var(--ink), colour:var(--paper) —
+        // dark navy, not green.
+        Material(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(10),
           child: InkWell(borderRadius: BorderRadius.circular(10),
             onTap: () async { await widget.onSave(p); if (context.mounted) Navigator.of(context).pop(); },
             child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
-              child: Center(child: Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)))),
+              child: Center(child: Text('Save', style: TextStyle(color: Color(0xFFF4F8FA), fontWeight: FontWeight.w800, fontSize: 15)))),
           ),
         ),
         const SizedBox(height: 12),
@@ -2891,33 +2899,46 @@ class _BottomSheetState extends State<_BottomSheet> {
   // warning banner. Extracted so it can go either above a separate scroll view (expanded) or
   // stand alone at its natural compact size (collapsed).
   Widget _fixedChrome() => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-    // Grab handle — mirrors the PWA #grab (index.html:81-82): 40×5 pill inside a 24 px tap
-    // zone. PWA uses `rgba(15,42,68,.28)` on a light paper sheet; our sheet is dark navy, so
-    // we bump the opacity so the pill is still readable.
+    // Grab handle — PWA #grab (index.html:81-82): 40×5 pill, rgba(15,42,68,.28) — dark navy
+    // translucent, sitting on the sheet's light gradient. (Previously tuned white/light,
+    // which only made sense when the sheet was wrongly dark navy — see panel colour fix below.)
     Center(child: InkWell(
       onTap: () => _setExpanded(!_expanded),
       borderRadius: BorderRadius.circular(3),
       child: SizedBox(width: 60, height: 24, child: Center(
         child: Container(width: 40, height: 5,
-          decoration: BoxDecoration(color: const Color(0x66FFFFFF),
+          decoration: BoxDecoration(color: const Color(0x470F2A44),
             borderRadius: BorderRadius.circular(3))),
       )),
     )),
-    _routeRow(),
-    // header — "Set up your boat" / boat summary + Edit + expand/collapse
+    // PWA's #routebar (index.html:315-322) is a SEPARATE, always-dark-navy pill —
+    // background:var(--ink), color:var(--paper) — floating above the light #sheet gradient,
+    // not part of it. Reproduced here as its own dark card so the two-tone contrast (dark
+    // route summary vs. light expandable sheet) matches even though it's still structurally
+    // nested in the same widget for simplicity.
+    Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(14)),
+      child: _routeRow(),
+    ),
+    // header — "Set up your boat" / boat summary + Edit + expand/collapse. PWA #boatline
+    // (index.html:185-186): no background, sits directly on the gradient, text colour
+    // var(--sea) #2E6F9E for both the name and the underlined "Edit" link.
     InkWell(
       onTap: () => _setExpanded(!_expanded),
       child: Padding(
-        padding: const EdgeInsets.only(top: 10, bottom: 6),
+        padding: const EdgeInsets.only(bottom: 6),
         child: Row(children: [
-          Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xCCFFFFFF), size: 20),
+          Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xFF2E6F9E), size: 20),
           const SizedBox(width: 6),
-          Expanded(child: Text(_headerText(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+          Expanded(child: Text(_headerText(), style: const TextStyle(color: Color(0xFF2E6F9E), fontWeight: FontWeight.w800, fontSize: 15))),
           Material(
             color: Colors.transparent,
             child: InkWell(onTap: widget.onEditProfile,
               child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: Text('Edit', style: TextStyle(color: Color(0xFF6EB6FF), fontWeight: FontWeight.w700, fontSize: 13)))),
+                child: Text('Edit', style: TextStyle(color: Color(0xFF2E6F9E), fontWeight: FontWeight.w700,
+                  fontSize: 13, decoration: TextDecoration.underline)))),
           ),
         ]),
       ),
@@ -2945,7 +2966,13 @@ class _BottomSheetState extends State<_BottomSheet> {
       },
       child: Container(
         padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(14)),
+        // PWA #sheet (index.html:79): `linear-gradient(180deg,#d3e8f6 0%,#e9e8d6 42%,#f4edd8 66%)`
+        // — a light sky-blue-to-sand gradient. Was wrongly a solid dark navy card.
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+            colors: [Color(0xFFD3E8F6), Color(0xFFE9E8D6), Color(0xFFF4EDD8)],
+            stops: [0, .42, .66]),
+          borderRadius: BorderRadius.circular(14)),
         // PWA index.html:79 `transition: transform .28s cubic-bezier(.2,.8,.2,1)`.
         child: AnimatedSize(
           duration: const Duration(milliseconds: 280),
@@ -2957,7 +2984,17 @@ class _BottomSheetState extends State<_BottomSheet> {
                 child: SingleChildScrollView(
                   child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _fixedChrome(),
-                    ..._expandedBody(),
+                    // PWA #body (index.html:106): background:var(--paper) #F4F8FA, rounded top
+                    // corners — the actual scrollable content area sits on near-white, not the
+                    // gradient directly, with dark ink text throughout (was wrongly white).
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                      decoration: const BoxDecoration(color: Color(0xFFF4F8FA),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+                        children: _expandedBody()),
+                    ),
                   ]),
                 ),
               )
@@ -3027,7 +3064,7 @@ class _BottomSheetState extends State<_BottomSheet> {
       const SizedBox(height: 10),
       _DayTabs(daily: widget.daily, selected: _dayIdx, onSelect: (i) => setState(() => _dayIdx = i)),
       const SizedBox(height: 8),
-      Text('Best time to boat', style: TextStyle(color: Colors.white.withOpacity(.9),
+      Text('Best time to boat', style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.9),
         fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
       const SizedBox(height: 4),
       _HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
@@ -3044,14 +3081,14 @@ class _BottomSheetState extends State<_BottomSheet> {
         const SizedBox(width: 8),
         Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
           child: Text('${w.tempF?.round() ?? '—'}°',
-            style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, height: 1))),
+            style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 42, fontWeight: FontWeight.w800, height: 1))),
         const SizedBox(width: 2),
         const Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
-          child: Text('F', style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 15, fontWeight: FontWeight.w700))),
+          child: Text('F', style: TextStyle(color: Color(0xAA0F2A44), fontSize: 15, fontWeight: FontWeight.w700))),
         const Spacer(),
         Padding(padding: const EdgeInsets.only(top: 2),
           child: Text(_condText(w.weatherCode),
-            style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 14, fontWeight: FontWeight.w600))),
+            style: const TextStyle(color: Color(0xCC0F2A44), fontSize: 14, fontWeight: FontWeight.w600))),
       ]),
       const SizedBox(height: 10),
       // PWA grid gap 12 px.
@@ -3068,8 +3105,8 @@ class _BottomSheetState extends State<_BottomSheet> {
   }
 
   Widget _wxCell(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-    Text(label, style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 10, letterSpacing: 0.5)),
-    Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+    Text(label, style: const TextStyle(color: Color(0xAA0F2A44), fontSize: 10, letterSpacing: 0.5)),
+    Text(value, style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 14, fontWeight: FontWeight.w700)),
   ]);
 
   Widget _stat(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -3134,7 +3171,8 @@ class _BestWindowPill extends StatelessWidget {
         Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
         const SizedBox(width: 8),
         Text('Best window: $day ${_fmtTime(win.start)}–${_fmtTime(win.end)} · $label',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
+          // PWA #bestWin{color:var(--ink)} (index.html:226) — dark text on the light tinted pill.
+          style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 12.5)),
       ]),
     );
   }
@@ -3163,13 +3201,15 @@ class _DayTabs extends StatelessWidget {
       scrollDirection: Axis.horizontal,
       child: Row(children: List.generate(labels.length, (i) {
         final sel = i == selected;
+        // PWA #days button (index.html:111-112): inactive rgba(15,42,68,.10) bg + ink text;
+        // active var(--ink) bg + white text.
         return Padding(padding: const EdgeInsets.only(right: 8),
-          child: Material(color: sel ? const Color(0xFF1466C7) : Colors.transparent,
+          child: Material(color: sel ? const Color(0xFF0F2A44) : const Color(0x1A0F2A44),
             borderRadius: BorderRadius.circular(999),
             child: InkWell(borderRadius: BorderRadius.circular(999), onTap: () => onSelect(i),
               child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: Text(labels[i], style: TextStyle(
-                  color: sel ? Colors.white : const Color(0xFFFFFFFF).withOpacity(.55),
+                  color: sel ? Colors.white : const Color(0xFF0F2A44),
                   fontWeight: FontWeight.w700, fontSize: 13))))),
         );
       })),
@@ -3186,7 +3226,7 @@ class _HourlyTable extends StatelessWidget {
   Widget build(BuildContext context) {
     if (hourly.isEmpty) {
       return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
-        child: Text('Loading hourly forecast…', style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 12)));
+        child: Text('Loading hourly forecast…', style: TextStyle(color: Color(0xAA0F2A44), fontSize: 12)));
     }
     final today = DateTime.now();
     final target = DateTime(today.year, today.month, today.day).add(Duration(days: dayIdx));
@@ -3199,7 +3239,7 @@ class _HourlyTable extends StatelessWidget {
     if (rows.isEmpty) {
       return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
         child: Text('No more daylight hours today — swipe to Fri for tomorrow.',
-          style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 12)));
+          style: TextStyle(color: Color(0xAA0F2A44), fontSize: 12)));
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows.map((h) => _row(h)).toList());
   }
@@ -3210,17 +3250,17 @@ class _HourlyTable extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(children: [
-        SizedBox(width: 46, child: Text(_hourLabel(h.t), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
+        SizedBox(width: 46, child: Text(_hourLabel(h.t), style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w700, fontSize: 12))),
         Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
         const SizedBox(width: 6),
         SizedBox(width: 40, child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 11))),
         Text(_wxIcon(h.weatherCode), style: const TextStyle(fontSize: 14)),
         const SizedBox(width: 4),
-        SizedBox(width: 36, child: Text('${h.tempF?.round() ?? '—'}°', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700))),
-        SizedBox(width: 70, child: Text('${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}', style: const TextStyle(color: Colors.white, fontSize: 11))),
-        SizedBox(width: 42, child: Text('g${h.gustKt?.round() ?? '—'}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 11))),
+        SizedBox(width: 36, child: Text('${h.tempF?.round() ?? '—'}°', style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 12, fontWeight: FontWeight.w700))),
+        SizedBox(width: 70, child: Text('${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}', style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 11))),
+        SizedBox(width: 42, child: Text('g${h.gustKt?.round() ?? '—'}', style: const TextStyle(color: Color(0xCC0F2A44), fontSize: 11))),
         if (h.precipPct != null && h.precipPct! > 0)
-          Text('${h.precipPct!.round()}%', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 11)),
+          Text('${h.precipPct!.round()}%', style: const TextStyle(color: Color(0xCC0F2A44), fontSize: 11)),
       ]),
     );
   }
