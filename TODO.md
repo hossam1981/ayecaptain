@@ -3,7 +3,10 @@
 Tracked on the `flutter` branch. Shipped so far: A.5, B.5, B.6, B.7, Batch C part 1
 (sun/moon edge marker, MOB pulse/arrow/smoke/vibrate, wake-lock resume), plus a follow-up
 parity-fix batch (smart-routes default, boat Draft field, visible wind/rain FX, moon-marker
-shadow) and wake spray behind the boat — all live at
+shadow), wake spray behind the boat, a panel colour-theme fix (sheet + boat profile modal
+were wrongly dark-navy, PWA is light paper/gradient with ink text), and a structural split
+of the route-summary pill into its own `_RouteBar` widget (PWA's `#routebar` is a separate
+fixed element, not nested inside `#sheet` — index.html:66-74,316-321) — all live at
 flutter--frabjous-sprinkles-9eb441.netlify.app.
 
 ## Next up

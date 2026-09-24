@@ -1820,15 +1820,20 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               ))),
             ]),
           ),
-          // Sun edge marker — PWA index.html:1130-1197. Lives OUTSIDE the tilt transform
-          // (the PWA's `#sun` is `position:fixed`, unaffected by the map's perspective) so it
-          // stays pinned to the true viewport edge regardless of Start-ride tilt. The Stack
-          // it builds only paints a small icon (+ optional popover card), so taps outside
-          // those areas fall through to the map beneath. NOTE: placed at the END of this
-          // Stack (see below, after the bottom sheet) — earlier it sat here, ahead of the
-          // HUD/sheet, and got silently painted OVER whenever the sun/moon's true bearing
-          // pointed toward the persistent top or bottom chrome (e.g. the moon at ~180°
-          // azimuth lands dead-centre at the bottom edge, exactly behind the sheet's peek).
+          // Sun/moon edge marker — PWA #sun is z-index 588 (index.html:257), LOWER than the
+          // sheet's 610 and the route-bar-ish chrome's ~600. That means the PWA deliberately
+          // lets the sheet/HUD COVER the sun marker whenever they overlap — it's meant to sit
+          // above the map but below the persistent UI, not always-on-top. An earlier commit
+          // moved this marker to paint dead-last (always on top of everything) to fix it being
+          // invisible when hidden behind chrome — that was the wrong read: hidden-behind-chrome
+          // is the PWA's own correct behaviour, not a bug. Reverted: placed here, above the
+          // map/FX layer, below the HUD/rail/sheet — matching the real z-order.
+          Positioned.fill(child: _SunEdgeMarker(
+            at: _me ?? _homeCenter,
+            sunrise: _weather?.sunrise, sunset: _weather?.sunset,
+            open: _suntipOpen,
+            onToggle: () => setState(() => _suntipOpen = !_suntipOpen),
+          )),
           // HUD (never tilts — always flat). On wide screens (≥ 820 px) pin the column to the
           // left with a 390 px cap so it doesn't stretch to the right rail — matches the PWA
           // #sheet desktop width at index.html:273.
@@ -1884,33 +1889,33 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             onMob: _toggleMob,
             onMoreTools: _openMoreTools,
           )),
-          // PWA desktop CSS (index.html:273): `#sheet{left:12px;right:auto;width:390px;...}`
+          // PWA desktop CSS (index.html:273): `#sheet{left:12px;right:auto;width:390px;...}`.
+          // #routebar (index.html:66) is its own fixed-position element, independent of #sheet —
+          // stacked here as a true sibling widget (own shape/decoration) with a gap between them,
+          // not nested inside the sheet's Container/decoration.
           Positioned(left: 12, bottom: 12,
             right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
             width: MediaQuery.sizeOf(context).width >= 820 ? 390 : null,
-            child: _BottomSheet(
-            weather: _weather, routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
-            waypointCount: _waypoints.length, picking: _picking,
-            unverified: _routeUnverified, navigating: _navigating,
-            onClearRoute: () async { setState(() { _waypoints.clear(); _picking = false; _routedPath = null; _legIdx = 0; }); await _stopRide(); },
-            onUndoRoute: () { if (_waypoints.isEmpty) return; setState(() { _waypoints.removeLast(); if (_legIdx >= _waypoints.length) _legIdx = math.max(0, _waypoints.length - 1); }); _recomputeRoute(); },
-            onStart: _startRide, onStop: _stopRide,
-            onGpx: _gpxPlaceholder, onEditProfile: _openBoatProfile,
-            warningText: _boatWarning(), window: bestWindow(_hourly, _profile),
-            hourly: _hourly, daily: _daily, profile: _profile,
-            expanded: _sheetExpanded,
-            onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
-          )),
-          // Painted LAST so it's always on top of the HUD/rail/sheet, regardless of which
-          // edge the sun or moon's true bearing points toward. Its Stack only paints a small
-          // icon (+ optional popover card), so taps elsewhere still fall through to the UI
-          // beneath it.
-          Positioned.fill(child: _SunEdgeMarker(
-            at: _me ?? _homeCenter,
-            sunrise: _weather?.sunrise, sunset: _weather?.sunset,
-            open: _suntipOpen,
-            onToggle: () => setState(() => _suntipOpen = !_suntipOpen),
-          )),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _RouteBar(
+                routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
+                waypointCount: _waypoints.length, picking: _picking,
+                unverified: _routeUnverified, navigating: _navigating,
+                onClearRoute: () async { setState(() { _waypoints.clear(); _picking = false; _routedPath = null; _legIdx = 0; }); await _stopRide(); },
+                onUndoRoute: () { if (_waypoints.isEmpty) return; setState(() { _waypoints.removeLast(); if (_legIdx >= _waypoints.length) _legIdx = math.max(0, _waypoints.length - 1); }); _recomputeRoute(); },
+                onStart: _startRide, onStop: _stopRide,
+                onGpx: _gpxPlaceholder,
+              ),
+              if (_picking || _waypoints.isNotEmpty) const SizedBox(height: 10),
+              _BottomSheet(
+                weather: _weather, onEditProfile: _openBoatProfile,
+                warningText: _boatWarning(), window: bestWindow(_hourly, _profile),
+                hourly: _hourly, daily: _daily, profile: _profile,
+                expanded: _sheetExpanded,
+                onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
+              ),
+            ]),
+          ),
         ]),
       ),
     );
@@ -2863,16 +2868,100 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
   );
 }
 
+// PWA's #routebar (index.html:66-74, 316-321) is a SEPARATE fixed-position dark pill,
+// independent of #sheet — not nested inside it. It's hidden entirely (`display:none`)
+// until the user starts picking a route or has waypoints (index.html:1414:
+// `$('#routebar').classList.toggle('show', picking || wps.length>0)`), unlike the sheet
+// which is always visible. Content is two `.stat` blocks (bold value + light label,
+// index.html:316-317, 1485-1486) then Start/Undo/GPX/Clear buttons pushed to the right
+// (`button{margin-left:auto}`, index.html:71).
+class _RouteBar extends StatelessWidget {
+  final int waypointCount;
+  final double routeNm, fuelGal;
+  final int etaMin;
+  final bool picking, unverified, navigating;
+  final VoidCallback onClearRoute, onUndoRoute, onStart, onStop, onGpx;
+  const _RouteBar({
+    required this.waypointCount, required this.routeNm, required this.etaMin, required this.fuelGal,
+    required this.picking, required this.unverified, required this.navigating,
+    required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop,
+    required this.onGpx,
+  });
+
+  bool get _has => waypointCount > 0;
+
+  @override
+  Widget build(BuildContext context) {
+    // index.html:1414 — bar only shows while picking or once a route exists.
+    if (!picking && !_has) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(14)),
+      child: Row(children: [
+        Expanded(child: Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          _stat(_has ? '$waypointCount' : '0', _has ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
+          _has ? _etaStat() : _stat('tap map', 'to add'),
+        ])),
+        const SizedBox(width: 8),
+        _bigBtn(navigating ? 'Stop' : 'Start',
+          navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
+          navigating ? onStop : onStart),
+        const SizedBox(width: 6),
+        _smallBtn('Undo', onUndoRoute),
+        const SizedBox(width: 6),
+        _smallBtn('GPX', onGpx),
+        const SizedBox(width: 6),
+        _smallBtn('Clear', onClearRoute),
+      ]),
+    );
+  }
+
+  // index.html:1480-1486 — nm bold, then "{mins} · arrive {time}{gal}" light, plus an
+  // optional ⚠ when any remaining leg couldn't be routed around land.
+  Widget _etaStat() {
+    final eta = etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min';
+    final arrive = _fmtTime(DateTime.now().add(Duration(minutes: etaMin)));
+    final gal = fuelGal > 0
+      ? ' · ~${fuelGal < 10 ? fuelGal.toStringAsFixed(1) : fuelGal.round()} gal'
+      : '';
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      _stat('${routeNm.toStringAsFixed(1)} nm', '$eta · arrive $arrive$gal'),
+      if (unverified) const Padding(padding: EdgeInsets.only(left: 2),
+        child: Text('⚠', style: TextStyle(color: Color(0xFFF2A93B), fontSize: 15))),
+    ]);
+  }
+
+  Widget _stat(String bold, String light) => Text.rich(TextSpan(children: [
+    TextSpan(text: bold, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+    TextSpan(text: ' $light', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500, height: 1.6)),
+  ]), maxLines: 1, overflow: TextOverflow.ellipsis);
+
+  Widget _bigBtn(String label, Color color, VoidCallback onTap) => Material(
+        color: color, borderRadius: BorderRadius.circular(9),
+        child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+          ),
+        ),
+      );
+  Widget _smallBtn(String label, VoidCallback onTap) => Material(
+        color: const Color(0x24FFFFFF), borderRadius: BorderRadius.circular(9),
+        child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            child: Text(label, textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+          ),
+        ),
+      );
+}
+
 // Batch A.5: rewrite as a stateful sheet that hosts the "Set up your boat" content
-// (weather block + best-window pill + day tabs + hourly "Best time to boat" table) plus
-// the pinned route summary row. Kept as a single widget so the callsite doesn't move.
+// (weather block + best-window pill + day tabs + hourly "Best time to boat" table).
+// The route summary card lives separately in _RouteBar (PWA's #routebar is its own
+// fixed element, not nested in #sheet).
 class _BottomSheet extends StatefulWidget {
   final Weather? weather;
-  final double routeNm;
-  final int etaMin, waypointCount;
-  final double fuelGal;
-  final bool picking, unverified, navigating;
-  final VoidCallback onClearRoute, onUndoRoute, onStart, onStop, onGpx, onEditProfile;
+  final VoidCallback onEditProfile;
   final ({String text, String severity})? warningText;
   final BestWindow? window;
   final List<HourlyPoint> hourly;
@@ -2880,10 +2969,7 @@ class _BottomSheet extends StatefulWidget {
   final BoatProfile profile;
   final bool expanded;
   final ValueChanged<bool> onExpandedChanged;
-  const _BottomSheet({required this.weather, required this.routeNm, required this.etaMin, required this.fuelGal,
-    required this.waypointCount, required this.picking, required this.unverified, required this.navigating,
-    required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop,
-    required this.onGpx, required this.onEditProfile,
+  const _BottomSheet({required this.weather, required this.onEditProfile,
     required this.warningText, required this.window, required this.hourly, required this.daily,
     required this.profile, required this.expanded, required this.onExpandedChanged});
   @override
@@ -2911,17 +2997,6 @@ class _BottomSheetState extends State<_BottomSheet> {
             borderRadius: BorderRadius.circular(3))),
       )),
     )),
-    // PWA's #routebar (index.html:315-322) is a SEPARATE, always-dark-navy pill —
-    // background:var(--ink), color:var(--paper) — floating above the light #sheet gradient,
-    // not part of it. Reproduced here as its own dark card so the two-tone contrast (dark
-    // route summary vs. light expandable sheet) matches even though it's still structurally
-    // nested in the same widget for simplicity.
-    Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(14)),
-      child: _routeRow(),
-    ),
     // header — "Set up your boat" / boat summary + Edit + expand/collapse. PWA #boatline
     // (index.html:185-186): no background, sits directly on the gradient, text colour
     // var(--sea) #2E6F9E for both the name and the underlined "Edit" link.
@@ -3014,44 +3089,6 @@ class _BottomSheetState extends State<_BottomSheet> {
     return bits.join(' · ');
   }
 
-  // PWA index.html:315-322 : LEFT compact one-line summary that ellipses,
-  // RIGHT small buttons pinned. Never wraps to a second line.
-  Widget _routeRow() {
-    if (widget.waypointCount == 0) {
-      return Text(widget.picking ? 'Tap the map to drop a waypoint' : 'No route — tap Go-to to plan one',
-        style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13));
-    }
-    final eta = widget.etaMin >= 60
-      ? '${widget.etaMin ~/ 60}h ${widget.etaMin % 60}m'
-      : '${math.max(1, widget.etaMin)} min';
-    final fuel = widget.fuelGal > 0
-      ? ' · ~${widget.fuelGal < 10 ? widget.fuelGal.toStringAsFixed(1) : widget.fuelGal.round()} gal'
-      : '';
-    final summary = '${widget.waypointCount} pts · '
-      '${widget.routeNm.toStringAsFixed(1)} nm · $eta$fuel';
-    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        if (widget.unverified) const Padding(padding: EdgeInsets.only(right: 4),
-          child: Text('⚠', style: TextStyle(color: Color(0xFFF2A93B), fontSize: 14))),
-        Expanded(child: Text(summary,
-          maxLines: 1, overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700))),
-      ]),
-      const SizedBox(height: 8),
-      Row(children: [
-        _bigBtn(widget.navigating ? 'Stop' : 'Start',
-          widget.navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
-          widget.navigating ? widget.onStop : widget.onStart),
-        const SizedBox(width: 6),
-        Expanded(child: _smallBtn('Undo', widget.onUndoRoute)),
-        const SizedBox(width: 6),
-        Expanded(child: _smallBtn('GPX', widget.onGpx)),
-        const SizedBox(width: 6),
-        Expanded(child: _smallBtn('Clear', widget.onClearRoute)),
-      ]),
-    ]);
-  }
-
   List<Widget> _expandedBody() {
     final w = widget.weather;
     return [
@@ -3109,27 +3146,6 @@ class _BottomSheetState extends State<_BottomSheet> {
     Text(value, style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 14, fontWeight: FontWeight.w700)),
   ]);
 
-  Widget _stat(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        Text(label, style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 10, letterSpacing: 0.5)),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-      ]);
-  Widget _bigBtn(String label, Color color, VoidCallback onTap) => Material(
-        color: color, borderRadius: BorderRadius.circular(9),
-        child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-          ),
-        ),
-      );
-  Widget _smallBtn(String label, VoidCallback onTap) => Material(
-        color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(9),
-        child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            child: Text(label, textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-          ),
-        ),
-      );
 }
 
 String _condText(int? code) {
