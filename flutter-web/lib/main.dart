@@ -1709,12 +1709,23 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       width: 20, height: 20,
                       child: const Icon(Icons.anchor, color: Color(0xFF2E6F9E), size: 20),
                     ),
-                  if (_me != null)
+                  if (_me != null) ...[
                     Marker(
                       point: _me!,
                       width: 56, height: 56,
                       child: BoatMarker(headingDeg: _heading, active: _navigating),
-                    )
+                    ),
+                    // Wake spray — churning particles astern while underway. Anchored at the
+                    // SAME LatLng as the boat and rotated by the SAME heading, so it moves/pans
+                    // with the boat and doesn't need any screen-projection math. Painted AFTER
+                    // (on top of) the boat marker, matching the PWA's #fx canvas sitting above
+                    // the Leaflet marker layer (index.html:1026-1051).
+                    Marker(
+                      point: _me!,
+                      width: 260, height: 260,
+                      child: _WakeSpray(headingDeg: _heading, speedKt: _speedKt),
+                    ),
+                  ]
                   else
                     // Ghost boat at the map centre so users can see where the boat *would* be
                     // once GPS is granted — mirrors the PWA "search" state HUD.
@@ -3238,6 +3249,89 @@ class _SmokePainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant _SmokePainter old) => true;
+}
+
+// Wake spray — churning white particles astern of the boat while underway. Direct port of
+// the PWA's drawSpray (index.html:1026-1051): STERN_OFF=40px behind the marker, particle
+// count/spread/speed scale with a speed factor saturating at 16 kn, only emits above 1.4 kn.
+// Ported to LOCAL (pre-rotation) coordinates — bow points up (-y) in this widget's own space,
+// so "astern" is simply +y; the caller wraps this in the SAME heading rotation as the boat
+// sprite, so screen-space orientation matches automatically with no LatLng->screen projection.
+class _WakeSpray extends StatefulWidget {
+  final double headingDeg, speedKt;
+  const _WakeSpray({required this.headingDeg, required this.speedKt});
+  @override
+  State<_WakeSpray> createState() => _WakeSprayState();
+}
+class _WakeSprayState extends State<_WakeSpray> with SingleTickerProviderStateMixin {
+  late final _tick = createTicker(_step);
+  final math.Random _rng = math.Random();
+  final List<_SprayParticle> _particles = [];
+  int _lastMs = 0;
+  @override
+  void initState() { super.initState(); _tick.start(); }
+  @override
+  void dispose() { _tick.dispose(); super.dispose(); }
+
+  void _step(Duration elapsed) {
+    final now = elapsed.inMilliseconds;
+    final dt = _lastMs == 0 ? 0.016 : math.min(0.05, (now - _lastMs) / 1000);
+    _lastMs = now;
+    final sf = math.min(1.0, widget.speedKt / 16);
+    if (widget.speedKt > 1.4) {
+      const sternOff = 40.0;
+      final wantPerSec = 1 + (sf * 4).round();
+      final spawnCount = (wantPerSec * dt * 60).round().clamp(0, 6);
+      for (int i = 0; i < spawnCount; i++) {
+        final fan = (_rng.nextDouble() - 0.5) * (0.5 + sf * 0.9);
+        final ca = math.cos(fan), sa = math.sin(fan);
+        // astern unit vector in local space = (0,1); rotate by the fan angle, matching the
+        // PWA's dx = bxu*ca - byu*sa, dy = bxu*sa + byu*ca with (bxu,byu) = (0,1).
+        final dx = -sa, dy = ca;
+        final s = 1.2 + sf * 3.6 + _rng.nextDouble() * 1.5;
+        _particles.add(_SprayParticle(
+          x: (_rng.nextDouble() - 0.5) * 6, y: sternOff + (_rng.nextDouble() - 0.5) * 6,
+          vx: dx * s, vy: dy * s, r: 1.6 + _rng.nextDouble() * 2.4, life: 1.0,
+        ));
+      }
+    }
+    if (_particles.length > 170) _particles.removeRange(0, _particles.length - 170);
+    final damp = math.pow(0.93, dt * 60).toDouble();
+    for (final p in _particles) {
+      p.x += p.vx * dt * 60; p.y += p.vy * dt * 60;
+      p.vx *= damp; p.vy *= damp;
+      p.vy += 0.04 * dt * 60;
+      p.r += 0.12 * dt * 60;
+      p.life -= 0.028 * dt * 60;
+    }
+    _particles.removeWhere((p) => p.life <= 0);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) => Transform.rotate(
+    angle: widget.headingDeg * math.pi / 180,
+    child: CustomPaint(size: const Size(260, 260), painter: _SprayPainter(particles: _particles)),
+  );
+}
+class _SprayParticle {
+  double x, y, vx, vy, r, life;
+  _SprayParticle({required this.x, required this.y, required this.vx, required this.vy, required this.r, required this.life});
+}
+class _SprayPainter extends CustomPainter {
+  final List<_SprayParticle> particles;
+  const _SprayPainter({required this.particles});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    for (final p in particles) {
+      final alpha = math.min(.8, p.life * .9).clamp(0.0, 1.0).toDouble();
+      if (alpha <= 0) continue;
+      canvas.drawCircle(c + Offset(p.x, p.y), p.r, Paint()..color = Colors.white.withOpacity(alpha));
+    }
+  }
+  @override
+  bool shouldRepaint(covariant _SprayPainter old) => true;
 }
 
 class _MobHud extends StatelessWidget {
