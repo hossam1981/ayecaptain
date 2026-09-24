@@ -2170,14 +2170,17 @@ class BoatMarker extends StatelessWidget {
         width: 56, height: 56,
         child: Stack(alignment: Alignment.center, children: [
           // Always-visible halo ring so the boat stands out at low zoom (was invisible when
-          // the RIB detail scaled down to a couple of pixels).
+          // the RIB detail scaled down to a couple of pixels). No blur/shadow here on purpose —
+          // a soft glow bled through the boat sprite's antialiased edges and made the ring look
+          // like it was crossing IN FRONT of the boat, even though paint order (this Container
+          // first, boat images after) was always correct. A crisp flat ring reads unambiguously
+          // as sitting behind the boat.
           Container(
             width: 56, height: 56,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: haloColor.withOpacity(.18),
-              border: Border.all(color: haloColor, width: 2),
-              boxShadow: [BoxShadow(color: haloColor.withOpacity(.35), blurRadius: 10)],
+              color: haloColor.withOpacity(.16),
+              border: Border.all(color: haloColor, width: 1.5),
             ),
           ),
           // classic top-down skiff (always there, fades OUT during Start ride)
