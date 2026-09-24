@@ -2708,11 +2708,53 @@ class _BottomSheetState extends State<_BottomSheet> {
   double _dragDy = 0;          // accumulated vertical drag for swipe-to-toggle
   bool get _expanded => widget.expanded;
   void _setExpanded(bool v) => widget.onExpandedChanged(v);
+  // Fixed chrome shown above the scrollable content: grab handle + route row + boat header +
+  // warning banner. Extracted so it can go either above a separate scroll view (expanded) or
+  // stand alone at its natural compact size (collapsed).
+  Widget _fixedChrome() => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+    // Grab handle — mirrors the PWA #grab (index.html:81-82): 40×5 pill inside a 24 px tap
+    // zone. PWA uses `rgba(15,42,68,.28)` on a light paper sheet; our sheet is dark navy, so
+    // we bump the opacity so the pill is still readable.
+    Center(child: InkWell(
+      onTap: () => _setExpanded(!_expanded),
+      borderRadius: BorderRadius.circular(3),
+      child: SizedBox(width: 60, height: 24, child: Center(
+        child: Container(width: 40, height: 5,
+          decoration: BoxDecoration(color: const Color(0x66FFFFFF),
+            borderRadius: BorderRadius.circular(3))),
+      )),
+    )),
+    _routeRow(),
+    // header — "Set up your boat" / boat summary + Edit + expand/collapse
+    InkWell(
+      onTap: () => _setExpanded(!_expanded),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 10, bottom: 6),
+        child: Row(children: [
+          Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xCCFFFFFF), size: 20),
+          const SizedBox(width: 6),
+          Expanded(child: Text(_headerText(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(onTap: widget.onEditProfile,
+              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                child: Text('Edit', style: TextStyle(color: Color(0xFF6EB6FF), fontWeight: FontWeight.w700, fontSize: 13)))),
+          ),
+        ]),
+      ),
+    ),
+    if (widget.warningText != null) _BoatWarningBanner(
+      text: widget.warningText!.text, severity: widget.warningText!.severity),
+  ]);
+
   @override
   Widget build(BuildContext context) {
-    // PWA: `max-height:86vh` (index.html:79) — cap the expanded body so the sheet doesn't
-    // swallow the whole screen, and wrap in a scroll view so the user can reach every row.
-    final maxExpandedH = MediaQuery.sizeOf(context).height * 0.86;
+    // User feedback: 86vh (the PWA's own number) still opened nearly full-screen once the
+    // fixed chrome above it (grab handle/route row/header/warning) was added on top — that
+    // extra height was never subtracted from the cap. Target ~half the screen instead, and
+    // cap the WHOLE sheet (chrome included) in one ConstrainedBox+SingleChildScrollView so
+    // the total height can never exceed it regardless of how tall the fixed rows get.
+    final sheetMaxH = MediaQuery.sizeOf(context).height * 0.5;
     return GestureDetector(
       // PWA index.html:1974 swipe handler — dy<-40 opens, dy>40 closes.
       onVerticalDragStart: (_) => _dragDy = 0,
@@ -2723,58 +2765,25 @@ class _BottomSheetState extends State<_BottomSheet> {
         _dragDy = 0;
       },
       child: Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(14)),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Grab handle — mirrors the PWA #grab (index.html:81-82): 40×5 pill inside a 24 px
-        // tap zone. PWA uses `rgba(15,42,68,.28)` on a light paper sheet; our sheet is dark
-        // navy, so we bump the opacity so the pill is still readable.
-        Center(child: InkWell(
-          onTap: () => _setExpanded(!_expanded),
-          borderRadius: BorderRadius.circular(3),
-          child: SizedBox(width: 60, height: 24, child: Center(
-            child: Container(width: 40, height: 5,
-              decoration: BoxDecoration(color: const Color(0x66FFFFFF),
-                borderRadius: BorderRadius.circular(3))),
-          )),
-        )),
-        _routeRow(),
-        // header — "Set up your boat" / boat summary + Edit + expand/collapse
-        InkWell(
-          onTap: () => _setExpanded(!_expanded),
-          child: Padding(
-            padding: const EdgeInsets.only(top: 10, bottom: 6),
-            child: Row(children: [
-              Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xCCFFFFFF), size: 20),
-              const SizedBox(width: 6),
-              Expanded(child: Text(_headerText(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(onTap: widget.onEditProfile,
-                  child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                    child: Text('Edit', style: TextStyle(color: Color(0xFF6EB6FF), fontWeight: FontWeight.w700, fontSize: 13)))),
-              ),
-            ]),
-          ),
-        ),
-        if (widget.warningText != null) _BoatWarningBanner(
-          text: widget.warningText!.text, severity: widget.warningText!.severity),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(14)),
         // PWA index.html:79 `transition: transform .28s cubic-bezier(.2,.8,.2,1)`.
-        AnimatedSize(
+        child: AnimatedSize(
           duration: const Duration(milliseconds: 280),
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: _expanded
             ? ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: maxExpandedH),
+                constraints: BoxConstraints(maxHeight: sheetMaxH),
                 child: SingleChildScrollView(
-                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _expandedBody()),
+                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _fixedChrome(),
+                    ..._expandedBody(),
+                  ]),
                 ),
               )
-            : const SizedBox.shrink(),
+            : _fixedChrome(),
         ),
-      ]),
       ),
     );
   }
