@@ -2174,26 +2174,14 @@ class BoatMarker extends StatelessWidget {
   const BoatMarker({super.key, required this.headingDeg, this.active = false, this.ghost = false});
   @override
   Widget build(BuildContext context) {
-    final haloColor = ghost ? const Color(0x66FFFFFF) : const Color(0x66F2A93B);
     return Transform.rotate(
       angle: headingDeg * math.pi / 180,
       child: SizedBox(
         width: 56, height: 56,
         child: Stack(alignment: Alignment.center, children: [
-          // Always-visible halo ring so the boat stands out at low zoom (was invisible when
-          // the RIB detail scaled down to a couple of pixels). No blur/shadow here on purpose —
-          // a soft glow bled through the boat sprite's antialiased edges and made the ring look
-          // like it was crossing IN FRONT of the boat, even though paint order (this Container
-          // first, boat images after) was always correct. A crisp flat ring reads unambiguously
-          // as sitting behind the boat.
-          Container(
-            width: 56, height: 56,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: haloColor.withOpacity(.16),
-              border: Border.all(color: haloColor, width: 1.5),
-            ),
-          ),
+          // Halo ring removed — user reported it always read as fogging/overlaying the boat
+          // sprite (first a blur-bleed issue, then still an issue as a flat ring). The boat
+          // sprite itself is enough to be visible at the zoom levels this app is used at.
           // classic top-down skiff (always there, fades OUT during Start ride)
           Opacity(
             opacity: ghost ? .35 : 1,
