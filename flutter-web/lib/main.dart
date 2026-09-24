@@ -1753,7 +1753,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   if (_me != null) ...[
                     Marker(
                       point: _me!,
-                      width: 56, height: 56,
+                      width: 60, height: 110,
                       child: BoatMarker(headingDeg: _heading, active: _navigating),
                     ),
                     // Wake spray — churning particles astern while underway. Anchored at the
@@ -1772,7 +1772,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     // once GPS is granted — mirrors the PWA "search" state HUD.
                     Marker(
                       point: _homeCenter,
-                      width: 56, height: 56,
+                      width: 60, height: 110,
                       child: const BoatMarker(headingDeg: 0, ghost: true),
                     ),
                 ]),
@@ -2208,6 +2208,12 @@ class _SunTip extends StatelessWidget {
     ])));
 }
 
+// PWA index.html:190-191,556-558: the boat marker box is 60x110, the boat art itself renders
+// at 31x76 (matches the source PNG's true 106x260 aspect ratio — narrow and tall), and the SVG
+// carries `filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))` for contrast against any basemap.
+// The prior Flutter port forced the same artwork into a 40x40 SQUARE box; under BoxFit.contain
+// that shrank the actual rendered width down to ~16px — nearly invisible on the map. Both the
+// size and the drop-shadow are matched here.
 class BoatMarker extends StatelessWidget {
   final double headingDeg;
   final bool active;
@@ -2218,30 +2224,51 @@ class BoatMarker extends StatelessWidget {
     return Transform.rotate(
       angle: headingDeg * math.pi / 180,
       child: SizedBox(
-        width: 56, height: 56,
+        width: 60, height: 110,
         child: Stack(alignment: Alignment.center, children: [
-          // Halo ring removed — user reported it always read as fogging/overlaying the boat
-          // sprite (first a blur-bleed issue, then still an issue as a flat ring). The boat
-          // sprite itself is enough to be visible at the zoom levels this app is used at.
           // classic top-down skiff (always there, fades OUT during Start ride)
           Opacity(
             opacity: ghost ? .35 : 1,
             child: AnimatedOpacity(
               opacity: active ? 0 : 1,
               duration: const Duration(milliseconds: 500),
-              child: Image.asset('assets/icons/boat.png', fit: BoxFit.contain, width: 40, height: 40),
+              child: const _ShadowedBoatImage(asset: 'assets/icons/boat.png', width: 31, height: 76),
             ),
           ),
           // photo-real orange RIB (fades IN during Start ride) — matches the PWA's boat crossfade
           if (!ghost) AnimatedOpacity(
             opacity: active ? 1 : 0,
             duration: const Duration(milliseconds: 500),
-            child: Image.asset('assets/icons/boat-3d.png', fit: BoxFit.contain, width: 40, height: 40),
+            child: const _ShadowedBoatImage(asset: 'assets/icons/boat-3d.png', width: 31, height: 76),
           ),
         ]),
       ),
     );
   }
+}
+
+// Renders `asset` twice: once tinted solid black-45%-alpha and gaussian-blurred, offset 2px
+// down, as a silhouette-shaped drop shadow — then the real image on top, undelayed. This is
+// the direct Flutter equivalent of CSS `filter: drop-shadow(0 2px 3px rgba(0,0,0,.45))`, which
+// (unlike a BoxShadow) follows the image's own alpha silhouette rather than its bounding box.
+class _ShadowedBoatImage extends StatelessWidget {
+  final String asset;
+  final double width, height;
+  const _ShadowedBoatImage({required this.asset, required this.width, required this.height});
+  @override
+  Widget build(BuildContext context) => Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
+    Positioned(
+      top: 2,
+      child: ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: 1.5, sigmaY: 1.5),
+        child: ColorFiltered(
+          colorFilter: const ColorFilter.mode(Color(0x73000000), BlendMode.srcIn),
+          child: Image.asset(asset, width: width, height: height, fit: BoxFit.contain),
+        ),
+      ),
+    ),
+    Image.asset(asset, width: width, height: height, fit: BoxFit.contain),
+  ]);
 }
 
 // Small floating bar shown while navigating — mirrors the PWA's #nav ("steer XXX° · point N of M ·
