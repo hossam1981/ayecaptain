@@ -1242,7 +1242,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   // Break the route line into ~14 short segments per waypoint hop and colour each by the grade at
-  // the anchor waypoints, interpolating between them — same trick the PWA uses in renderRoute.
+  // the anchor waypoints, interpolating between them — same trick the PWA uses in renderRoute
+  // (index.html:1520-1538). Each segment draws a dark halo UNDERLAY first, then the graded
+  // colour on top — "so the colour reads over any basemap" per the PWA's own comment. Flutter
+  // was previously missing the halo entirely and used the wrong dash cadence ([10,8] instead
+  // of the PWA's [3,10]).
   List<Polyline> _gradedRouteSegments(List<LatLng> pts) {
     final out = <Polyline>[];
     const N = 14;
@@ -1250,12 +1254,17 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       final a = pts[i], b = pts[i + 1];
       final la = _gLevel(_gradeAt(a));
       final lb = _gLevel(_gradeAt(b));
+      final wt = i == _legIdx ? 5.0 : 4.0;   // PWA: legI===legIdx ? 5 : 4 (index.html:1527)
       for (int k = 0; k < N; k++) {
         final t0 = k / N, t1 = (k + 1) / N;
         final p0 = LatLng(a.latitude + (b.latitude - a.latitude) * t0, a.longitude + (b.longitude - a.longitude) * t0);
         final p1 = LatLng(a.latitude + (b.latitude - a.latitude) * t1, a.longitude + (b.longitude - a.longitude) * t1);
-        out.add(Polyline(points: [p0, p1], color: _gInterpolate(la, lb, (t0 + t1) / 2), strokeWidth: 4,
-            pattern: StrokePattern.dashed(segments: const [10, 8])));
+        // dark halo first — index.html:1533-1534
+        out.add(Polyline(points: [p0, p1], color: const Color(0x730B2740), strokeWidth: wt + 2.4,
+            pattern: StrokePattern.dashed(segments: const [3, 10])));
+        // graded colour on top — index.html:1535-1536
+        out.add(Polyline(points: [p0, p1], color: _gInterpolate(la, lb, (t0 + t1) / 2).withOpacity(.85), strokeWidth: wt,
+            pattern: StrokePattern.dashed(segments: const [3, 10])));
       }
     }
     return out;
@@ -1714,9 +1723,15 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   for (int i = 0; i < _waypoints.length; i++)
                     Marker(
                       point: _waypoints[i],
-                      width: 32, height: 32,
-                      child: _WaypointPin(isDest: i == _waypoints.length - 1,
-                        grade: _gradeAt(_waypoints[i])),
+                      // Box sized to the LARGER (destination, 34x46) pin; the PWA anchors each
+                      // teardrop at its own bottom tip (iconAnchor:[w/2,h], index.html:1573) —
+                      // bottomCenter alignment here reproduces that regardless of which of the
+                      // two pin sizes is actually drawn.
+                      width: 34, height: 46,
+                      alignment: Alignment.bottomCenter,
+                      child: Align(alignment: Alignment.bottomCenter,
+                        child: _WaypointPin(isDest: i == _waypoints.length - 1,
+                          grade: _gradeAt(_waypoints[i]))),
                     ),
                   if (_mobPoint != null) ...[
                     // Smoke drifts with live wind, layered beneath the pulsing buoy so the
@@ -2330,17 +2345,67 @@ class _NavBar extends StatelessWidget {
   }
 }
 
+// PWA `pinIcon()` (index.html:1563-1573) — a teardrop SVG, 34x46 for the destination pin,
+// 28x38 (34/46 * 0.82) for interim waypoints, anchored at the bottom point. Flutter previously
+// used a generic Material location_on glyph at 32/26px — noticeably shorter and genericer than
+// the PWA's teardrop. Ported as a CustomPainter reproducing the same path geometry.
 class _WaypointPin extends StatelessWidget {
   final bool isDest;
   final String grade;   // 'g' = calm/green, 'a' = fair/amber, 'r' = rough/red
   const _WaypointPin({required this.isDest, this.grade = 'a'});
   @override
-  Widget build(BuildContext context) => Icon(
-        Icons.location_on,
-        size: isDest ? 32 : 26,
-        color: _gradeColors[grade] ?? const Color(0xFFF2A93B),
-        shadows: const [Shadow(color: Colors.black45, blurRadius: 4)],
-      );
+  Widget build(BuildContext context) {
+    final s = isDest ? 1.0 : 0.82;
+    final w = (34 * s).roundToDouble(), h = (46 * s).roundToDouble();
+    return SizedBox(width: w, height: h,
+      child: CustomPaint(size: Size(w, h),
+        painter: _TeardropPinPainter(color: _gradeColors[grade] ?? const Color(0xFFF2A93B))));
+  }
+}
+
+class _TeardropPinPainter extends CustomPainter {
+  final Color color;
+  const _TeardropPinPainter({required this.color});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = size.width / 34.0;   // viewBox is 0 0 34 46, uniformly scaled to w x h
+    canvas.save();
+    canvas.scale(scale);
+    // ground shadow ellipse
+    canvas.drawOval(Rect.fromCenter(center: const Offset(17, 43.5), width: 15, height: 5.2),
+      Paint()..color = const Color(0x540F2A44));
+    // main teardrop body: M17 45 C7 30 2 22 2 15 A15 15 0 1 1 32 15 C32 22 27 30 17 45 Z
+    final body = ui.Path()
+      ..moveTo(17, 45)
+      ..cubicTo(7, 30, 2, 22, 2, 15)
+      ..arcToPoint(const Offset(32, 15), radius: const Radius.circular(15), clockwise: true, largeArc: true)
+      ..cubicTo(32, 22, 27, 30, 17, 45)
+      ..close();
+    canvas.drawPath(body, Paint()..color = color);
+    canvas.drawPath(body, Paint()..color = const Color(0x8C0B2744)
+      ..style = PaintingStyle.stroke..strokeWidth = 1.4);
+    // bottom shading
+    final shade = ui.Path()
+      ..moveTo(17, 45)
+      ..cubicTo(13.5, 39, 10, 33, 7, 27)
+      ..cubicTo(11, 30.5, 14, 32, 17, 32)
+      ..cubicTo(20, 32, 23, 30.5, 27, 27)
+      ..cubicTo(24, 33, 20.5, 39, 17, 45)
+      ..close();
+    canvas.drawPath(shade, Paint()..color = const Color(0x29000000));
+    // highlight ellipse, rotated -24deg around (12,10)
+    canvas.save();
+    canvas.translate(12, 10);
+    canvas.rotate(-24 * math.pi / 180);
+    canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: 9.2, height: 12.8),
+      Paint()..color = Colors.white.withOpacity(.3));
+    canvas.restore();
+    // white "eye" circle
+    canvas.drawCircle(const Offset(17, 15), 5.6, Paint()..color = Colors.white);
+    canvas.restore();
+  }
+  @override
+  bool shouldRepaint(covariant _TeardropPinPainter old) => old.color != color;
 }
 
 // Batch B.5 — chart overlay markers
@@ -3232,7 +3297,10 @@ class _MobPinState extends State<_MobPin> with SingleTickerProviderStateMixin {
           ),
         );
       }),
-      Image.asset('assets/icons/mob-buoy.png', width: 36, height: 36, fit: BoxFit.contain),
+      // PWA `.mobbuoy{width:56px!important;height:auto}` (index.html:205) — the source PNG is
+      // 420x391, so height ≈ 52px preserving that ratio. Was 36x36, ~35% undersized for a
+      // safety-critical marker.
+      Image.asset('assets/icons/mob-buoy.png', width: 56, height: 52, fit: BoxFit.contain),
     ]),
   );
 }
