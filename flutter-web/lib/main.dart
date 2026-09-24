@@ -602,6 +602,7 @@ double sunOpacity(double elDeg) {
 const _overpassMirrors = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
 
 // Rough conversion from statute miles → geographic bounding box (~1° lat ≈ 69 mi).
@@ -648,7 +649,9 @@ class Dock {
   );
 }
 
-Future<List<Dock>> fetchDocks(LatLng at) async {
+// Returns null on a genuine fetch/parse failure (so the caller can show a retry prompt),
+// vs an empty list for a legitimate "no docks within 20 mi" result.
+Future<List<Dock>?> fetchDocks(LatLng at) async {
   // 7-day cache keyed on the rough tile (0.5°) so nearby fixes hit the same cache.
   final key = 'docks_${at.latitude.toStringAsFixed(1)}_${at.longitude.toStringAsFixed(1)}';
   try {
@@ -673,7 +676,7 @@ Future<List<Dock>> fetchDocks(LatLng at) async {
 );
 out center 60;''';
   final body = await _overpassQuery(q);
-  if (body == null) return [];
+  if (body == null) return null;
   final out = <Dock>[];
   try {
     final j = jsonDecode(body) as Map<String, dynamic>;
@@ -728,7 +731,9 @@ String _seamarkColor(Map tags) {
   return 'amber';
 }
 
-Future<List<NavAid>> fetchNavAids(LatLng at) async {
+// Returns null on a genuine fetch/parse failure (so the caller can show a retry prompt),
+// vs an empty list for a legitimate "no nav aids within 20 mi" result.
+Future<List<NavAid>?> fetchNavAids(LatLng at) async {
   final key = 'navaids_${at.latitude.toStringAsFixed(1)}_${at.longitude.toStringAsFixed(1)}';
   try {
     final sp = await SharedPreferences.getInstance();
@@ -750,7 +755,7 @@ Future<List<NavAid>> fetchNavAids(LatLng at) async {
 );
 out 120;''';
   final body = await _overpassQuery(q);
-  if (body == null) return [];
+  if (body == null) return null;
   final out = <NavAid>[];
   try {
     final j = jsonDecode(body) as Map<String, dynamic>;
@@ -1089,6 +1094,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   List<Dock> _docks = [];
   List<NavAid> _navAids = [];
   TidalCurrent? _tidalCurrent;
+  // Loading/error feedback — matches the PWA's "Loading nearby docks…" /
+  // "Couldn't reach dock data — tap to retry" (index.html:1662, 1683).
+  bool _docksLoading = false, _docksError = false;
+  bool _navAidsLoading = false, _navAidsError = false;
 
   // Batch B.6 tide unit preference — 'ft' or 'm', persisted like the PWA's tideUnit key.
   String _tideUnit = 'ft';
@@ -1172,12 +1181,22 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (mounted && h.isNotEmpty) setState(() => _hourly = h);
   }
   Future<void> _refreshDocks(LatLng at) async {
+    if (mounted) setState(() { _docksLoading = true; _docksError = false; });
     final d = await fetchDocks(at);
-    if (mounted) setState(() => _docks = d);
+    if (!mounted) return;
+    setState(() {
+      _docksLoading = false;
+      if (d == null) { _docksError = true; } else { _docks = d; _docksError = false; }
+    });
   }
   Future<void> _refreshNavAids(LatLng at) async {
+    if (mounted) setState(() { _navAidsLoading = true; _navAidsError = false; });
     final a = await fetchNavAids(at);
-    if (mounted) setState(() => _navAids = a);
+    if (!mounted) return;
+    setState(() {
+      _navAidsLoading = false;
+      if (a == null) { _navAidsError = true; } else { _navAids = a; _navAidsError = false; }
+    });
   }
   Future<void> _refreshTidalCurrent(LatLng at) async {
     final c = await fetchTidalCurrent(at);
@@ -1464,28 +1483,43 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(builder: (sctx, setSheetState) => MoreToolsSheet(
-        docksOn: _docksOn,
-        navAidsOn: _navAidsOn,
-        anchorOn: _anchorPoint != null,
-        fuelOn: _fuelRingOn,
-        smartOn: _smart,
-        onToggleDocks: (v) {
+      builder: (ctx) => StatefulBuilder(builder: (sctx, setSheetState) {
+        // The modal is a separate overlay route — setState() on _MapScreenState (fired inside
+        // _refreshDocks/_refreshNavAids while the fetch is in flight) does NOT automatically
+        // rebuild this popover. Await the refresh here and call setSheetState again once it
+        // resolves so "Loading…" / the retry prompt actually show up while this sheet is open.
+        Future<void> doDocks(bool v) async {
           setSheetState(() {});
           setState(() => _docksOn = v);
-          if (v) _refreshDocks(_me ?? _homeCenter);
-        },
-        onToggleNavAids: (v) {
+          if (v) { await _refreshDocks(_me ?? _homeCenter); setSheetState(() {}); }
+        }
+        Future<void> doNavAids(bool v) async {
           setSheetState(() {});
           setState(() => _navAidsOn = v);
-          if (v) _refreshNavAids(_me ?? _homeCenter);
-        },
-        onToggleAnchor: (_) { Navigator.of(ctx).pop(); _toggleAnchor(); },
-        onToggleFuel: (_) { Navigator.of(ctx).pop(); _toggleFuelRing(); },
-        onToggleSmart: (_) { Navigator.of(ctx).pop(); setState(() => _smart = !_smart); _recomputeRoute(); },
-        onOpenForecast: () { Navigator.of(ctx).pop(); _openForecast(); },
-        onOpenTides: () { Navigator.of(ctx).pop(); _openTides(); },
-      )),
+          if (v) { await _refreshNavAids(_me ?? _homeCenter); setSheetState(() {}); }
+        }
+        return MoreToolsSheet(
+          docksOn: _docksOn,
+          navAidsOn: _navAidsOn,
+          anchorOn: _anchorPoint != null,
+          fuelOn: _fuelRingOn,
+          smartOn: _smart,
+          docksSub: _docksLoading ? 'Loading nearby docks…'
+            : _docksError ? "Couldn't reach dock data — tap to retry" : null,
+          navAidsSub: _navAidsLoading ? 'Loading nearby buoys…'
+            : _navAidsError ? "Couldn't reach buoy data — tap to retry" : null,
+          docksError: _docksError, navAidsError: _navAidsError,
+          onRetryDocks: () => doDocks(true),
+          onRetryNavAids: () => doNavAids(true),
+          onToggleDocks: doDocks,
+          onToggleNavAids: doNavAids,
+          onToggleAnchor: (_) { Navigator.of(ctx).pop(); _toggleAnchor(); },
+          onToggleFuel: (_) { Navigator.of(ctx).pop(); _toggleFuelRing(); },
+          onToggleSmart: (_) { Navigator.of(ctx).pop(); setState(() => _smart = !_smart); _recomputeRoute(); },
+          onOpenForecast: () { Navigator.of(ctx).pop(); _openForecast(); },
+          onOpenTides: () { Navigator.of(ctx).pop(); _openTides(); },
+        );
+      }),
     );
   }
 
@@ -2495,10 +2529,17 @@ class MoreToolsSheet extends StatelessWidget {
   final ValueChanged<bool> onToggleDocks, onToggleNavAids, onToggleAnchor, onToggleFuel, onToggleSmart;
   final VoidCallback onOpenForecast;
   final VoidCallback onOpenTides;
+  // Overrides the default subtitle while loading/failed — matches the PWA's
+  // "Loading nearby docks…" / "Couldn't reach dock data — tap to retry" (index.html:1662,1683).
+  final String? docksSub, navAidsSub;
+  final bool docksError, navAidsError;
+  final VoidCallback? onRetryDocks, onRetryNavAids;
   const MoreToolsSheet({super.key,
     required this.docksOn, required this.navAidsOn, required this.anchorOn, required this.fuelOn, required this.smartOn,
     required this.onToggleDocks, required this.onToggleNavAids, required this.onToggleAnchor, required this.onToggleFuel, required this.onToggleSmart,
-    required this.onOpenForecast, required this.onOpenTides});
+    required this.onOpenForecast, required this.onOpenTides,
+    this.docksSub, this.navAidsSub, this.docksError = false, this.navAidsError = false,
+    this.onRetryDocks, this.onRetryNavAids});
   @override
   Widget build(BuildContext context) {
     return SafeArea(child: Container(
@@ -2511,10 +2552,12 @@ class MoreToolsSheet extends StatelessWidget {
         const SizedBox(height: 12),
         const Padding(padding: EdgeInsets.only(left: 4, bottom: 4),
           child: Text('More tools', style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 18))),
-        _row(Icons.anchor, 'Docks & fuel', 'Marinas, ramps & fuel docks nearby (20 mi)', docksOn, onToggleDocks),
+        _row(Icons.anchor, 'Docks & fuel', docksSub ?? 'Marinas, ramps & fuel docks nearby (20 mi)',
+          docksOn, onToggleDocks, subError: docksError, onSubTap: docksError ? onRetryDocks : null),
         _row(Icons.center_focus_strong, 'Anchor watch', 'Alarm if you drift off the hook', anchorOn, onToggleAnchor),
         _row(Icons.local_gas_station, 'Fuel range', 'Half-range ring from your tank & burn rate', fuelOn, onToggleFuel),
-        _row(Icons.location_on, 'Nav aids', 'Channel buoys & beacons nearby (20 mi)', navAidsOn, onToggleNavAids),
+        _row(Icons.location_on, 'Nav aids', navAidsSub ?? 'Channel buoys & beacons nearby (20 mi)',
+          navAidsOn, onToggleNavAids, subError: navAidsError, onSubTap: navAidsError ? onRetryNavAids : null),
         _row(Icons.route, 'Smart routes', 'Bend routes around land (experimental)', smartOn, onToggleSmart),
         const Divider(color: Color(0xFFDDE4EA), height: 24),
         Row(children: [
@@ -2539,7 +2582,11 @@ class MoreToolsSheet extends StatelessWidget {
       ]),
     ));
   }
-  Widget _row(IconData icon, String title, String sub, bool on, ValueChanged<bool> onTap) {
+  Widget _row(IconData icon, String title, String sub, bool on, ValueChanged<bool> onTap,
+      {bool subError = false, VoidCallback? onSubTap}) {
+    final subWidget = Text(sub, style: TextStyle(
+      color: subError ? const Color(0xFFD93A2B) : const Color(0xFF708597),
+      fontWeight: subError ? FontWeight.w700 : FontWeight.normal, fontSize: 12));
     return Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Row(children: [
       Container(width: 42, height: 42,
         decoration: BoxDecoration(color: const Color(0xFFF0F5F9), shape: BoxShape.circle),
@@ -2547,7 +2594,9 @@ class MoreToolsSheet extends StatelessWidget {
       const SizedBox(width: 12),
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(title, style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 15)),
-        Text(sub, style: const TextStyle(color: Color(0xFF708597), fontSize: 12)),
+        onSubTap != null
+          ? InkWell(onTap: onSubTap, child: subWidget)
+          : subWidget,
       ])),
       Switch(value: on, onChanged: onTap, activeColor: const Color(0xFF2E6F9E)),
     ]));
