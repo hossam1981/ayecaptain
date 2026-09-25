@@ -2263,7 +2263,14 @@ class _SunTip extends StatelessWidget {
 class BoatMarker extends StatelessWidget {
   final double headingDeg;
   final bool active;
-  final bool ghost;   // true = grey "GPS not fixed" placeholder centred on the map
+  // Was: true dimmed the boat to 35% opacity as a "GPS not fixed" placeholder. Checked the PWA
+  // (index.html: `const boat = L.marker([home.lat, home.lng], {icon:boatIcon,...})`) — it shows
+  // the boat marker at FULL opacity from the start, at the home/default position, and only moves
+  // it once a real fix arrives. There is no dimmed-placeholder state in the spec at all; this was
+  // a Flutter-only invention that made the boat look faded/washed-out any time GPS hadn't locked
+  // on yet, independent of and on top of the actual color-contrast issue. Kept the field (still
+  // used to hide the RIB crossfade layer below) but no longer reduces opacity.
+  final bool ghost;
   const BoatMarker({super.key, required this.headingDeg, this.active = false, this.ghost = false});
   @override
   Widget build(BuildContext context) {
@@ -2273,13 +2280,10 @@ class BoatMarker extends StatelessWidget {
         width: 60, height: 110,
         child: Stack(alignment: Alignment.center, children: [
           // classic top-down skiff (always there, fades OUT during Start ride)
-          Opacity(
-            opacity: ghost ? .35 : 1,
-            child: AnimatedOpacity(
-              opacity: active ? 0 : 1,
-              duration: const Duration(milliseconds: 500),
-              child: const _ShadowedBoatImage(asset: 'assets/icons/boat_small.png', width: 31, height: 76),
-            ),
+          AnimatedOpacity(
+            opacity: active ? 0 : 1,
+            duration: const Duration(milliseconds: 500),
+            child: const _ShadowedBoatImage(asset: 'assets/icons/boat_small.png', width: 31, height: 76),
           ),
           // photo-real orange RIB (fades IN during Start ride) — matches the PWA's boat crossfade
           if (!ghost) AnimatedOpacity(
