@@ -1921,7 +1921,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               if (_picking || _waypoints.isNotEmpty) const SizedBox(height: 10),
               _BottomSheet(
                 weather: _weather, onEditProfile: _openBoatProfile,
-                warningText: _boatWarning(), window: bestWindow(_hourly, _profile),
+                window: bestWindow(_hourly, _profile),
                 hourly: _hourly, daily: _daily, profile: _profile,
                 expanded: _sheetExpanded,
                 onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
@@ -2985,7 +2985,6 @@ class _RouteBar extends StatelessWidget {
 class _BottomSheet extends StatefulWidget {
   final Weather? weather;
   final VoidCallback onEditProfile;
-  final ({String text, String severity})? warningText;
   final BestWindow? window;
   final List<HourlyPoint> hourly;
   final List<DailyForecast> daily;
@@ -2993,7 +2992,7 @@ class _BottomSheet extends StatefulWidget {
   final bool expanded;
   final ValueChanged<bool> onExpandedChanged;
   const _BottomSheet({required this.weather, required this.onEditProfile,
-    required this.warningText, required this.window, required this.hourly, required this.daily,
+    required this.window, required this.hourly, required this.daily,
     required this.profile, required this.expanded, required this.onExpandedChanged});
   @override
   State<_BottomSheet> createState() => _BottomSheetState();
@@ -3041,8 +3040,9 @@ class _BottomSheetState extends State<_BottomSheet> {
         ]),
       ),
     ),
-    if (widget.warningText != null) _BoatWarningBanner(
-      text: widget.warningText!.text, severity: widget.warningText!.severity),
+    // Not duplicated here — the boat-warning banner already shows in the top HUD
+    // (_MapScreenState.build(), above the rail). PWA only shows it once too (index.html:327,
+    // inside #sheet) but the user explicitly wants the HUD copy kept and this one dropped.
   ]);
 
   @override
