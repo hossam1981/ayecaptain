@@ -3334,27 +3334,30 @@ class GlassWarningCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAmber = severity == GlassSeverity.amber;
-    // Dark smoked-glass base (0xFF07131F) is shared by both severities and does most of the
-    // work — only this accent changes between them. Previously the severity color WAS the
-    // fill (a flat translucent amber/red rectangle); now it's a thin illumination wash over
-    // a dark base, border, and glow, per explicit correction after the first pass read as
-    // "flat salmon" instead of "dark glass lit by red".
-    final Color brightAccent = isAmber ? const Color(0xFFFFC107) : const Color(0xFFFF4D5E);
-    final Color midAccent = isAmber ? const Color(0xFF8A4B0C) : const Color(0xFF7F1D2D);
-    final Color borderAccent = isAmber ? const Color(0xFFFFC15A) : const Color(0xFFFF5969);
-    final Color glowAccent = isAmber ? const Color(0xFFFFB020) : const Color(0xFFFF3B4F);
+    // Second correction pass: first version's dark base (~48% alpha) and single weak glow
+    // (18% alpha) read as "dark card + colored border" with the map barely visible and no
+    // real bloom. Values below are the user's explicit re-spec: much lower base alpha (map
+    // stays clearly visible), lower blur sigma, and a two-tier glow (wide+soft, tight+bright)
+    // plus a separate depth shadow, all living on the OUTER (unblurred) Container so the glow
+    // itself doesn't get blurred away — only the glass content inside ClipRRect does.
+    final Color darkBase = isAmber ? const Color(0xFF141412) : const Color(0xFF07131F);
+    final double baseOpacity = isAmber ? .26 : .28;
+    final Color edgeColor = isAmber ? const Color(0xFFFFC44D) : const Color(0xFFFF6070);
+    final Color glowWide = isAmber ? const Color(0xFFFFB52E) : const Color(0xFFFF4055);
+    final Color glowTight = isAmber ? const Color(0xFFFFD36A) : const Color(0xFFFF6375);
     final iconColor = isAmber ? const Color(0xFFFFC846) : Colors.white;
-    const darkBase = Color(0xFF07131F);
 
     return Container(
       // Border + drop shadow + accent bloom live on this OUTER box, separate from the
-      // blurred glass content below — keeps the shadow crisp instead of getting blurred too.
+      // blurred glass content below — keeps the glow crisp instead of getting blurred too,
+      // and unclipped so the 10-18px bloom outside the edge can actually render (checked: no
+      // ancestor Positioned/Column between here and the HUD root sets a clipBehavior).
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: borderAccent.withOpacity(.85), width: 1.2),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(.30), blurRadius: 22, offset: const Offset(0, 10)),
-          BoxShadow(color: glowAccent.withOpacity(.18), blurRadius: 18, spreadRadius: 1),
+          BoxShadow(color: glowWide.withOpacity(.40), blurRadius: 18, spreadRadius: 1),
+          BoxShadow(color: glowTight.withOpacity(.24), blurRadius: 6),
+          BoxShadow(color: Colors.black.withOpacity(.30), blurRadius: 18, offset: const Offset(0, 8)),
         ],
       ),
       // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
@@ -3362,24 +3365,27 @@ class GlassWarningCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Stack(children: [
-            // Dark smoked-glass base — most of the card's area should read as THIS, not
-            // as a colored fill.
-            const Positioned.fill(child: ColoredBox(color: Color(0x7A07131F))),
-            // Subtle accent illumination wash (~20% of the surface), not a flat fill.
+          filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: darkBase.withOpacity(baseOpacity),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: edgeColor.withOpacity(.90), width: 1.2),
+            ),
+            child: Stack(children: [
+            // Very subtle internal accent tint — light inside the glass, not paint.
             Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [
-                brightAccent.withOpacity(.18),
-                midAccent.withOpacity(.10),
-                darkBase.withOpacity(.20),
+                glowWide.withOpacity(.10),
+                Colors.transparent,
+                glowWide.withOpacity(.05),
               ]),
             ))),
             // Faint top glass reflection — not a neon rim, just enough to read as glass.
             Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(.10), Colors.white.withOpacity(0)],
-                stops: const [0, .30]),
+                colors: [Colors.white.withOpacity(.12), Colors.white.withOpacity(.025), Colors.white.withOpacity(0)],
+                stops: const [0, .12, .40]),
             )))),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
@@ -3389,7 +3395,7 @@ class GlassWarningCard extends StatelessWidget {
                   decoration: BoxDecoration(shape: BoxShape.circle,
                     color: Colors.white.withOpacity(.06),
                     border: Border.all(color: Colors.white.withOpacity(.20)),
-                    boxShadow: [BoxShadow(color: glowAccent.withOpacity(.16), blurRadius: 12)]),
+                    boxShadow: [BoxShadow(color: glowWide.withOpacity(.16), blurRadius: 12)]),
                   child: Icon(icon, color: iconColor, size: 20),
                 ),
                 const SizedBox(width: 12),
@@ -3400,7 +3406,8 @@ class GlassWarningCard extends StatelessWidget {
                 ],
               ]),
             ),
-          ]),
+            ]),
+          ),
         ),
       ),
     );
