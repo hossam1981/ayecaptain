@@ -23,6 +23,13 @@ flutter:
     - assets/land-njny.json   # pre-baked NOAA land polygons, shared with the PWA
     - assets/icons/boat.png
     - assets/icons/boat-3d.png
+    # Pre-scaled (LANCZOS, offline) to 3x the 31x76 display size. flutter_web's CanvasKit
+    # renderer has a long-standing, still-open quality bug downscaling images at runtime
+    # (flutter/flutter#80520, #135655) — even FilterQuality.high washes the ~3.4x runtime
+    # downscale of the full 106x260 source out to near-uniform pale colors. Shipping an
+    # asset that's already close to its display size sidesteps the bug entirely.
+    - assets/icons/boat_small.png
+    - assets/icons/boat-3d_small.png
     - assets/icons/mob-buoy.png
     - assets/icons/sunrise.png
     - assets/icons/sunset.png

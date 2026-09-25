@@ -1744,11 +1744,17 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     Marker(
                       point: _waypoints[i],
                       // Box sized to the LARGER (destination, 34x46) pin; the PWA anchors each
-                      // teardrop at its own bottom tip (iconAnchor:[w/2,h], index.html:1573) —
-                      // bottomCenter alignment here reproduces that regardless of which of the
-                      // two pin sizes is actually drawn.
+                      // teardrop at its own bottom tip (iconAnchor:[w/2,h], index.html:1573).
+                      // flutter_map's own `alignment` param is inverted from what the name
+                      // suggests: per its actual offset formula (marker_layer.dart), passing
+                      // Alignment.bottomCenter here places the box's TOP edge at the geo point
+                      // (box drawn downward FROM the point) — the opposite of "pin tip at the
+                      // point". Alignment.topCenter is what puts the box's BOTTOM (and so the
+                      // pin's tip, via the inner Align below) exactly at the point. Confirmed by
+                      // measuring a live drop: with bottomCenter the tip rendered ~31px below
+                      // the actual tap location.
                       width: 34, height: 46,
-                      alignment: Alignment.bottomCenter,
+                      alignment: Alignment.topCenter,
                       child: Align(alignment: Alignment.bottomCenter,
                         child: _WaypointPin(isDest: i == _waypoints.length - 1,
                           grade: _gradeAt(_waypoints[i]))),
@@ -2272,14 +2278,14 @@ class BoatMarker extends StatelessWidget {
             child: AnimatedOpacity(
               opacity: active ? 0 : 1,
               duration: const Duration(milliseconds: 500),
-              child: const _ShadowedBoatImage(asset: 'assets/icons/boat.png', width: 31, height: 76),
+              child: const _ShadowedBoatImage(asset: 'assets/icons/boat_small.png', width: 31, height: 76),
             ),
           ),
           // photo-real orange RIB (fades IN during Start ride) — matches the PWA's boat crossfade
           if (!ghost) AnimatedOpacity(
             opacity: active ? 1 : 0,
             duration: const Duration(milliseconds: 500),
-            child: const _ShadowedBoatImage(asset: 'assets/icons/boat-3d.png', width: 31, height: 76),
+            child: const _ShadowedBoatImage(asset: 'assets/icons/boat-3d_small.png', width: 31, height: 76),
           ),
         ]),
       ),
