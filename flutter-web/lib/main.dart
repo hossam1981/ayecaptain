@@ -3334,60 +3334,72 @@ class GlassWarningCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAmber = severity == GlassSeverity.amber;
-    final gradient = LinearGradient(
-      begin: Alignment.topLeft, end: Alignment.bottomRight,
-      colors: isAmber
-        ? const [Color.fromRGBO(245, 158, 11, 0.30), Color.fromRGBO(180, 83, 9, 0.16)]
-        : const [Color.fromRGBO(220, 38, 38, 0.34), Color.fromRGBO(127, 29, 29, 0.18)],
-    );
-    final borderColor = isAmber
-      ? const Color.fromRGBO(255, 193, 70, 0.70)
-      : const Color.fromRGBO(255, 90, 90, 0.72);
-    final glowColor = isAmber
-      ? const Color.fromRGBO(245, 158, 11, 0.16)
-      : const Color.fromRGBO(239, 68, 68, 0.16);
+    // Dark smoked-glass base (0xFF07131F) is shared by both severities and does most of the
+    // work — only this accent changes between them. Previously the severity color WAS the
+    // fill (a flat translucent amber/red rectangle); now it's a thin illumination wash over
+    // a dark base, border, and glow, per explicit correction after the first pass read as
+    // "flat salmon" instead of "dark glass lit by red".
+    final Color brightAccent = isAmber ? const Color(0xFFFFC107) : const Color(0xFFFF4D5E);
+    final Color midAccent = isAmber ? const Color(0xFF8A4B0C) : const Color(0xFF7F1D2D);
+    final Color borderAccent = isAmber ? const Color(0xFFFFC15A) : const Color(0xFFFF5969);
+    final Color glowAccent = isAmber ? const Color(0xFFFFB020) : const Color(0xFFFF3B4F);
     final iconColor = isAmber ? const Color(0xFFFFC846) : Colors.white;
+    const darkBase = Color(0xFF07131F);
 
-    // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
-    // whole map/HUD — keeps the expensive part localized per the design brief.
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
-          decoration: BoxDecoration(
-            gradient: gradient,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: borderColor, width: 1),
-            boxShadow: [
-              BoxShadow(color: glowColor, blurRadius: 18),
-              const BoxShadow(color: Color.fromRGBO(0, 0, 0, 0.20), blurRadius: 20, offset: Offset(0, 8)),
-            ],
-          ),
+    return Container(
+      // Border + drop shadow + accent bloom live on this OUTER box, separate from the
+      // blurred glass content below — keeps the shadow crisp instead of getting blurred too.
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderAccent.withOpacity(.85), width: 1.2),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(.30), blurRadius: 22, offset: const Offset(0, 10)),
+          BoxShadow(color: glowAccent.withOpacity(.18), blurRadius: 18, spreadRadius: 1),
+        ],
+      ),
+      // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
+      // whole map/HUD — keeps the expensive part localized per the design brief.
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Stack(children: [
-            // Subtle top light highlight — not a neon rim, just enough to read as glass.
+            // Dark smoked-glass base — most of the card's area should read as THIS, not
+            // as a colored fill.
+            const Positioned.fill(child: ColoredBox(color: Color(0x7A07131F))),
+            // Subtle accent illumination wash (~20% of the surface), not a flat fill.
+            Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
+              gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [
+                brightAccent.withOpacity(.18),
+                midAccent.withOpacity(.10),
+                darkBase.withOpacity(.20),
+              ]),
+            ))),
+            // Faint top glass reflection — not a neon rim, just enough to read as glass.
             Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
               gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(.08), Colors.white.withOpacity(0)],
-                stops: const [0, .35]),
+                colors: [Colors.white.withOpacity(.10), Colors.white.withOpacity(0)],
+                stops: const [0, .30]),
             )))),
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(
-                width: 42, height: 42, alignment: Alignment.center,
-                decoration: BoxDecoration(shape: BoxShape.circle,
-                  color: Colors.white.withOpacity(.06),
-                  border: Border.all(color: Colors.white.withOpacity(.15))),
-                child: Icon(icon, color: iconColor, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(child: content),
-              if (onDismiss != null) ...[
-                const SizedBox(width: 2),
-                _GlassCloseButton(onTap: onDismiss!),
-              ],
-            ]),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: 42, height: 42, alignment: Alignment.center,
+                  decoration: BoxDecoration(shape: BoxShape.circle,
+                    color: Colors.white.withOpacity(.06),
+                    border: Border.all(color: Colors.white.withOpacity(.20)),
+                    boxShadow: [BoxShadow(color: glowAccent.withOpacity(.16), blurRadius: 12)]),
+                  child: Icon(icon, color: iconColor, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: content),
+                if (onDismiss != null) ...[
+                  const SizedBox(width: 2),
+                  _GlassCloseButton(onTap: onDismiss!),
+                ],
+              ]),
+            ),
           ]),
         ),
       ),
