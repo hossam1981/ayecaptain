@@ -2297,11 +2297,18 @@ class _ShadowedBoatImage extends StatelessWidget {
         imageFilter: ui.ImageFilter.blur(sigmaX: 1.5, sigmaY: 1.5),
         child: ColorFiltered(
           colorFilter: const ColorFilter.mode(Color(0x73000000), BlendMode.srcIn),
-          child: Image.asset(asset, width: width, height: height, fit: BoxFit.contain),
+          child: Image.asset(asset, width: width, height: height, fit: BoxFit.contain,
+            filterQuality: FilterQuality.high),
         ),
       ),
     ),
-    Image.asset(asset, width: width, height: height, fit: BoxFit.contain),
+    // FilterQuality.high — the source PNG is 106×260, downscaled ~3.4x to fit this 31×76 box.
+    // Default FilterQuality.low (bilinear) blurs the hull outline/shading badly at that ratio,
+    // which read fine against the dark basemap but made the boat nearly disappear against the
+    // light Map basemap's similarly pale water. The PWA renders the same PNG via a browser
+    // <image> element, which doesn't have this softening.
+    Image.asset(asset, width: width, height: height, fit: BoxFit.contain,
+      filterQuality: FilterQuality.high),
   ]);
 }
 
