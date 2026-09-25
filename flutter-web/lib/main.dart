@@ -1576,8 +1576,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   double _routeNm() {
+    // _me ?? _homeCenter — matches _recomputeRoute()'s own fallback (line 1566) and the ghost
+    // boat marker, so distance/ETA read correctly even before GPS locks on, instead of silently
+    // dropping the start point and reporting 0.
     final pts = _routedPath ?? [
-      if (_me != null) _me!,
+      _me ?? _homeCenter,
       ..._waypoints,
     ];
     if (pts.length < 2) return 0;
@@ -1629,8 +1632,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // Same _me ?? _homeCenter fallback as _routeNm() — without it the drawn line silently
+    // dropped its starting point whenever GPS hadn't locked on yet, so it only ever connected
+    // waypoint-to-waypoint and never boat-to-first-waypoint.
     final routeLine = _routedPath ?? <LatLng>[
-      if (_me != null) _me!,
+      _me ?? _homeCenter,
       ..._waypoints,
     ];
     final tiltMatrix = Matrix4.identity()
