@@ -3317,6 +3317,109 @@ class _HourlyTable extends StatelessWidget {
 
 // PWA index.html:62-63 `#alert small{max-height:0}` collapses to a headline; `.open` reveals
 // the full description. Tap toggles.
+// Glassmorphism shell for the two map-overlay warning cards (NWS alert + boat-condition
+// warning). Visual treatment only — severity picks the amber/red gradient+border+glow;
+// the actual title/body content and the optional close callback stay fully owned by the
+// caller, so none of the underlying warning logic/data lives here.
+enum GlassSeverity { amber, red }
+
+class GlassWarningCard extends StatelessWidget {
+  final GlassSeverity severity;
+  final IconData icon;
+  final Widget content;
+  final VoidCallback? onDismiss;
+  const GlassWarningCard({super.key, required this.severity, required this.icon,
+    required this.content, this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    final isAmber = severity == GlassSeverity.amber;
+    final gradient = LinearGradient(
+      begin: Alignment.topLeft, end: Alignment.bottomRight,
+      colors: isAmber
+        ? const [Color.fromRGBO(245, 158, 11, 0.30), Color.fromRGBO(180, 83, 9, 0.16)]
+        : const [Color.fromRGBO(220, 38, 38, 0.34), Color.fromRGBO(127, 29, 29, 0.18)],
+    );
+    final borderColor = isAmber
+      ? const Color.fromRGBO(255, 193, 70, 0.70)
+      : const Color.fromRGBO(255, 90, 90, 0.72);
+    final glowColor = isAmber
+      ? const Color.fromRGBO(245, 158, 11, 0.16)
+      : const Color.fromRGBO(239, 68, 68, 0.16);
+    final iconColor = isAmber ? const Color(0xFFFFC846) : Colors.white;
+
+    // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
+    // whole map/HUD — keeps the expensive part localized per the design brief.
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+          decoration: BoxDecoration(
+            gradient: gradient,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderColor, width: 1),
+            boxShadow: [
+              BoxShadow(color: glowColor, blurRadius: 18),
+              const BoxShadow(color: Color.fromRGBO(0, 0, 0, 0.20), blurRadius: 20, offset: Offset(0, 8)),
+            ],
+          ),
+          child: Stack(children: [
+            // Subtle top light highlight — not a neon rim, just enough to read as glass.
+            Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [Colors.white.withOpacity(.08), Colors.white.withOpacity(0)],
+                stops: const [0, .35]),
+            )))),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                width: 42, height: 42, alignment: Alignment.center,
+                decoration: BoxDecoration(shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(.06),
+                  border: Border.all(color: Colors.white.withOpacity(.15))),
+                child: Icon(icon, color: iconColor, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: content),
+              if (onDismiss != null) ...[
+                const SizedBox(width: 2),
+                _GlassCloseButton(onTap: onDismiss!),
+              ],
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// Transparent normally, subtle translucent-white circle while pressed — per the design brief,
+// not a Material ripple (a Material ancestor would fight the transparent glass background).
+class _GlassCloseButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _GlassCloseButton({required this.onTap});
+  @override
+  State<_GlassCloseButton> createState() => _GlassCloseButtonState();
+}
+class _GlassCloseButtonState extends State<_GlassCloseButton> {
+  bool _pressed = false;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTapDown: (_) => setState(() => _pressed = true),
+    onTapCancel: () => setState(() => _pressed = false),
+    onTapUp: (_) => setState(() => _pressed = false),
+    onTap: widget.onTap,
+    child: Container(
+      width: 38, height: 38, alignment: Alignment.center,
+      decoration: BoxDecoration(shape: BoxShape.circle,
+        color: _pressed ? Colors.white.withOpacity(.18) : Colors.transparent),
+      child: const Icon(Icons.close, color: Colors.white, size: 18),
+    ),
+  );
+}
+
 class _AlertBanner extends StatefulWidget {
   final NwsAlert alert;
   final VoidCallback onDismiss;
@@ -3328,35 +3431,30 @@ class _AlertBannerState extends State<_AlertBanner> {
   bool _open = false;
   @override
   Widget build(BuildContext context) {
-    final bg = widget.alert.isSevere ? const Color(0xE6D93A2B) : const Color(0xE6F2A93B);
-    return Material(color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => setState(() => _open = !_open),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-          child: Row(children: [
-            const Icon(Icons.warning_amber_rounded, color: Colors.white),
-            const SizedBox(width: 8),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(widget.alert.event, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
-              if (widget.alert.headline.isNotEmpty)
-                Text(widget.alert.headline,
-                  maxLines: _open ? null : 2,
-                  overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis,
-                  style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11)),
-              if (_open && widget.alert.description.isNotEmpty) Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(widget.alert.description,
-                  style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11, height: 1.35)),
-              ),
-            ])),
-            IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 18),
-              onPressed: widget.onDismiss, padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 30, minHeight: 30)),
-          ]),
-        ),
+    final severity = widget.alert.isSevere ? GlassSeverity.red : GlassSeverity.amber;
+    final titleColor = widget.alert.isSevere ? Colors.white : const Color(0xFFFFC846);
+    return GestureDetector(
+      onTap: () => setState(() => _open = !_open),
+      child: GlassWarningCard(
+        severity: severity,
+        icon: Icons.warning_amber_rounded,
+        onDismiss: widget.onDismiss,
+        content: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(widget.alert.event, style: TextStyle(color: titleColor, fontWeight: FontWeight.w700, fontSize: 15)),
+          if (widget.alert.headline.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(widget.alert.headline,
+                maxLines: _open ? null : 2,
+                overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.white.withOpacity(.93), fontSize: 12, height: 1.3)),
+            ),
+          if (_open && widget.alert.description.isNotEmpty) Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(widget.alert.description,
+              style: TextStyle(color: Colors.white.withOpacity(.85), fontSize: 12, height: 1.35)),
+          ),
+        ]),
       ),
     );
   }
@@ -3368,16 +3466,13 @@ class _BoatWarningBanner extends StatelessWidget {
   const _BoatWarningBanner({required this.text, this.severity = 'over'});
   @override
   Widget build(BuildContext context) {
-    // PWA index.html:224 `#boatwarn{background:var(--red)}`; amber only for the `.a` class.
-    final bg = severity == 'near' ? const Color(0xE6F2A93B) : const Color(0xE6D93A2B);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-      child: Row(children: [
-        const Icon(Icons.info_outline, color: Colors.white, size: 18),
-        const SizedBox(width: 8),
-        Expanded(child: Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
-      ]),
+    final isNear = severity == 'near';
+    return GlassWarningCard(
+      severity: isNear ? GlassSeverity.amber : GlassSeverity.red,
+      icon: Icons.info_outline,
+      content: Text(text, style: TextStyle(
+        color: isNear ? const Color(0xFFFFC846) : Colors.white,
+        fontWeight: FontWeight.w700, fontSize: 13, height: 1.3)),
     );
   }
 }
