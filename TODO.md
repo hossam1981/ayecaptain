@@ -9,6 +9,30 @@ of the route-summary pill into its own `_RouteBar` widget (PWA's `#routebar` is 
 fixed element, not nested inside `#sheet` — index.html:66-74,316-321) — all live at
 flutter--frabjous-sprinkles-9eb441.netlify.app.
 
+## PWA sheet parity (compared with `main/index.html`, September 26, 2026)
+
+- [ ] **Collapsed sheet:** show current temperature/condition, wind, gusts, sunset, water
+  temperature, wave height/period, and a tide/next-tide/rain strip while closed.
+- [x] **Expanded tide dashboard:** embed the NOAA tide chart, station name/coordinates,
+  ft/m control, tide legend and upcoming high/low cards inside the sheet. Keep the provided
+  dark navy reference image's chart and card design; remove the separate tide modal/entry.
+- [ ] **Best boating window:** tapping the pill selects its day and opens the sheet;
+  match the PWA's two consecutive hours across the forecast week (Flutter currently searches
+  three hours in the next 24 hours).
+- [ ] **Hourly table:** include wave height, rain chance and wind-direction arrow, and use
+  marine waves/rain in the hourly safety grade (currently scored from wind/gust alone).
+- [ ] **GPX import:** put a real route-file picker inside the expanded sheet; export from
+  the separate route bar is also still a placeholder.
+- [ ] **Legend and sources:** restore the Calm/Fair/Rough legend below hourly rows and
+  the PWA's weather, tide, chart and alert data-source note near the bottom.
+- [ ] **Weather presentation:** use PWA sun/moon image and icon treatment, condition plus
+  rain chance, directional wind glyph, and the PWA's compact three-column metric grid.
+- [ ] **Sheet structure:** keep the weather and day tabs fixed above a separately scrolling
+  body; review the intentional half-screen height cap against the PWA's 86vh maximum.
+
+The boat warning stays in the top HUD per the requested Flutter layout. The route bar
+already has its own widget, and the install prompt already works.
+
 ## Next up
 
 1. **GPX import** — parse `rtept`/`trkpt`/`wpt` from an uploaded `.gpx` file into waypoints

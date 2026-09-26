@@ -1484,29 +1484,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => ForecastSheet(daily: _daily, tides: _tides, tideStation: _tideStation),
+      builder: (ctx) => ForecastSheet(daily: _daily),
     );
   }
 
-  // Batch B.6 — polished tide dashboard, separated from the plain 7-day forecast sheet.
-  Future<void> _openTides() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => TidesSheet(
-        station: _tideStation, tides: _tides,
-        sunrise: _weather?.sunrise, sunset: _weather?.sunset,
-        initialUnit: _tideUnit,
-        onUnitChanged: (u) async {
-          setState(() => _tideUnit = u);
-          try {
-            final sp = await SharedPreferences.getInstance();
-            await sp.setString('tideUnit', u);
-          } catch (_) {}
-        },
-      ),
-    );
+  void _setTideUnit(String u) async {
+    setState(() => _tideUnit = u);
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('tideUnit', u);
+    } catch (_) {}
   }
 
   // Placeholder for GPX import/export — real handler lands in Batch D.
@@ -1556,7 +1543,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           onToggleFuel: (_) { Navigator.of(ctx).pop(); _toggleFuelRing(); },
           onToggleSmart: (_) { Navigator.of(ctx).pop(); setState(() => _smart = !_smart); _recomputeRoute(); },
           onOpenForecast: () { Navigator.of(ctx).pop(); _openForecast(); },
-          onOpenTides: () { Navigator.of(ctx).pop(); _openTides(); },
         );
       }),
     );
@@ -1962,6 +1948,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 weather: _weather, onEditProfile: _openBoatProfile,
                 window: bestWindow(_hourly, _profile),
                 hourly: _hourly, daily: _daily, profile: _profile,
+                tideStation: _tideStation, tides: _tides, tideUnit: _tideUnit,
+                onTideUnitChanged: _setTideUnit,
                 expanded: _sheetExpanded,
                 onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
                 showInstallPrompt: _installPromptEvent != null,
@@ -2773,7 +2761,6 @@ class MoreToolsSheet extends StatelessWidget {
   final bool docksOn, navAidsOn, anchorOn, fuelOn, smartOn;
   final ValueChanged<bool> onToggleDocks, onToggleNavAids, onToggleAnchor, onToggleFuel, onToggleSmart;
   final VoidCallback onOpenForecast;
-  final VoidCallback onOpenTides;
   // Overrides the default subtitle while loading/failed — matches the PWA's
   // "Loading nearby docks…" / "Couldn't reach dock data — tap to retry" (index.html:1662,1683).
   final String? docksSub, navAidsSub;
@@ -2782,7 +2769,7 @@ class MoreToolsSheet extends StatelessWidget {
   const MoreToolsSheet({super.key,
     required this.docksOn, required this.navAidsOn, required this.anchorOn, required this.fuelOn, required this.smartOn,
     required this.onToggleDocks, required this.onToggleNavAids, required this.onToggleAnchor, required this.onToggleFuel, required this.onToggleSmart,
-    required this.onOpenForecast, required this.onOpenTides,
+    required this.onOpenForecast,
     this.docksSub, this.navAidsSub, this.docksError = false, this.navAidsError = false,
     this.onRetryDocks, this.onRetryNavAids});
   @override
@@ -2805,25 +2792,14 @@ class MoreToolsSheet extends StatelessWidget {
           navAidsOn, onToggleNavAids, subError: navAidsError, onSubTap: navAidsError ? onRetryNavAids : null),
         _row(Icons.route, 'Smart routes', 'Bend routes around land (experimental)', smartOn, onToggleSmart),
         const Divider(color: Color(0xFFDDE4EA), height: 24),
-        Row(children: [
-          Expanded(child: Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
-            child: InkWell(borderRadius: BorderRadius.circular(10), onTap: onOpenTides,
-              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: Row(children: [
-                  Icon(Icons.waves, color: Color(0xFF2E6F9E)),
-                  SizedBox(width: 8),
-                  Text('Tides', style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 14)),
-                ]))))),
-          const SizedBox(width: 8),
-          Expanded(child: Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
+        Material(color: const Color(0xFFF4F8FA), borderRadius: BorderRadius.circular(10),
             child: InkWell(borderRadius: BorderRadius.circular(10), onTap: onOpenForecast,
               child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 child: Row(children: [
                   Icon(Icons.cloud_outlined, color: Color(0xFF2E6F9E)),
                   SizedBox(width: 8),
                   Text('7-day forecast', style: TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 14)),
-                ]))))),
-        ]),
+                ])))),
       ]),
     ));
   }
@@ -3071,6 +3047,10 @@ class _RouteBar extends StatelessWidget {
 // fixed element, not nested in #sheet).
 class _BottomSheet extends StatefulWidget {
   final Weather? weather;
+  final TideStation? tideStation;
+  final List<TidePoint> tides;
+  final String tideUnit;
+  final ValueChanged<String> onTideUnitChanged;
   final VoidCallback onEditProfile;
   final BestWindow? window;
   final List<HourlyPoint> hourly;
@@ -3082,6 +3062,8 @@ class _BottomSheet extends StatefulWidget {
   final VoidCallback onInstall;
   const _BottomSheet({required this.weather, required this.onEditProfile,
     required this.window, required this.hourly, required this.daily,
+    required this.tideStation, required this.tides, required this.tideUnit,
+    required this.onTideUnitChanged,
     required this.profile, required this.expanded, required this.onExpandedChanged,
     required this.showInstallPrompt, required this.onInstall});
   @override
@@ -3218,6 +3200,12 @@ class _BottomSheetState extends State<_BottomSheet> {
         fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
       const SizedBox(height: 4),
       _HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
+      const SizedBox(height: 16),
+      TidesSheet(
+        station: widget.tideStation, tides: widget.tides,
+        sunrise: widget.weather?.sunrise, sunset: widget.weather?.sunset,
+        initialUnit: widget.tideUnit, onUnitChanged: widget.onTideUnitChanged,
+      ),
       // PWA #install (index.html:157-158,378,1976-1978): hidden until beforeinstallprompt
       // fires, dark-navy full-width button, near the bottom of the expanded sheet.
       if (widget.showInstallPrompt) ...[
@@ -4060,9 +4048,7 @@ class _AnchorHud extends StatelessWidget {
 
 class ForecastSheet extends StatelessWidget {
   final List<DailyForecast> daily;
-  final List<TidePoint> tides;
-  final TideStation? tideStation;
-  const ForecastSheet({super.key, required this.daily, required this.tides, this.tideStation});
+  const ForecastSheet({super.key, required this.daily});
   @override
   Widget build(BuildContext context) => DraggableScrollableSheet(
     initialChildSize: 0.75, minChildSize: 0.4, maxChildSize: 0.95, expand: false,
@@ -4085,24 +4071,6 @@ class ForecastSheet extends StatelessWidget {
                 style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 13))),
           ]),
         )),
-        const SizedBox(height: 20),
-        const Text('Tides', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-        if (tideStation != null) Text(tideStation!.name, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
-        const SizedBox(height: 8),
-        if (tides.isEmpty) const Text('No tide station found', style: TextStyle(color: Color(0xCCFFFFFF)))
-        else ...tides.take(8).map((p) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Row(children: [
-            SizedBox(width: 70, child: Text('${_pad(p.t.month)}/${_pad(p.t.day)} ${_pad(p.t.hour)}:${_pad(p.t.minute)}',
-                style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12))),
-            const SizedBox(width: 8),
-            Icon(p.type == 'H' ? Icons.arrow_upward : Icons.arrow_downward,
-                color: p.type == 'H' ? const Color(0xFF22C55E) : const Color(0xFF2E6F9E), size: 16),
-            const SizedBox(width: 6),
-            Text('${p.v.toStringAsFixed(1)} ft',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-          ]),
-        )),
         const SizedBox(height: 12),
       ]),
     ),
@@ -4113,8 +4081,6 @@ String _dayName(DateTime d) {
   const names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   return names[(d.weekday - 1) % 7];
 }
-String _pad(int n) => n.toString().padLeft(2, '0');
-
 // ==================================================================================================
 // Batch B.6 — tide dashboard: SVG-style curve + sunrise/sunset icons + ocean band + Now pill + hi/lo cards.
 // Ports index.html:865-963 (renderTide) and the visual language of the PWA screenshot.
@@ -4143,6 +4109,11 @@ class _TidesSheetState extends State<TidesSheet> {
     _loadImage('assets/icons/sunset.png').then((i) { if (mounted) setState(() => _sunset = i); });
     _loadImage('assets/icons/ocean.png').then((i) { if (mounted) setState(() => _ocean = i); });
   }
+  @override
+  void didUpdateWidget(covariant TidesSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialUnit != widget.initialUnit) _unit = widget.initialUnit;
+  }
   Future<ui.Image?> _loadImage(String assetPath) async {
     try {
       final bd = await rootBundle.load(assetPath);
@@ -4170,17 +4141,15 @@ class _TidesSheetState extends State<TidesSheet> {
     final windowCurve = curve.where((s) => !s.t.isBefore(t0) && !s.t.isAfter(t1)).toList();
     final windowHilo = tides.where((p) => !p.t.isBefore(t0) && !p.t.isAfter(t1)).toList();
     final nextFour = tides.where((p) => !p.t.isBefore(now)).take(4).toList();
-    return DraggableScrollableSheet(
-      initialChildSize: 0.85, minChildSize: 0.5, maxChildSize: 0.95, expand: false,
-      builder: (ctx, scroll) => Container(
+    return Container(
+        width: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(begin: Alignment(0, -1), end: Alignment(0, 1),
             colors: [Color(0xFF0B2740), Color(0xFF061A2D)]),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius: BorderRadius.all(Radius.circular(20)),
+          boxShadow: [BoxShadow(color: Color(0x40000000), blurRadius: 24, offset: Offset(0, 10))]),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: ListView(controller: scroll, children: [
-          Center(child: Container(width: 40, height: 4, margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(color: const Color(0x66FFFFFF), borderRadius: BorderRadius.circular(2)))),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(),
           const SizedBox(height: 10),
           _legend(),
@@ -4200,7 +4169,6 @@ class _TidesSheetState extends State<TidesSheet> {
           const SizedBox(height: 12),
           _footer(),
         ]),
-      ),
     );
   }
 
@@ -4210,19 +4178,23 @@ class _TidesSheetState extends State<TidesSheet> {
     final dateStr = '${_dayName(today)}, ${_monthName(today.month)} ${today.day}, ${today.year}';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        Container(width: 12, height: 12, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF1F8AE5))),
+        const Icon(Icons.location_on_rounded, color: Color(0xFF2388FF), size: 25),
         const SizedBox(width: 8),
-        Expanded(child: Text(s?.name ?? 'No station', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+        Expanded(child: Text(s?.name ?? 'Finding tide station…', maxLines: 2,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16))),
         _unitToggle(),
       ]),
-      if (s != null) Padding(padding: const EdgeInsets.only(top: 2),
-        child: Text('${s.lat.toStringAsFixed(4)}° N, ${s.lng.toStringAsFixed(4)}° W',
+      if (s != null) Padding(padding: const EdgeInsets.only(left: 33, top: 2),
+        child: Text('${s.lat.abs().toStringAsFixed(4)}° ${s.lat >= 0 ? 'N' : 'S'}, '
+          '${s.lng.abs().toStringAsFixed(4)}° ${s.lng >= 0 ? 'E' : 'W'}',
           style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 12))),
       Padding(padding: const EdgeInsets.only(top: 8),
         child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(color: const Color(0xFF1466C7), borderRadius: BorderRadius.circular(10)),
+          decoration: BoxDecoration(color: const Color(0xFF0B2E4C),
+            border: Border.all(color: const Color(0xFF245372)), borderRadius: BorderRadius.circular(10)),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Text('📅  ', style: TextStyle(fontSize: 13)),
+            const Icon(Icons.calendar_month_outlined, color: Color(0xFF9CC1DE), size: 17),
+            const SizedBox(width: 6),
             Text(dateStr, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
           ]))),
     ]);
@@ -4238,8 +4210,9 @@ class _TidesSheetState extends State<TidesSheet> {
             child: Text(u, style: TextStyle(color: on ? Colors.white : const Color(0xFF9CC1DE),
               fontWeight: FontWeight.w800, fontSize: 12)))));
     }
-    return Container(padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(color: const Color(0x22FFFFFF), borderRadius: BorderRadius.circular(10)),
+    return Container(padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(color: const Color(0xFF0B2E4C),
+        border: Border.all(color: const Color(0xFF2D5C7C)), borderRadius: BorderRadius.circular(12)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [chip('ft'), chip('m')]));
   }
 
@@ -4282,21 +4255,21 @@ class _TidesSheetState extends State<TidesSheet> {
     }
     if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
       child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 12)));
-    return GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2, crossAxisSpacing: 9, mainAxisSpacing: 9, childAspectRatio: 2.2,
-      children: pts.map(card).toList());
+    return LayoutBuilder(builder: (context, constraints) => GridView.count(
+      shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: constraints.maxWidth < 310 ? 1 : 2,
+      crossAxisSpacing: 9, mainAxisSpacing: 9,
+      childAspectRatio: constraints.maxWidth < 310 ? 4 : 1.7,
+      children: pts.map(card).toList()));
   }
 
   Widget _footer() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Text('⚓ ', style: TextStyle(fontSize: 12)),
-        const Text('Plan Better. Boat Safer.', style: TextStyle(color: Color(0xEEFFFFFF), fontSize: 12, fontWeight: FontWeight.w700)),
-        const Spacer(),
-        Text('≈ Tide Data · ${widget.station?.name ?? "—"}',
-          style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)),
-      ]),
+      const Text('⚓  Plan Better. Boat Safer.',
+        style: TextStyle(color: Color(0xFF9CC1DE), fontSize: 12, fontWeight: FontWeight.w700)),
       const SizedBox(height: 4),
+      Text('≈ Tide Data · ${widget.station?.name ?? "—"}',
+        style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)),
       const Text('NOAA CO-OPS astronomical predictions · updates every 20 min',
         style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
     ]);
