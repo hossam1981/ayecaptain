@@ -14,7 +14,9 @@ flutter--frabjous-sprinkles-9eb441.netlify.app.
 1. **GPX import** — parse `rtept`/`trkpt`/`wpt` from an uploaded `.gpx` file into waypoints
    (`file_picker` package). Currently a placeholder snackbar.
 2. **GPX export** — build route XML, trigger a browser download.
-3. **PWA install prompt** — capture `beforeinstallprompt`, show "Add Bayside to home screen".
+3. ~~**PWA install prompt**~~ — done. Captures `beforeinstallprompt` via `package:web` +
+   `dart:js_interop` (not `dart:html`, which stable Flutter is dropping), shows "Add Bayside
+   to home screen" near the bottom of the expanded sheet, same as the PWA (index.html:378).
 4. **Snow FX** — extend `FxCanvas` to draw snow particles on snow weather codes.
 5. **Fog FX** — whitewash overlay on fog weather codes.
 6. **Lightning FX** — flash overlay during thunderstorms.

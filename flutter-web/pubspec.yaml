@@ -16,6 +16,7 @@ dependencies:
   http: ^1.2.2
   wakelock_plus: ^1.2.10   # Screen Wake Lock — same fix as the PWA (Android throttles GPS when screen sleeps)
   shared_preferences: ^2.3.2   # boat profile persistence (name/limits/tank/burn), works on web + mobile
+  web: ^1.0.0   # beforeinstallprompt interop (dart:js_interop) — dart:html is being dropped from stable Flutter
 
 flutter:
   uses-material-design: true

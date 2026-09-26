@@ -13,6 +13,8 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -24,6 +26,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:web/web.dart' as web;
 
 void main() => runApp(const BaysideApp());
 
@@ -1166,6 +1169,31 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
     // Sun edge marker recompute — PWA re-ticks every 60s (index.html:1196).
     _sunTimer = Timer.periodic(const Duration(minutes: 1), (_) { if (mounted) setState(() {}); });
+    // PWA index.html:1976-1978 — capture the browser's install prompt instead of letting it
+    // show its own generic mini-infobar, then trigger it from our own button once the user
+    // taps it. Chrome/Edge only; never fires on iOS Safari or once already installed.
+    // package:web + dart:js_interop (not dart:html, which stable Flutter is dropping) — the
+    // JSFunction has to be stored so the SAME instance can be passed to removeEventListener.
+    _installListener = ((web.Event e) {
+      e.preventDefault();
+      if (mounted) setState(() => _installPromptEvent = e);
+    }).toJS;
+    web.window.addEventListener('beforeinstallprompt', _installListener);
+  }
+
+  JSFunction? _installListener;
+  web.Event? _installPromptEvent;
+  // PWA index.html:1978 — deferred.prompt(); await deferred.userChoice; then hide the button.
+  // beforeinstallprompt's `prompt()`/`userChoice` aren't part of the standard typed web.Event,
+  // so call them dynamically via dart:js_interop_unsafe (the supported way to reach vendor-
+  // only JS APIs). Not awaiting userChoice — the browser's own native dialog takes over once
+  // prompt() fires, so our button can just hide immediately rather than guess the exact
+  // generic Promise<T> interop shape for a value nothing here needs to read.
+  void _installApp() {
+    final e = _installPromptEvent;
+    if (e == null) return;
+    e.callMethod<JSAny?>('prompt'.toJS);
+    setState(() => _installPromptEvent = null);
   }
 
   Future<void> _refreshAlerts(LatLng at) async {
@@ -1302,6 +1330,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _gpsSub?.cancel();
     _wxTimer?.cancel();
     _sunTimer?.cancel();
+    if (_installListener != null) web.window.removeEventListener('beforeinstallprompt', _installListener);
     WakelockPlus.disable();
     super.dispose();
   }
@@ -1925,6 +1954,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 hourly: _hourly, daily: _daily, profile: _profile,
                 expanded: _sheetExpanded,
                 onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
+                showInstallPrompt: _installPromptEvent != null,
+                onInstall: _installApp,
               ),
             ]),
           ),
@@ -2991,9 +3022,12 @@ class _BottomSheet extends StatefulWidget {
   final BoatProfile profile;
   final bool expanded;
   final ValueChanged<bool> onExpandedChanged;
+  final bool showInstallPrompt;
+  final VoidCallback onInstall;
   const _BottomSheet({required this.weather, required this.onEditProfile,
     required this.window, required this.hourly, required this.daily,
-    required this.profile, required this.expanded, required this.onExpandedChanged});
+    required this.profile, required this.expanded, required this.onExpandedChanged,
+    required this.showInstallPrompt, required this.onInstall});
   @override
   State<_BottomSheet> createState() => _BottomSheetState();
 }
@@ -3128,6 +3162,20 @@ class _BottomSheetState extends State<_BottomSheet> {
         fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
       const SizedBox(height: 4),
       _HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
+      // PWA #install (index.html:157-158,378,1976-1978): hidden until beforeinstallprompt
+      // fires, dark-navy full-width button, near the bottom of the expanded sheet.
+      if (widget.showInstallPrompt) ...[
+        const SizedBox(height: 14),
+        SizedBox(width: double.infinity, child: Material(
+          color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(12),
+          child: InkWell(borderRadius: BorderRadius.circular(12), onTap: widget.onInstall,
+            child: const Padding(padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(child: Text('Add Bayside to home screen',
+                style: TextStyle(color: Color(0xFFF4F8FA), fontWeight: FontWeight.w700, fontSize: 16))),
+            ),
+          ),
+        )),
+      ],
     ];
   }
 
