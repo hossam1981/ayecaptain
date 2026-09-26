@@ -3441,7 +3441,7 @@ class GlassWarningCard extends StatelessWidget {
       // BoxShadow paints a filled red/amber shape behind the whole translucent card.
       // Its color shows through the middle and makes the map look opaque. Paint only
       // the rounded outline so the bloom stays outside the glass.
-      painter: _WarningEdgeGlow(wide: glowWide, tight: glowTight),
+      painter: _WarningEdgeGlow(wide: glowWide, tight: glowTight, isAmber: isAmber),
       // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
       // whole map/HUD — keeps the expensive part localized per the design brief.
       child: ClipRRect(
@@ -3475,10 +3475,16 @@ class GlassWarningCard extends StatelessWidget {
                 Container(
                   width: 42, height: 42, alignment: Alignment.center,
                   decoration: BoxDecoration(shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(.06),
-                    border: Border.all(color: Colors.white.withOpacity(.20)),
-                    boxShadow: [BoxShadow(color: glowWide.withOpacity(.16), blurRadius: 12)]),
-                  child: Icon(icon, color: iconColor, size: 20),
+                    color: glowWide.withOpacity(isAmber ? .12 : .17),
+                    border: Border.all(color: glowTight.withOpacity(.42)),
+                    boxShadow: [BoxShadow(color: glowWide.withOpacity(.45), blurRadius: 16, spreadRadius: 1)]),
+                  child: Stack(alignment: Alignment.center, children: [
+                    ImageFiltered(
+                      imageFilter: ui.ImageFilter.blur(sigmaX: 4, sigmaY: 4),
+                      child: Icon(icon, color: glowTight.withOpacity(.95), size: 24),
+                    ),
+                    Icon(icon, color: iconColor, size: 20),
+                  ]),
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: content),
@@ -3499,7 +3505,8 @@ class GlassWarningCard extends StatelessWidget {
 class _WarningEdgeGlow extends CustomPainter {
   final Color wide;
   final Color tight;
-  const _WarningEdgeGlow({required this.wide, required this.tight});
+  final bool isAmber;
+  const _WarningEdgeGlow({required this.wide, required this.tight, required this.isAmber});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -3515,11 +3522,29 @@ class _WarningEdgeGlow extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
+
+    // A few short bright sections keep the outline from reading as a uniform neon box.
+    // These are strokes only, so the map stays visible through the card center.
+    final hotspot = Paint()
+      ..color = tight.withOpacity(.95)
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+    final top = edge.top;
+    final bottom = edge.bottom;
+    if (isAmber) {
+      canvas.drawLine(Offset(size.width * .31, top), Offset(size.width * .58, top), hotspot);
+      canvas.drawLine(Offset(size.width * .06, bottom), Offset(size.width * .24, bottom), hotspot);
+    } else {
+      canvas.drawLine(Offset(size.width * .08, top), Offset(size.width * .28, top), hotspot);
+      canvas.drawLine(Offset(size.width * .74, top), Offset(size.width * .94, top), hotspot);
+      canvas.drawLine(Offset(size.width * .78, bottom), Offset(size.width * .95, bottom), hotspot);
+    }
   }
 
   @override
   bool shouldRepaint(covariant _WarningEdgeGlow old) =>
-      old.wide != wide || old.tight != tight;
+      old.wide != wide || old.tight != tight || old.isAmber != isAmber;
 }
 
 // Transparent normally, subtle translucent-white circle while pressed — per the design brief,
