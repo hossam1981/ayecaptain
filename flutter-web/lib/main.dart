@@ -1759,8 +1759,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 // NOAA ENC MarineChart on every non-plain-Map basemap — matches the PWA
                 // which overlays it on Chart, Sat and Dark alike, at different opacities
                 // per mode (index.html:535, 543-545).
+                // zoomOffset:-2 matches the PWA's L.tileLayer(..., {zoomOffset:-2, ...}) —
+                // NOAA's tile service uses a coarser zoom scheme than the map's displayed
+                // zoom, so tiles must be requested 2 levels lower or the server 404s on
+                // every single tile (confirmed live: user's console showed 404s at z=12
+                // while the map displayed at z=14 — exactly the missing offset).
                 if (_base != Basemap.map)
                   TileLayer(urlTemplate: _noaaChartUrl, userAgentPackageName: 'net.bayside.flutter',
+                    zoomOffset: -2, minZoom: 2, maxNativeZoom: 18, maxZoom: 19,
                     tileDisplay: TileDisplay.instantaneous(opacity: _noaaOpacityFor(_base))),
                 if (_trail.length > 1)
                   PolylineLayer(polylines: [
