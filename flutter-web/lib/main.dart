@@ -91,9 +91,6 @@ List<TileLayer> _baseLayers(Basemap b, String cartoKey) {
   }
 }
 const _noaaChartUrl = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}';
-// PWA index.html:543-545 — the NOAA overlay isn't shown at one flat strength: full on Chart,
-// dimmed on Sat (so the photo imagery still reads through), dimmed less on Dark.
-double _noaaOpacityFor(Basemap b) => switch (b) { Basemap.sat => 0.5, Basemap.dark => 0.6, _ => 1.0 };
 // PWA's overlayLabels() (index.html:519-521) — road + place-name labels laid over Sat, since
 // satellite imagery alone (unlike the street/dark bases) has no labels baked in.
 const _esriRoadsUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}';
@@ -1756,18 +1753,19 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   TileLayer(urlTemplate: _esriRoadsUrl, userAgentPackageName: 'net.bayside.flutter'),
                   TileLayer(urlTemplate: _esriPlacesUrl, userAgentPackageName: 'net.bayside.flutter'),
                 ],
-                // NOAA ENC MarineChart on every non-plain-Map basemap — matches the PWA
-                // which overlays it on Chart, Sat and Dark alike, at different opacities
-                // per mode (index.html:535, 543-545).
+                // NOAA ENC MarineChart — Chart mode only. The PWA (and Savvy Navvy, checked
+                // for reference) both overlay this on Sat/Dark too at reduced opacity, but
+                // the user explicitly wants a deliberate deviation here: NOAA exclusive to
+                // Chart, so Sat/Dark stay plain imagery/dark tiles with no chart clutter.
                 // zoomOffset:-2 matches the PWA's L.tileLayer(..., {zoomOffset:-2, ...}) —
                 // NOAA's tile service uses a coarser zoom scheme than the map's displayed
                 // zoom, so tiles must be requested 2 levels lower or the server 404s on
                 // every single tile (confirmed live: user's console showed 404s at z=12
                 // while the map displayed at z=14 — exactly the missing offset).
-                if (_base != Basemap.map)
+                if (_base == Basemap.chart)
                   TileLayer(urlTemplate: _noaaChartUrl, userAgentPackageName: 'net.bayside.flutter',
                     zoomOffset: -2, minZoom: 2, maxNativeZoom: 18, maxZoom: 19,
-                    tileDisplay: TileDisplay.instantaneous(opacity: _noaaOpacityFor(_base))),
+                    tileDisplay: const TileDisplay.instantaneous(opacity: 1.0)),
                 if (_trail.length > 1)
                   PolylineLayer(polylines: [
                     Polyline(points: _trail.map((t) => t.p).toList(), color: const Color(0xAAFFFFFF), strokeWidth: 4),
