@@ -51,6 +51,43 @@ These have broken the build multiple times. A code-review pass must explicitly c
   automated agent — no real location. They stay unverified until manually checked on a phone.
 - End responses with a short recap of what changed and what's still open.
 
+## Dart/Flutter skills (`.agents/skills/`, from `dart-lang/skills` + `flutter/skills`)
+
+Before starting non-trivial Flutter work, scan this list for a fit — check it every time,
+don't rely on memory of what's here:
+
+**Use regularly:**
+- `flutter-fix-layout-issues` — RenderFlex overflows, unbounded constraints. Matches the
+  recurring class of sizing bug this branch keeps hitting (e.g. the tide-card mess).
+- `flutter-build-responsive-layout` — `LayoutBuilder`/`MediaQuery` patterns; explicitly warns
+  against hardcoding a fixed aspect ratio instead of sizing to actual content/available space
+  — would have caught the `childAspectRatio` bug directly.
+- `dart-run-static-analysis` — no local Flutter SDK in most sessions here to run
+  `flutter analyze` (see Structure notes below), and this is exactly what would catch the two
+  recurring bugs above automatically instead of by manual review.
+
+**Adopt once it applies:**
+- `flutter-add-widget-test` — would catch structural regressions (like the tide card) without
+  needing a live browser, which is the actual bottleneck this branch keeps hitting.
+- `flutter-apply-architecture-best-practices` — relevant once `main.dart`'s planned split
+  (see Structure notes) actually happens.
+- `dart-resolve-package-conflicts` — relevant now that `package:web` has been added.
+
+**Situational:**
+- `flutter-add-widget-preview` — iterating on one isolated widget (`GlassWarningCard`,
+  `TidesSheet`) without relaunching the whole app.
+- `flutter-implement-json-serialization` — this app hand-parses JSON (`Weather`, `TidePoint`,
+  etc.); only worth it if that becomes a real pain point.
+- `dart-fix-runtime-errors`, `dart-add-unit-test`, `dart-collect-coverage`,
+  `dart-generate-test-mocks` — once real test coverage exists (currently zero).
+
+**Not relevant to this project** — skip without checking: `dart-build-cli-app`,
+`dart-setup-ffi-assets`, `dart-use-ffigen` (no CLI/native FFI here), `flutter-setup-declarative-
+routing`, `flutter-setup-localization` (single-screen app, no i18n), `dart-migrate-to-checks-
+package`, `dart-use-path-package`, `dart-write-documentation`, `dart-use-doc-examples`,
+`dart-use-primary-constructors`, `dart-use-pattern-matching` (general style/hygiene, not worth
+the overhead on a fast-iterating solo project).
+
 ## Structure notes
 
 - `flutter-web/lib/main.dart` is a single file by design so far; `TODO.md` has the planned split
