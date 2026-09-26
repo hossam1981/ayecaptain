@@ -3428,73 +3428,52 @@ class GlassWarningCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAmber = severity == GlassSeverity.amber;
-    // A smoky tint keeps white text legible over bright map tiles while leaving the
-    // geography visible. The glow is painted as an outline, never a filled shadow.
-    final Color darkBase = isAmber ? const Color(0xFF142330) : const Color(0xFF2B1426);
-    final double baseOpacity = isAmber ? .52 : .58;
-    final Color edgeColor = isAmber ? const Color(0xFFFFC44D) : const Color(0xFFFF6070);
-    final Color glowWide = isAmber ? const Color(0xFFFFB52E) : const Color(0xFFFF4055);
-    final Color glowTight = isAmber ? const Color(0xFFFFD36A) : const Color(0xFFFF6375);
-    final iconColor = isAmber ? const Color(0xFFFFC846) : Colors.white;
+    final glow = isAmber ? const Color(0xFFFFAA24) : const Color(0xFFFF304B);
+    final core = isAmber ? const Color(0xFFFFF3B0) : const Color(0xFFFFE9E9);
 
     return CustomPaint(
-      // BoxShadow paints a filled red/amber shape behind the whole translucent card.
-      // Its color shows through the middle and makes the map look opaque. Paint only
-      // the rounded outline so the bloom stays outside the glass.
-      painter: _WarningEdgeGlow(wide: glowWide, tight: glowTight, isAmber: isAmber),
-      // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
-      // whole map/HUD — keeps the expensive part localized per the design brief.
+      // Paint after the clipped glass: its tint must not dim the neon or hotspots.
+      foregroundPainter: _WarningEdgeGlow(isAmber: isAmber),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Container(
-            decoration: BoxDecoration(
-              color: darkBase.withOpacity(baseOpacity),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: edgeColor.withOpacity(.98), width: 1.4),
-            ),
-            child: Stack(children: [
-            // Warm amber / burgundy light inside the glass, strongest near the edge.
-            Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
-              gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [
-                glowWide.withOpacity(isAmber ? .14 : .19),
-                Colors.transparent,
-                glowWide.withOpacity(isAmber ? .06 : .09),
-              ]),
-            ))),
-            // Faint top glass reflection — not a neon rim, just enough to read as glass.
-            Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
-              gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(.10), Colors.white.withOpacity(.015), Colors.white.withOpacity(0)],
-                stops: const [0, .12, .40]),
-            )))),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: CustomPaint(
+            painter: _WarningGlassSurface(isAmber: isAmber),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                 Container(
                   width: 42, height: 42, alignment: Alignment.center,
-                  decoration: BoxDecoration(shape: BoxShape.circle,
-                    color: glowWide.withOpacity(isAmber ? .12 : .17),
-                    border: Border.all(color: glowTight.withOpacity(.42)),
-                    boxShadow: [BoxShadow(color: glowWide.withOpacity(.45), blurRadius: 16, spreadRadius: 1)]),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(colors: [
+                      glow.withOpacity(.30), glow.withOpacity(.06),
+                    ]),
+                    border: Border.all(color: core.withOpacity(.36), width: .7),
+                  ),
                   child: Stack(alignment: Alignment.center, children: [
                     ImageFiltered(
-                      imageFilter: ui.ImageFilter.blur(sigmaX: 4, sigmaY: 4),
-                      child: Icon(icon, color: glowTight.withOpacity(.95), size: 24),
+                      imageFilter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                      child: Icon(icon, color: glow, size: 32),
                     ),
-                    Icon(icon, color: iconColor, size: 20),
+                    ImageFiltered(
+                      imageFilter: ui.ImageFilter.blur(sigmaX: 1.8, sigmaY: 1.8),
+                      child: Icon(icon, color: glow, size: 29),
+                    ),
+                    Icon(icon, color: core, size: 27),
                   ]),
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: content),
                 if (onDismiss != null) ...[
-                  const SizedBox(width: 2),
+                  const SizedBox(width: 8),
+                  Container(width: .7, height: 34, color: glow.withOpacity(.70)),
+                  const SizedBox(width: 3),
                   _GlassCloseButton(onTap: onDismiss!),
                 ],
               ]),
             ),
-            ]),
           ),
         ),
       ),
@@ -3502,49 +3481,104 @@ class GlassWarningCard extends StatelessWidget {
   }
 }
 
-class _WarningEdgeGlow extends CustomPainter {
-  final Color wide;
-  final Color tight;
+// Translucent colored glass, with broad reflections and pools of light at the rim.
+// All fills are clipped by the card. The map supplies the detail behind the glass.
+class _WarningGlassSurface extends CustomPainter {
   final bool isAmber;
-  const _WarningEdgeGlow({required this.wide, required this.tight, required this.isAmber});
+  const _WarningGlassSurface({required this.isAmber});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final edge = RRect.fromRectAndRadius(
-      (Offset.zero & size).deflate(1.5), const Radius.circular(16.5));
-    canvas.drawRRect(edge, Paint()
-      ..color = wide.withOpacity(.9)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-    canvas.drawRRect(edge, Paint()
-      ..color = tight.withOpacity(.95)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
+    final rect = Offset.zero & size;
+    final color = isAmber ? const Color(0xFFFFAA24) : const Color(0xFFFF304B);
+    canvas.drawRect(rect, Paint()..color =
+      (isAmber ? const Color(0xFF162932) : const Color(0xFF30182C)).withOpacity(.43));
+    canvas.drawRect(rect, Paint()..shader = LinearGradient(
+      begin: Alignment.topCenter, end: Alignment.bottomCenter,
+      colors: [color.withOpacity(.40), color.withOpacity(.08),
+        color.withOpacity(.03), color.withOpacity(.26)],
+      stops: const [0, .28, .68, 1],
+    ).createShader(rect));
 
-    // A few short bright sections keep the outline from reading as a uniform neon box.
-    // These are strokes only, so the map stays visible through the card center.
-    final hotspot = Paint()
-      ..color = tight.withOpacity(.95)
-      ..strokeWidth = 5
-      ..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-    final top = edge.top;
-    final bottom = edge.bottom;
-    if (isAmber) {
-      canvas.drawLine(Offset(size.width * .31, top), Offset(size.width * .58, top), hotspot);
-      canvas.drawLine(Offset(size.width * .06, bottom), Offset(size.width * .24, bottom), hotspot);
-    } else {
-      canvas.drawLine(Offset(size.width * .08, top), Offset(size.width * .28, top), hotspot);
-      canvas.drawLine(Offset(size.width * .74, top), Offset(size.width * .94, top), hotspot);
-      canvas.drawLine(Offset(size.width * .78, bottom), Offset(size.width * .95, bottom), hotspot);
+    // Wide, tapered reflection across the face, like light reflected in tinted glass.
+    canvas.drawRect(rect, Paint()..shader = LinearGradient(
+      begin: Alignment.topLeft, end: Alignment.bottomRight,
+      colors: [Colors.white.withOpacity(.16), Colors.white.withOpacity(.02),
+        Colors.transparent, Colors.white.withOpacity(.10), Colors.transparent],
+      stops: const [0, .18, .44, .72, 1],
+    ).createShader(rect));
+
+    void light(double x, double y, double width, double height, double opacity) {
+      final ellipse = Rect.fromCenter(center: Offset(size.width * x, size.height * y),
+        width: size.width * width, height: size.height * height);
+      canvas.save();
+      canvas.translate(ellipse.center.dx, ellipse.center.dy);
+      canvas.scale(ellipse.width / 2, ellipse.height / 2);
+      canvas.drawCircle(Offset.zero, 1, Paint()..shader = ui.Gradient.radial(
+        Offset.zero, 1, [color.withOpacity(opacity), color.withOpacity(opacity * .3),
+          color.withOpacity(0)], const [0, .42, 1]));
+      canvas.restore();
     }
+    light(.02, .10, .40, 1.5, .36);
+    light(.90, .02, .50, 1.3, .44);
+    light(.09, 1, .42, .85, .40);
+    light(.98, .95, .32, 1.1, .30);
   }
 
   @override
-  bool shouldRepaint(covariant _WarningEdgeGlow old) =>
-      old.wide != wide || old.tight != tight || old.isAmber != isAmber;
+  bool shouldRepaint(covariant _WarningGlassSurface old) => old.isAmber != isAmber;
+}
+
+class _WarningEdgeGlow extends CustomPainter {
+  final bool isAmber;
+  const _WarningEdgeGlow({required this.isAmber});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = (Offset.zero & size).deflate(.8);
+    final edge = RRect.fromRectAndRadius(rect, const Radius.circular(17.2));
+    final color = isAmber ? const Color(0xFFFFB52E) : const Color(0xFFFF304B);
+    final core = isAmber ? const Color(0xFFFFFFBC) : const Color(0xFFFFEEEE);
+    // Keep the continuous rim restrained so individual reflections can shine brighter.
+    canvas.drawRRect(edge, Paint()
+      ..color = color.withOpacity(.65)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    canvas.drawRRect(edge, Paint()
+      ..shader = LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+        colors: [core, color.withOpacity(.65), color, core.withOpacity(.85)],
+        stops: const [0, .38, .70, 1]).createShader(rect)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.15);
+
+    // Radial shaders fade each hotspot along the actual rounded outline, including
+    // corners. A white-hot core, tight colored glow and wide bloom share that fade.
+    void hotspot(double x, double y, double radius) {
+      final center = Offset(size.width * x, size.height * y);
+      final reach = size.width * radius;
+      for (final layer in <List<double>>[
+        [9, 6, .85], [3.5, 1.6, 1], [1.4, 0, 1],
+      ]) {
+        final ink = layer[1] == 0 ? core : color;
+        final paint = Paint()
+          ..shader = ui.Gradient.radial(center, reach,
+            [ink.withOpacity(layer[2]), ink.withOpacity(layer[2] * .65), ink.withOpacity(0)],
+            const [0, .25, 1])
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = layer[0];
+        if (layer[1] > 0) paint.maskFilter = MaskFilter.blur(BlurStyle.normal, layer[1]);
+        canvas.drawRRect(edge, paint);
+      }
+    }
+    hotspot(.045, .13, .13);
+    hotspot(isAmber ? .92 : .83, 0, .17);
+    hotspot(.14, 1, .12);
+    hotspot(.99, .84, .11);
+  }
+
+  @override
+  bool shouldRepaint(covariant _WarningEdgeGlow old) => old.isAmber != isAmber;
 }
 
 // Transparent normally, subtle translucent-white circle while pressed — per the design brief,
@@ -3620,7 +3654,7 @@ class _BoatWarningBanner extends StatelessWidget {
     final isNear = severity == 'near';
     return GlassWarningCard(
       severity: GlassSeverity.red,
-      icon: Icons.info_outline,
+      icon: Icons.error_outline_rounded,
       content: Text(text, style: TextStyle(
         color: isNear ? const Color(0xFFFFC846) : Colors.white,
         fontWeight: FontWeight.w700, fontSize: 13, height: 1.3)),
