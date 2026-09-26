@@ -1080,6 +1080,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   // Batch B: chart plotter richness state
   NwsAlert? _alert;
+  String? _dismissedBoatWarningSeverity;
   TideStation? _tideStation;
   List<TidePoint> _tides = [];
   List<DailyForecast> _daily = [];
@@ -1661,6 +1662,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final boatWarning = _boatWarning();
+    // Dismissal applies to this warning episode. A clear period or a change in
+    // severity makes the next warning visible again.
+    if (boatWarning == null || boatWarning.severity != _dismissedBoatWarningSeverity) {
+      _dismissedBoatWarningSeverity = null;
+    }
     // Same _me ?? _homeCenter fallback as _routeNm() — without it the drawn line silently
     // dropped its starting point whenever GPS hadn't locked on yet, so it only ever connected
     // waypoint-to-waypoint and never boat-to-first-waypoint.
@@ -1890,9 +1897,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               const SizedBox(height: 8),
               _AlertBanner(alert: _alert!, onDismiss: () => setState(() => _alert = null)),
             ],
-            if (_boatWarning() != null) ...[
+            if (boatWarning != null && _dismissedBoatWarningSeverity == null) ...[
               const SizedBox(height: 8),
-              _BoatWarningBanner(text: _boatWarning()!.text, severity: _boatWarning()!.severity),
+              _BoatWarningBanner(
+                text: boatWarning.text, severity: boatWarning.severity,
+                onDismiss: () => setState(() => _dismissedBoatWarningSeverity = boatWarning.severity),
+              ),
             ],
             if (_mobPoint != null && _me != null) ...[
               const SizedBox(height: 8),
@@ -3417,6 +3427,34 @@ class _HourlyTable extends StatelessWidget {
 // caller, so none of the underlying warning logic/data lives here.
 enum GlassSeverity { amber, red }
 
+// Crossfade the round alert icon and the full card while animating their height.
+// Keeping expansion here leaves alert/weather visibility decisions in the callers.
+class _AnimatedWarningCard extends StatelessWidget {
+  final GlassSeverity severity;
+  final IconData icon;
+  final Widget content;
+  final VoidCallback onIconTap;
+  final VoidCallback? onDismiss;
+  final bool expanded;
+  const _AnimatedWarningCard({required this.severity, required this.icon,
+    required this.content, required this.onIconTap, this.onDismiss, required this.expanded});
+
+  @override
+  Widget build(BuildContext context) => AnimatedCrossFade(
+    duration: const Duration(milliseconds: 320),
+    reverseDuration: const Duration(milliseconds: 260),
+    sizeCurve: Curves.easeInOutCubic,
+    firstCurve: Curves.easeInOut,
+    secondCurve: Curves.easeInOut,
+    alignment: Alignment.topLeft,
+    crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+    firstChild: GlassWarningCard(severity: severity, icon: icon,
+      content: content, onIconTap: onIconTap, expanded: false),
+    secondChild: GlassWarningCard(severity: severity, icon: icon,
+      content: content, onIconTap: onIconTap, onDismiss: onDismiss, expanded: true),
+  );
+}
+
 class GlassWarningCard extends StatelessWidget {
   final GlassSeverity severity;
   final IconData icon;
@@ -3489,7 +3527,8 @@ class GlassWarningCard extends StatelessWidget {
     );
 
     if (!expanded) {
-      return Align(alignment: Alignment.centerLeft, child: iconButton);
+      return Align(alignment: Alignment.centerLeft,
+        child: Padding(padding: const EdgeInsets.only(left: 15), child: iconButton));
     }
 
     return CustomPaint(
@@ -3683,7 +3722,7 @@ class _AlertBannerState extends State<_AlertBanner> {
 
   @override
   Widget build(BuildContext context) {
-    return GlassWarningCard(
+    return _AnimatedWarningCard(
         // NWS alerts are always amber; the boat-conditions warning below is red.
         severity: GlassSeverity.amber,
         icon: Icons.warning_amber_rounded,
@@ -3696,13 +3735,10 @@ class _AlertBannerState extends State<_AlertBanner> {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(widget.alert.headline,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: Colors.white.withOpacity(.93), fontSize: 12, height: 1.3)),
             ),
-          if (_open && widget.alert.description.isNotEmpty) Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(widget.alert.description,
-              style: TextStyle(color: Colors.white.withOpacity(.85), fontSize: 12, height: 1.35)),
-          ),
         ]),
     );
   }
@@ -3711,7 +3747,8 @@ class _AlertBannerState extends State<_AlertBanner> {
 class _BoatWarningBanner extends StatefulWidget {
   final String text;
   final String severity;   // Kept for the near-limit text treatment.
-  const _BoatWarningBanner({required this.text, this.severity = 'over'});
+  final VoidCallback onDismiss;
+  const _BoatWarningBanner({required this.text, required this.onDismiss, this.severity = 'over'});
   @override
   State<_BoatWarningBanner> createState() => _BoatWarningBannerState();
 }
@@ -3728,11 +3765,12 @@ class _BoatWarningBannerState extends State<_BoatWarningBanner> {
   @override
   Widget build(BuildContext context) {
     final isNear = widget.severity == 'near';
-    return GlassWarningCard(
+    return _AnimatedWarningCard(
       severity: GlassSeverity.red,
       icon: Icons.error_outline_rounded,
       onIconTap: () => setState(() => _open = !_open),
       expanded: _open,
+      onDismiss: widget.onDismiss,
       content: Text(widget.text,
         style: TextStyle(
         color: isNear ? const Color(0xFFFFC846) : Colors.white,
