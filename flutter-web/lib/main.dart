@@ -3412,7 +3412,7 @@ class _HourlyTable extends StatelessWidget {
 // PWA index.html:62-63 `#alert small{max-height:0}` collapses to a headline; `.open` reveals
 // the full description. Tap toggles.
 // Glassmorphism shell for the two map-overlay warning cards (NWS alert + boat-condition
-// warning). Visual treatment only — severity picks the amber/red gradient+border+glow;
+// warning). Visual treatment only — the caller picks the amber/red gradient+border+glow;
 // the actual title/body content and the optional close callback stay fully owned by the
 // caller, so none of the underlying warning logic/data lives here.
 enum GlassSeverity { amber, red }
@@ -3437,19 +3437,11 @@ class GlassWarningCard extends StatelessWidget {
     final Color glowTight = isAmber ? const Color(0xFFFFD36A) : const Color(0xFFFF6375);
     final iconColor = isAmber ? const Color(0xFFFFC846) : Colors.white;
 
-    return Container(
-      // Border + drop shadow + accent bloom live on this OUTER box, separate from the
-      // blurred glass content below — keeps the glow crisp instead of getting blurred too,
-      // and unclipped so the bloom outside the edge can actually render (checked: no
-      // ancestor Positioned/Column between here and the HUD root sets a clipBehavior).
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(color: glowWide.withOpacity(.52), blurRadius: 26, spreadRadius: 2),
-          BoxShadow(color: glowTight.withOpacity(.46), blurRadius: 9, spreadRadius: 1),
-          BoxShadow(color: Colors.black.withOpacity(.22), blurRadius: 16, offset: const Offset(0, 7)),
-        ],
-      ),
+    return CustomPaint(
+      // BoxShadow paints a filled red/amber shape behind the whole translucent card.
+      // Its color shows through the middle and makes the map look opaque. Paint only
+      // the rounded outline so the bloom stays outside the glass.
+      painter: _WarningEdgeGlow(wide: glowWide, tight: glowTight),
       // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
       // whole map/HUD — keeps the expensive part localized per the design brief.
       child: ClipRRect(
@@ -3504,6 +3496,32 @@ class GlassWarningCard extends StatelessWidget {
   }
 }
 
+class _WarningEdgeGlow extends CustomPainter {
+  final Color wide;
+  final Color tight;
+  const _WarningEdgeGlow({required this.wide, required this.tight});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final edge = RRect.fromRectAndRadius(
+      (Offset.zero & size).deflate(1.5), const Radius.circular(16.5));
+    canvas.drawRRect(edge, Paint()
+      ..color = wide.withOpacity(.78)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 11));
+    canvas.drawRRect(edge, Paint()
+      ..color = tight.withOpacity(.85)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 3));
+  }
+
+  @override
+  bool shouldRepaint(covariant _WarningEdgeGlow old) =>
+      old.wide != wide || old.tight != tight;
+}
+
 // Transparent normally, subtle translucent-white circle while pressed — per the design brief,
 // not a Material ripple (a Material ancestor would fight the transparent glass background).
 class _GlassCloseButton extends StatefulWidget {
@@ -3540,16 +3558,15 @@ class _AlertBannerState extends State<_AlertBanner> {
   bool _open = false;
   @override
   Widget build(BuildContext context) {
-    final severity = widget.alert.isSevere ? GlassSeverity.red : GlassSeverity.amber;
-    final titleColor = widget.alert.isSevere ? Colors.white : const Color(0xFFFFC846);
     return GestureDetector(
       onTap: () => setState(() => _open = !_open),
       child: GlassWarningCard(
-        severity: severity,
+        // NWS alerts are always amber; the boat-conditions warning below is red.
+        severity: GlassSeverity.amber,
         icon: Icons.warning_amber_rounded,
         onDismiss: widget.onDismiss,
         content: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(widget.alert.event, style: TextStyle(color: titleColor, fontWeight: FontWeight.w700, fontSize: 15)),
+          Text(widget.alert.event, style: const TextStyle(color: Color(0xFFFFC846), fontWeight: FontWeight.w700, fontSize: 15)),
           if (widget.alert.headline.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -3571,13 +3588,13 @@ class _AlertBannerState extends State<_AlertBanner> {
 
 class _BoatWarningBanner extends StatelessWidget {
   final String text;
-  final String severity;   // 'over' → red (default), 'near' → amber (PWA `.a` class)
+  final String severity;   // Kept for the near-limit text treatment.
   const _BoatWarningBanner({required this.text, this.severity = 'over'});
   @override
   Widget build(BuildContext context) {
     final isNear = severity == 'near';
     return GlassWarningCard(
-      severity: isNear ? GlassSeverity.amber : GlassSeverity.red,
+      severity: GlassSeverity.red,
       icon: Icons.info_outline,
       content: Text(text, style: TextStyle(
         color: isNear ? const Color(0xFFFFC846) : Colors.white,
