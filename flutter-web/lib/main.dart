@@ -3447,12 +3447,30 @@ class GlassWarningCard extends StatelessWidget {
                   width: 42, height: 42, alignment: Alignment.center,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: RadialGradient(colors: [
-                      glow.withOpacity(.30), glow.withOpacity(.06),
-                    ]),
-                    border: Border.all(color: core.withOpacity(.36), width: .7),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft, end: Alignment.bottomRight,
+                      colors: [core.withOpacity(.34), glow.withOpacity(.24),
+                        const Color(0xFF130F19).withOpacity(.76)],
+                      stops: const [0, .42, 1],
+                    ),
+                    border: Border.all(color: core.withOpacity(.55), width: .8),
+                    boxShadow: [
+                      BoxShadow(color: glow.withOpacity(.52), blurRadius: 18, spreadRadius: 1),
+                      BoxShadow(color: Colors.black.withOpacity(.34), blurRadius: 4,
+                        offset: const Offset(1.5, 3)),
+                    ],
                   ),
                   child: Stack(alignment: Alignment.center, children: [
+                    Positioned(
+                      left: 6, right: 6, top: 3, height: 11,
+                      child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(100),
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                          colors: [Colors.white.withOpacity(.38), Colors.white.withOpacity(0)],
+                        ),
+                      ))),
+                    ),
                     ImageFiltered(
                       imageFilter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
                       child: Icon(icon, color: glow, size: 32),
@@ -3461,7 +3479,14 @@ class GlassWarningCard extends StatelessWidget {
                       imageFilter: ui.ImageFilter.blur(sigmaX: 1.8, sigmaY: 1.8),
                       child: Icon(icon, color: glow, size: 29),
                     ),
-                    Icon(icon, color: core, size: 27),
+                    Transform.translate(
+                      offset: const Offset(1.2, 2),
+                      child: Icon(icon, color: const Color(0xFF421620), size: 27),
+                    ),
+                    Transform.translate(
+                      offset: const Offset(-.6, -.7),
+                      child: Icon(icon, color: core, size: 27),
+                    ),
                   ]),
                 ),
                 const SizedBox(width: 12),
@@ -3575,6 +3600,24 @@ class _WarningEdgeGlow extends CustomPainter {
     hotspot(isAmber ? .92 : .83, 0, .17);
     hotspot(.14, 1, .12);
     hotspot(.99, .84, .11);
+
+    // Narrow, white reflections on the rounded rim give a few spots a polished
+    // specular shine. Fade both ends to avoid a continuous white frame.
+    void glint(double x1, double x2, double y, double strength) {
+      final span = Rect.fromLTRB(size.width * x1, y - 2,
+        size.width * x2, y + 2);
+      canvas.drawLine(Offset(span.left, y), Offset(span.right, y), Paint()
+        ..shader = LinearGradient(colors: [
+          Colors.white.withOpacity(0), Colors.white.withOpacity(strength),
+          Colors.white.withOpacity(strength), Colors.white.withOpacity(0),
+        ], stops: const [0, .38, .52, 1]).createShader(span)
+        ..strokeWidth = 1.35
+        ..strokeCap = StrokeCap.round);
+    }
+    glint(isAmber ? .26 : .08, isAmber ? .52 : .27, edge.top, .88);
+    glint(isAmber ? .82 : .70, .96, edge.top, .96);
+    glint(.04, isAmber ? .22 : .18, edge.bottom, .83);
+    glint(.77, .96, edge.bottom, .92);
   }
 
   @override
