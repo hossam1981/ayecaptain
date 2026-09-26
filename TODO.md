@@ -16,6 +16,8 @@ flutter--frabjous-sprinkles-9eb441.netlify.app.
 - [x] **Expanded tide dashboard:** embed the NOAA tide chart, station name/coordinates,
   ft/m control, tide legend and upcoming high/low cards inside the sheet. Keep the provided
   dark navy reference image's chart and card design; remove the separate tide modal/entry.
+- [ ] **Tide dashboard visual QA:** compare the compact chart, both sun markers and four
+  cards against the supplied screenshots on a narrow phone after the next Flutter deploy.
 - [ ] **Best boating window:** tapping the pill selects its day and opens the sheet;
   match the PWA's two consecutive hours across the forecast week (Flutter currently searches
   three hours in the next 24 hours).

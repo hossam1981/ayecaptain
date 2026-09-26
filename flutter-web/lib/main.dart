@@ -74,9 +74,10 @@ class Weather {
   final int? windDirDeg, weatherCode;
   // Batch A.5 additions (matches PWA #now grid + tideStrip)
   final double? waveFt, wavePeriodS, waterTempF, precipPct;
-  final DateTime? sunset, sunrise;
+  final DateTime? sunset, sunrise, tomorrowSunrise, tomorrowSunset;
   const Weather({this.tempF, this.windKt, this.gustKt, this.windDirDeg, this.weatherCode,
-    this.waveFt, this.wavePeriodS, this.waterTempF, this.precipPct, this.sunset, this.sunrise});
+    this.waveFt, this.wavePeriodS, this.waterTempF, this.precipPct, this.sunset, this.sunrise,
+    this.tomorrowSunrise, this.tomorrowSunset});
 }
 
 Future<Weather?> fetchWeather(LatLng at) async {
@@ -84,7 +85,7 @@ Future<Weather?> fetchWeather(LatLng at) async {
   final wxUrl = Uri.parse('https://api.open-meteo.com/v1/forecast?latitude=${at.latitude}&longitude=${at.longitude}'
       '&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=auto'
       '&current=temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code,precipitation'
-      '&daily=sunrise,sunset&forecast_days=1');
+      '&daily=sunrise,sunset&forecast_days=2');
   final mrUrl = Uri.parse('https://marine-api.open-meteo.com/v1/marine?latitude=${at.latitude}&longitude=${at.longitude}'
       '&length_unit=imperial&current=wave_height,wave_period,sea_surface_temperature');
   try {
@@ -97,13 +98,15 @@ Future<Weather?> fetchWeather(LatLng at) async {
     final c = wj['current'] as Map<String, dynamic>?;
     if (c == null) return null;
     // daily first row → today's sunrise/sunset
-    DateTime? sr, ss;
+    DateTime? sr, ss, nextSr, nextSs;
     final d = wj['daily'] as Map<String, dynamic>?;
     if (d != null) {
       final sT = (d['sunrise'] as List?)?.cast<String>();
       final ssT = (d['sunset'] as List?)?.cast<String>();
       if (sT != null && sT.isNotEmpty) sr = DateTime.tryParse(sT[0]);
       if (ssT != null && ssT.isNotEmpty) ss = DateTime.tryParse(ssT[0]);
+      if (sT != null && sT.length > 1) nextSr = DateTime.tryParse(sT[1]);
+      if (ssT != null && ssT.length > 1) nextSs = DateTime.tryParse(ssT[1]);
     }
     // marine (optional — silent fall through if it fails)
     double? waveFt, wavePer, waterF;
@@ -129,6 +132,8 @@ Future<Weather?> fetchWeather(LatLng at) async {
       waterTempF: waterF,
       sunrise: sr,
       sunset: ss,
+      tomorrowSunrise: nextSr,
+      tomorrowSunset: nextSs,
     );
   } catch (_) { return null; }
 }
@@ -3204,6 +3209,8 @@ class _BottomSheetState extends State<_BottomSheet> {
       TidesSheet(
         station: widget.tideStation, tides: widget.tides,
         sunrise: widget.weather?.sunrise, sunset: widget.weather?.sunset,
+        tomorrowSunrise: widget.weather?.tomorrowSunrise,
+        tomorrowSunset: widget.weather?.tomorrowSunset,
         initialUnit: widget.tideUnit, onUnitChanged: widget.onTideUnitChanged,
       ),
       // PWA #install (index.html:157-158,378,1976-1978): hidden until beforeinstallprompt
@@ -4089,11 +4096,12 @@ String _dayName(DateTime d) {
 class TidesSheet extends StatefulWidget {
   final TideStation? station;
   final List<TidePoint> tides;
-  final DateTime? sunrise, sunset;
+  final DateTime? sunrise, sunset, tomorrowSunrise, tomorrowSunset;
   final String initialUnit;
   final ValueChanged<String>? onUnitChanged;
   const TidesSheet({super.key, required this.station, required this.tides,
-    this.sunrise, this.sunset, this.initialUnit = 'ft', this.onUnitChanged});
+    this.sunrise, this.sunset, this.tomorrowSunrise, this.tomorrowSunset,
+    this.initialUnit = 'ft', this.onUnitChanged});
   @override
   State<TidesSheet> createState() => _TidesSheetState();
 }
@@ -4154,16 +4162,17 @@ class _TidesSheetState extends State<TidesSheet> {
           const SizedBox(height: 10),
           _legend(),
           const SizedBox(height: 10),
-          AspectRatio(
-            aspectRatio: 360 / 220,
+          LayoutBuilder(builder: (context, box) => SizedBox(
+            height: (box.maxWidth * 220 / 360).clamp(165.0, 280.0).toDouble(),
             child: CustomPaint(painter: _TidePainter(
               curve: windowCurve, hilo: windowHilo,
               t0: t0, t1: t1, now: now,
-              sunrise: widget.sunrise, sunset: widget.sunset,
+              sunrises: [widget.sunrise, widget.tomorrowSunrise].whereType<DateTime>().toList(),
+              sunsets: [widget.sunset, widget.tomorrowSunset].whereType<DateTime>().toList(),
               sunriseImg: _sunrise, sunsetImg: _sunset, oceanImg: _ocean,
               unit: _unit,
             )),
-          ),
+          )),
           const SizedBox(height: 14),
           _hiLoCards(nextFour),
           const SizedBox(height: 12),
@@ -4233,34 +4242,42 @@ class _TidesSheetState extends State<TidesSheet> {
   }
 
   Widget _hiLoCards(List<TidePoint> pts) {
-    Widget card(TidePoint p) {
+    Widget card(TidePoint p, bool compact) {
       final isHigh = p.type == 'H';
       final color = isHigh ? const Color(0xFF35E96A) : const Color(0xFFFF5A55);
-      return Container(padding: const EdgeInsets.all(12),
+      final iconSize = compact ? 24.0 : 34.0;
+      return Container(padding: EdgeInsets.all(compact ? 6 : 12),
         decoration: BoxDecoration(color: const Color(0xFF0B2C47),
           border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(16),
           boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 14, offset: Offset(0, 6))]),
         child: Row(children: [
-          Container(width: 34, height: 34,
+          Container(width: iconSize, height: iconSize,
             decoration: BoxDecoration(shape: BoxShape.circle,
               border: Border.all(color: color, width: 2)),
-            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 18)),
-          const SizedBox(width: 10),
+            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward,
+              color: color, size: compact ? 14 : 18)),
+          SizedBox(width: compact ? 5 : 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(isHigh ? 'High Tide' : 'Low Tide', style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11, fontWeight: FontWeight.w600)),
-            Text(_fmtTime(p.t), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-            Text('${_fmtV(p.v)} $_unit', style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 11)),
+            Text(isHigh ? 'High Tide' : 'Low Tide', maxLines: 1,
+              style: TextStyle(color: const Color(0xAA9CC1DE), fontSize: compact ? 9 : 11, fontWeight: FontWeight.w600)),
+            FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
+              child: Text(_fmtTime(p.t), style: TextStyle(color: Colors.white,
+                fontWeight: FontWeight.w800, fontSize: compact ? 12 : 15))),
+            Text('${_fmtV(p.v)} $_unit', maxLines: 1,
+              style: TextStyle(color: const Color(0xEEFFFFFF), fontSize: compact ? 9 : 11)),
           ])),
         ]));
     }
     if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
       child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 12)));
-    return LayoutBuilder(builder: (context, constraints) => GridView.count(
-      shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: constraints.maxWidth < 310 ? 1 : 2,
+    return LayoutBuilder(builder: (context, constraints) {
+      final compact = constraints.maxWidth < 310;
+      return GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
       crossAxisSpacing: 9, mainAxisSpacing: 9,
-      childAspectRatio: constraints.maxWidth < 310 ? 4 : 1.7,
-      children: pts.map(card).toList()));
+      childAspectRatio: compact ? 1.3 : 1.7,
+      children: pts.map((p) => card(p, compact)).toList());
+    });
   }
 
   Widget _footer() {
@@ -4288,11 +4305,12 @@ class _TidePainter extends CustomPainter {
   final List<_TideSample> curve;
   final List<TidePoint> hilo;
   final DateTime t0, t1, now;
-  final DateTime? sunrise, sunset;
+  final List<DateTime> sunrises, sunsets;
   final ui.Image? sunriseImg, sunsetImg, oceanImg;
   final String unit;
   _TidePainter({required this.curve, required this.hilo, required this.t0, required this.t1, required this.now,
-    this.sunrise, this.sunset, this.sunriseImg, this.sunsetImg, this.oceanImg, required this.unit});
+    required this.sunrises, required this.sunsets,
+    this.sunriseImg, this.sunsetImg, this.oceanImg, required this.unit});
 
   double _u(double v) => unit == 'm' ? v * 0.3048 : v;
   String _fv(double v) => '${_u(v).toStringAsFixed(1)} $unit';
@@ -4309,6 +4327,7 @@ class _TidePainter extends CustomPainter {
     const mL = 30.0, mR = 10.0, mT = 42.0, mB = 26.0;
     final plotW = size.width - mL - mR;
     final plotH = size.height - mT - mB;
+    final compact = size.width < 330;
     // Y range: pad vmin-2.3 / vmax+0.9 (index.html:888).
     double vmin = curve.first.v, vmax = curve.first.v;
     for (final s in curve) { if (s.v < vmin) vmin = s.v; if (s.v > vmax) vmax = s.v; }
@@ -4348,10 +4367,10 @@ class _TidePainter extends CustomPainter {
     // 3) Sunrise/Sunset images at the mean-tide horizon.
     final meanV = curve.fold<double>(0, (a, s) => a + s.v) / curve.length;
     final horizonY = y(meanV);
-    void drawSun(ui.Image? img, DateTime? t) {
-      if (img == null || t == null) return;
+    void drawSun(ui.Image? img, DateTime t) {
+      if (img == null) return;
       if (t.isBefore(t0.add(const Duration(minutes: 3))) || t.isAfter(t1.subtract(const Duration(minutes: 3)))) return;
-      const sw = 78.0;
+      final sw = math.min(94.0, plotW * (compact ? .28 : .26));
       final sh = sw * img.height / img.width;
       final xc = x(t);
       // waterline at 80% down (PWA magic wl=0.80)
@@ -4359,8 +4378,8 @@ class _TidePainter extends CustomPainter {
       canvas.drawImageRect(img, Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
         rect, Paint()..color = Colors.white.withOpacity(.95));
     }
-    drawSun(sunriseImg, sunrise);
-    drawSun(sunsetImg, sunset);
+    for (final t in sunrises) { drawSun(sunriseImg, t); }
+    for (final t in sunsets) { drawSun(sunsetImg, t); }
 
     // 4) Ocean band under the horizon.
     if (oceanImg != null) {
@@ -4402,10 +4421,12 @@ class _TidePainter extends CustomPainter {
       canvas.drawCircle(Offset(px, py), 5.5, Paint()..color = color);
       canvas.drawCircle(Offset(px, py), 5.5,
         Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.6);
-      // labels (collision guard: skip if within 50 px of the previous label)
-      if (lastLx == null || (px - lastLx).abs() >= 50) {
-        _text(canvas, _fv(p.v), Offset(px, py - 22), 11, FontWeight.w700, color, center: true);
-        _text(canvas, _fmtTime(p.t), Offset(px, py + 12), 10, FontWeight.w600, const Color(0xFF9CC1DE), center: true);
+      // The four events remain visible as dots; labels only appear when they fit.
+      if (lastLx == null || (px - lastLx).abs() >= (compact ? 76 : 62)) {
+        _text(canvas, _fv(p.v), Offset(px, py - 23), compact ? 9 : 11,
+          FontWeight.w700, color, center: true);
+        _text(canvas, _fmtTime(p.t), Offset(px, py + 12), compact ? 8 : 10,
+          FontWeight.w600, const Color(0xFF9CC1DE), center: true);
         lastLx = px;
       }
     }
@@ -4436,7 +4457,7 @@ class _TidePainter extends CustomPainter {
       final tipX = nx.clamp(mL + 30, mL + plotW - 30).toDouble();
       final tipY = math.max<double>(mT + 16, ny - 34);
       final pillRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(tipX, tipY), width: 66, height: 32),
+        Rect.fromCenter(center: Offset(tipX, tipY), width: compact ? 52 : 66, height: 32),
         const Radius.circular(9));
       canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF1271E7));
       canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF58A7FF)
@@ -4448,11 +4469,15 @@ class _TidePainter extends CustomPainter {
     // 9) Y-axis label and x-tick times.
     _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 9, FontWeight.w600, const Color(0xAA9CC1DE), center: true, rotate: -math.pi / 2);
     var tt = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
+    double? lastTickX;
     while (tt.isBefore(t1)) {
       if (!tt.isBefore(t0)) {
         final gx = x(tt);
-        _text(canvas, tt.hour == 0 ? '12 AM' : '${tt.hour == 12 ? 12 : tt.hour % 12} ${tt.hour < 12 ? "AM" : "PM"}',
-          Offset(gx, base + 12), 9, FontWeight.w600, const Color(0xFFA9CAE2), center: true);
+        if (lastTickX == null || gx - lastTickX >= 48) {
+          _text(canvas, tt.hour == 0 ? '12 AM' : '${tt.hour == 12 ? 12 : tt.hour % 12} ${tt.hour < 12 ? "AM" : "PM"}',
+            Offset(gx, base + 12), 9, FontWeight.w600, const Color(0xFFA9CAE2), center: true);
+          lastTickX = gx;
+        }
       }
       tt = tt.add(const Duration(hours: 12));
     }
@@ -4482,6 +4507,7 @@ class _TidePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _TidePainter old) => old.curve != curve || old.now != now
+    || old.sunrises.length != sunrises.length || old.sunsets.length != sunsets.length
     || old.unit != unit || old.sunriseImg != sunriseImg || old.sunsetImg != sunsetImg || old.oceanImg != oceanImg;
 }
 
