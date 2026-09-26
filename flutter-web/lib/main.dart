@@ -3422,8 +3422,9 @@ class GlassWarningCard extends StatelessWidget {
   final IconData icon;
   final Widget content;
   final VoidCallback? onDismiss;
+  final VoidCallback? onIconTap;
   const GlassWarningCard({super.key, required this.severity, required this.icon,
-    required this.content, this.onDismiss});
+    required this.content, this.onDismiss, this.onIconTap});
 
   @override
   Widget build(BuildContext context) {
@@ -3443,9 +3444,15 @@ class GlassWarningCard extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
               child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Container(
-                  width: 42, height: 42, alignment: Alignment.center,
-                  decoration: BoxDecoration(
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onIconTap,
+                  child: Semantics(
+                    button: onIconTap != null,
+                    label: isAmber ? 'Toggle alert details' : 'Toggle boat warning details',
+                    child: Container(
+                      width: 42, height: 42, alignment: Alignment.center,
+                      decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: LinearGradient(
                       begin: Alignment.topLeft, end: Alignment.bottomRight,
@@ -3460,7 +3467,7 @@ class GlassWarningCard extends StatelessWidget {
                         offset: const Offset(1.5, 3)),
                     ],
                   ),
-                  child: Stack(alignment: Alignment.center, children: [
+                      child: Stack(alignment: Alignment.center, children: [
                     Positioned(
                       left: 6, right: 6, top: 3, height: 11,
                       child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
@@ -3488,6 +3495,8 @@ class GlassWarningCard extends StatelessWidget {
                       child: Icon(icon, color: core, size: 27),
                     ),
                   ]),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: content),
@@ -3666,6 +3675,7 @@ class _AlertBannerState extends State<_AlertBanner> {
         // NWS alerts are always amber; the boat-conditions warning below is red.
         severity: GlassSeverity.amber,
         icon: Icons.warning_amber_rounded,
+        onIconTap: () => setState(() => _open = !_open),
         onDismiss: widget.onDismiss,
         content: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text(widget.alert.event, style: const TextStyle(color: Color(0xFFFFC846), fontWeight: FontWeight.w700, fontSize: 15)),
@@ -3688,17 +3698,29 @@ class _AlertBannerState extends State<_AlertBanner> {
   }
 }
 
-class _BoatWarningBanner extends StatelessWidget {
+class _BoatWarningBanner extends StatefulWidget {
   final String text;
   final String severity;   // Kept for the near-limit text treatment.
   const _BoatWarningBanner({required this.text, this.severity = 'over'});
   @override
+  State<_BoatWarningBanner> createState() => _BoatWarningBannerState();
+}
+
+class _BoatWarningBannerState extends State<_BoatWarningBanner> {
+  // Start open so the original warning and its measured values remain visible.
+  bool _open = true;
+
+  @override
   Widget build(BuildContext context) {
-    final isNear = severity == 'near';
+    final isNear = widget.severity == 'near';
     return GlassWarningCard(
       severity: GlassSeverity.red,
       icon: Icons.error_outline_rounded,
-      content: Text(text, style: TextStyle(
+      onIconTap: () => setState(() => _open = !_open),
+      content: Text(widget.text,
+        maxLines: _open ? null : 1,
+        overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis,
+        style: TextStyle(
         color: isNear ? const Color(0xFFFFC846) : Colors.white,
         fontWeight: FontWeight.w700, fontSize: 13, height: 1.3)),
     );
