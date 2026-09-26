@@ -43,6 +43,12 @@ already has its own widget, and the install prompt already works.
 3. ~~**PWA install prompt**~~ — done. Captures `beforeinstallprompt` via `package:web` +
    `dart:js_interop` (not `dart:html`, which stable Flutter is dropping), shows "Add Bayside
    to home screen" near the bottom of the expanded sheet, same as the PWA (index.html:378).
+   Needed two follow-up fixes for the event to actually fire (Chrome's install criteria):
+   `manifest.json` had no icons (added, copied from the PWA's own `icons/icon-*.png`), and
+   the build used `--pwa-strategy=none` (no service worker — Chrome requires one). Switched
+   to `--pwa-strategy=offline-first`, the only strategy that registers one — deliberate
+   tradeoff, since it also reintroduces the caching behavior that made testers see stale
+   builds. Accepted because manual cache-clearing after each push is already the routine.
 4. **Snow FX** — extend `FxCanvas` to draw snow particles on snow weather codes.
 5. **Fog FX** — whitewash overlay on fog weather codes.
 6. **Lightning FX** — flash overlay during thunderstorms.
