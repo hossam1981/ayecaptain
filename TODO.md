@@ -56,8 +56,17 @@ already has its own widget, and the install prompt already works.
    boat's own LatLng + heading rotation, no camera projection needed.
 8. **Distinct boat-3d.png sprite** — blocked on a second source image (current
    `boat.png`/`boat-3d.png` are byte-identical, so the Start-ride crossfade is a no-op).
-9. **Real 3D camera (MapLibre GL swap)** — replace `flutter_map` with `maplibre_gl` for true
-   pitch/tilt/bearing. Big rewrite, touches every map layer. Do this last, once everything
-   else is stable.
+9. **Real 3D camera (MapLibre GL swap)** — in progress, deliberately scoped down (2026-09-26):
+   `Nav3DView` (new file `lib/nav_3d_view.dart`) replaces the flutter_map/CSS-tilt view ONLY
+   while `_navigating` is true, a MapLibre style URL is configured (new optional field in the
+   boat profile, same UX as the CARTO key), and no MOB/anchor-watch is active. MVP layers only:
+   boat marker, active route line, remaining waypoints, real camera pitch/bearing. Full
+   replacement (all basemaps/overlays on MapLibre) stays deferred — not this pass. Follow-ups
+   NOT ported to the nav-3D view yet (still flutter_map-only, need to decide whether/how to
+   bring them in): docks/nav-aids markers, tidal current arrows, wake spray, boat trail
+   polyline, fuel range ring, weather FX canvas, sun/moon edge marker.
 10. **Phone spot-check** — GPS-gated behavior (anchor drag alarm, fuel ring circle, live route
-    drop) has never been tested with real location; background QA agents can't grant it.
+    drop) has never been tested with real location; background QA agents can't grant it. Now
+    also applies to the new nav-3D view (#9) — needs a real Mapbox/MapLibre style URL and
+    actual navigation to verify at all; the browser-automation click tool has also been
+    unreliable this session, so live verification leans on the user's own testing.

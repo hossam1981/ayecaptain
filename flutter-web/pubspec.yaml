@@ -4,8 +4,8 @@ publish_to: none
 version: 0.3.0+1
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
-  flutter: '>=3.22.0'
+  sdk: '>=3.7.0 <4.0.0'
+  flutter: '>=3.29.0'
 
 dependencies:
   flutter:
@@ -17,6 +17,7 @@ dependencies:
   wakelock_plus: ^1.2.10   # Screen Wake Lock — same fix as the PWA (Android throttles GPS when screen sleeps)
   shared_preferences: ^2.3.2   # boat profile persistence (name/limits/tank/burn), works on web + mobile
   web: ^1.0.0   # beforeinstallprompt interop (dart:js_interop) — dart:html is being dropped from stable Flutter
+  maplibre_gl: ^0.27.1   # real 3D camera (pitch/bearing) for the nav-only view — needs Flutter 3.29+/Dart 3.7+ (bumped above)
 
 flutter:
   uses-material-design: true

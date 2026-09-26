@@ -28,6 +28,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:web/web.dart' as web;
 
+import 'nav_3d_view.dart';
+
 void main() => runApp(const BaysideApp());
 
 class BaysideApp extends StatelessWidget {
@@ -1103,6 +1105,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   Basemap _base = Basemap.map;
   String _cartoKey = '';   // PWA index.html:507-512 — optional, saved alongside the boat profile
+  // Optional MapLibre style URL (Mapbox or any other MapLibre-compatible hosted style, full
+  // URL with the user's own token already embedded) — enables the real-3D nav-only view
+  // (see Nav3DView). No PWA equivalent; a Flutter-side enhancement, same "optional, graceful
+  // fallback if unset" shape as _cartoKey.
+  String _mapStyleUrl = '';
   LatLng? _me;
   double _heading = 0;
   double _speedKt = 0;
@@ -1210,6 +1217,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       if (u != null && (u == 'ft' || u == 'm') && mounted) setState(() => _tideUnit = u);
       final k = sp.getString('cartoKey');
       if (k != null && k.isNotEmpty && mounted) setState(() => _cartoKey = k);
+      final m = sp.getString('mapStyleUrl');
+      if (m != null && m.isNotEmpty && mounted) setState(() => _mapStyleUrl = m);
     });
     _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) {
       final at = _me ?? _homeCenter;
@@ -1689,11 +1698,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       builder: (ctx) => BoatProfileSheet(
         initial: _profile,
         initialCartoKey: _cartoKey,
-        onSave: (p, cartoKey) async {
+        initialMapStyleUrl: _mapStyleUrl,
+        onSave: (p, cartoKey, mapStyleUrl) async {
           await p.save();
           final sp = await SharedPreferences.getInstance();
           await sp.setString('cartoKey', cartoKey);
-          if (mounted) setState(() { _profile = p; _cartoKey = cartoKey; _wxAt.clear(); });
+          await sp.setString('mapStyleUrl', mapStyleUrl);
+          if (mounted) setState(() { _profile = p; _cartoKey = cartoKey; _mapStyleUrl = mapStyleUrl; _wxAt.clear(); });
           _gradeRouteWaypoints();   // re-grade against the new limits
         },
       ),
@@ -1723,9 +1734,22 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final tiltMatrix = Matrix4.identity()
       ..setEntry(3, 2, 0.001)
       ..rotateX(_navigating ? 0.785398 : 0.0);   // 45 deg
+    // Nav-only real-3D view (see plan, 2026-09-26): only engages with a style URL configured,
+    // and never while MOB/anchor-watch is active — those safety overlays aren't ported to
+    // Nav3DView in this pass, so stay on the regular (working) view rather than hide them.
+    final useNav3D = _navigating && _mapStyleUrl.isNotEmpty && _mobPoint == null && _anchorPoint == null;
     return Scaffold(
       body: SafeArea(
         child: Stack(children: [
+          if (useNav3D)
+            Nav3DView(
+              styleUrl: _mapStyleUrl,
+              boatPosition: _me ?? _homeCenter,
+              headingDeg: _heading,
+              routeLine: routeLine,
+              waypoints: _waypoints,
+            )
+          else
           // The map itself, wrapped in a Transform that tilts to ~45° during active nav (matches the
           // PWA's `body.nav-active #map { transform: perspective... rotateX(45deg) }` trick — Flutter
           // widgets support the same perspective/rotate math via Matrix4).
@@ -2903,22 +2927,26 @@ class MoreToolsSheet extends StatelessWidget {
 class BoatProfileSheet extends StatefulWidget {
   final BoatProfile initial;
   final String initialCartoKey;
-  final Future<void> Function(BoatProfile, String cartoKey) onSave;
-  const BoatProfileSheet({super.key, required this.initial, required this.initialCartoKey, required this.onSave});
+  final String initialMapStyleUrl;
+  final Future<void> Function(BoatProfile, String cartoKey, String mapStyleUrl) onSave;
+  const BoatProfileSheet({super.key, required this.initial, required this.initialCartoKey,
+    required this.initialMapStyleUrl, required this.onSave});
   @override
   State<BoatProfileSheet> createState() => _BoatProfileSheetState();
 }
 class _BoatProfileSheetState extends State<BoatProfileSheet> {
   late BoatProfile p;
   late final TextEditingController _cartoKeyCtrl;
+  late final TextEditingController _mapStyleUrlCtrl;
   @override
   void initState() {
     super.initState();
     p = BoatProfile.fromJson(widget.initial.toJson());
     _cartoKeyCtrl = TextEditingController(text: widget.initialCartoKey);
+    _mapStyleUrlCtrl = TextEditingController(text: widget.initialMapStyleUrl);
   }
   @override
-  void dispose() { _cartoKeyCtrl.dispose(); super.dispose(); }
+  void dispose() { _cartoKeyCtrl.dispose(); _mapStyleUrlCtrl.dispose(); super.dispose(); }
   TextEditingController _num(double v) => TextEditingController(text: v == 0 ? '' : v.toString());
   // PWA #pform input (index.html:182): white bg, ink text, light navy border; labels are
   // var(--sea) (index.html:181). Was wrongly white-on-dark.
@@ -3041,12 +3069,36 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
             focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
           ),
         ),
+        const SizedBox(height: 16),
+        // No PWA equivalent — a Flutter-side enhancement. Optional: when set, navigating
+        // switches to a real 3D MapLibre GL camera instead of the usual flat map; when blank,
+        // navigating looks exactly as it does today (see Nav3DView / _MapScreenState).
+        Text('Full style JSON URL from a Mapbox or other MapLibre-compatible account '
+            '(your own token included in the URL). Optional — leave blank to keep the '
+            'regular map while navigating.',
+            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.6), fontSize: 11)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _mapStyleUrlCtrl,
+          style: const TextStyle(color: Color(0xFF0F2A44)),
+          decoration: InputDecoration(
+            filled: true, fillColor: Colors.white,
+            labelText: 'MapLibre style URL (3D navigation)', labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
+            isDense: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
+          ),
+        ),
         const SizedBox(height: 24),
         // PWA #pform .save (index.html:184): background:var(--ink), colour:var(--paper) —
         // dark navy, not green.
         Material(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(10),
           child: InkWell(borderRadius: BorderRadius.circular(10),
-            onTap: () async { await widget.onSave(p, _cartoKeyCtrl.text.trim()); if (context.mounted) Navigator.of(context).pop(); },
+            onTap: () async {
+              await widget.onSave(p, _cartoKeyCtrl.text.trim(), _mapStyleUrlCtrl.text.trim());
+              if (context.mounted) Navigator.of(context).pop();
+            },
             child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
               child: Center(child: Text('Save', style: TextStyle(color: Color(0xFFF4F8FA), fontWeight: FontWeight.w800, fontSize: 15)))),
           ),
