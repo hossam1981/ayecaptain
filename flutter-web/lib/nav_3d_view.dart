@@ -12,7 +12,7 @@
 // before writing this — not guessed — per this session's established practice for
 // unfamiliar interop. Code-reviewed against the live docs a second time; nothing flagged.
 
-import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -23,6 +23,8 @@ LatLng _toMlLatLng(ll.LatLng p) => LatLng(p.latitude, p.longitude);
 
 class Nav3DView extends StatefulWidget {
   final String styleUrl;
+  final String basemap;
+  final ValueChanged<ll.LatLng> onMapTap;
   final ll.LatLng boatPosition;
   final double headingDeg;
   final List<ll.LatLng> routeLine;
@@ -30,6 +32,8 @@ class Nav3DView extends StatefulWidget {
   const Nav3DView({
     super.key,
     required this.styleUrl,
+    required this.basemap,
+    required this.onMapTap,
     required this.boatPosition,
     required this.headingDeg,
     required this.routeLine,
@@ -53,6 +57,44 @@ class _Nav3DViewState extends State<Nav3DView> {
   Line? _routeLineAnnotation;
   final Map<int, Circle> _waypointCircles = {};
   bool _ready = false;
+  bool _syncing = false;
+  bool _needsSync = false;
+
+  // MapLibre takes a complete style, not a flutter_map TileLayer. The selected
+  // basemap needs a matching raster style while the navigation view is mounted.
+  String get _style {
+    if (widget.basemap == 'map') return widget.styleUrl;
+    final urls = switch (widget.basemap) {
+      'sat' => <String>[
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      ],
+      'dark' => <String>[
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+      ],
+      _ => <String>[
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}',
+      ],
+    };
+    return jsonEncode({
+      'version': 8,
+      'sources': {
+        for (var i = 0; i < urls.length; i++)
+          'base-$i': {
+            'type': 'raster',
+            'tiles': [urls[i]],
+            'tileSize': i == 1 && widget.basemap == 'chart' ? 1024 : 256,
+          },
+      },
+      'layers': [
+        for (var i = 0; i < urls.length; i++)
+          {'id': 'base-$i', 'type': 'raster', 'source': 'base-$i'},
+      ],
+    });
+  }
 
   @override
   void didUpdateWidget(covariant Nav3DView old) {
@@ -70,26 +112,57 @@ class _Nav3DViewState extends State<Nav3DView> {
   Future<void> _onStyleLoaded() async {
     final controller = _controller;
     if (controller == null) return;
-    final bd = await rootBundle.load('assets/icons/boat_small.png');
+    final bd = await rootBundle.load('assets/icons/boat-3d_small.png');
     await controller.addImage(_boatIconName, bd.buffer.asUint8List());
-    _symbolManager = SymbolManager(controller);
-    _lineManager = LineManager(controller);
-    _circleManager = CircleManager(controller);
+    final symbols = SymbolManager(controller, iconAllowOverlap: true);
+    final lines = LineManager(controller);
+    final circles = CircleManager(controller);
+    // These managers are created manually, so initialize their backing style
+    // sources/layers before add or set. Constructor alone does not do this.
+    await symbols.initialize();
+    await lines.initialize();
+    await circles.initialize();
+    if (!mounted) return;
+    _symbolManager = symbols;
+    _lineManager = lines;
+    _circleManager = circles;
     _ready = true;
     await _syncMap();
   }
 
   Future<void> _syncMap() async {
-    final symbolManager = _symbolManager, lineManager = _lineManager, circleManager = _circleManager;
+    if (_syncing) {
+      _needsSync = true;
+      return;
+    }
+    _syncing = true;
+    try {
+      do {
+        _needsSync = false;
+        await _applyMapState();
+      } while (_needsSync && mounted);
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  Future<void> _applyMapState() async {
+    final symbolManager = _symbolManager,
+        lineManager = _lineManager,
+        circleManager = _circleManager;
     final controller = _controller;
-    if (symbolManager == null || lineManager == null || circleManager == null || controller == null) return;
+    if (symbolManager == null ||
+        lineManager == null ||
+        circleManager == null ||
+        controller == null)
+      return;
 
     // Boat marker.
     final boatOptions = SymbolOptions(
       geometry: _toMlLatLng(widget.boatPosition),
       iconImage: _boatIconName,
       iconRotate: widget.headingDeg,
-      iconSize: 1.0,
+      iconSize: 0.35,
     );
     if (_boatSymbol == null) {
       _boatSymbol = Symbol(_boatSymbolId, boatOptions);
@@ -142,7 +215,9 @@ class _Nav3DViewState extends State<Nav3DView> {
       }
     }
     // Drop circles left over from a shorter waypoint list (e.g. after Undo).
-    final stale = _waypointCircles.keys.where((i) => i >= widget.waypoints.length).toList();
+    final stale = _waypointCircles.keys
+        .where((i) => i >= widget.waypoints.length)
+        .toList();
     for (final i in stale) {
       await circleManager.remove(_waypointCircles[i]!);
       _waypointCircles.remove(i);
@@ -151,12 +226,14 @@ class _Nav3DViewState extends State<Nav3DView> {
     // Camera follow — course-up bearing (mirrors the existing flutter_map
     // _controller.rotate(-heading) behavior) with a real pitch instead of the CSS-tilt hack.
     await controller.animateCamera(
-      CameraUpdate.newCameraPosition(CameraPosition(
-        target: _toMlLatLng(widget.boatPosition),
-        zoom: 16,
-        bearing: widget.headingDeg,
-        tilt: 60,
-      )),
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: _toMlLatLng(widget.boatPosition),
+          zoom: 16,
+          bearing: widget.headingDeg,
+          tilt: 60,
+        ),
+      ),
       duration: const Duration(milliseconds: 400),
     );
   }
@@ -164,7 +241,7 @@ class _Nav3DViewState extends State<Nav3DView> {
   @override
   Widget build(BuildContext context) {
     return MapLibreMap(
-      styleString: widget.styleUrl,
+      styleString: _style,
       initialCameraPosition: CameraPosition(
         target: _toMlLatLng(widget.boatPosition),
         zoom: 16,
@@ -173,6 +250,8 @@ class _Nav3DViewState extends State<Nav3DView> {
       ),
       onMapCreated: _onMapCreated,
       onStyleLoadedCallback: _onStyleLoaded,
+      onMapClick: (_, point) =>
+          widget.onMapTap(ll.LatLng(point.latitude, point.longitude)),
     );
   }
 }

@@ -1613,7 +1613,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _handleMapTap(TapPosition _, LatLng ll) {
+  void _handleMapTap(TapPosition _, LatLng ll) => _handleMapPoint(ll);
+
+  void _handleMapPoint(LatLng ll) {
     if (!_picking) {
       // PWA: any interaction with the map area closes the expanded sheet
       // (index.html:1413 clears on picking mode, :1606 clears on route drop).
@@ -1743,7 +1745,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         child: Stack(children: [
           if (useNav3D)
             Nav3DView(
+              key: ValueKey('nav3d-${_base.name}-$_mapStyleUrl'),
               styleUrl: _mapStyleUrl,
+              basemap: _base.name,
+              onMapTap: _handleMapPoint,
               boatPosition: _me ?? _homeCenter,
               headingDeg: _heading,
               routeLine: routeLine,
