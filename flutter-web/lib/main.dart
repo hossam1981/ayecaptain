@@ -4156,14 +4156,19 @@ class _TidesSheetState extends State<TidesSheet> {
             colors: [Color(0xFF0B2740), Color(0xFF061A2D)]),
           borderRadius: BorderRadius.all(Radius.circular(20)),
           boxShadow: [BoxShadow(color: Color(0x40000000), blurRadius: 24, offset: Offset(0, 10))]),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        // This card was originally a full-screen tide modal (TODO.md) and got embedded
+        // directly into the "Set up your boat" sheet, which caps at 50% of screen height
+        // total (_BottomSheetState.sheetMaxH) — shared with the weather block, day tabs and
+        // hourly table above it. Sizing below is tightened throughout (padding, gaps, chart
+        // height, card/footer text) so this one sub-section doesn't dwarf that whole budget.
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           _legend(),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           LayoutBuilder(builder: (context, box) => SizedBox(
-            height: (box.maxWidth * 220 / 360).clamp(165.0, 280.0).toDouble(),
+            height: (box.maxWidth * 150 / 360).clamp(115.0, 190.0).toDouble(),
             child: CustomPaint(painter: _TidePainter(
               curve: windowCurve, hilo: windowHilo,
               t0: t0, t1: t1, now: now,
@@ -4173,9 +4178,9 @@ class _TidesSheetState extends State<TidesSheet> {
               unit: _unit,
             )),
           )),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           _hiLoCards(nextFour),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           _footer(),
         ]),
     );
@@ -4187,24 +4192,24 @@ class _TidesSheetState extends State<TidesSheet> {
     final dateStr = '${_dayName(today)}, ${_monthName(today.month)} ${today.day}, ${today.year}';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        const Icon(Icons.location_on_rounded, color: Color(0xFF2388FF), size: 25),
-        const SizedBox(width: 8),
-        Expanded(child: Text(s?.name ?? 'Finding tide station…', maxLines: 2,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16))),
+        const Icon(Icons.location_on_rounded, color: Color(0xFF2388FF), size: 20),
+        const SizedBox(width: 6),
+        Expanded(child: Text(s?.name ?? 'Finding tide station…', maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
         _unitToggle(),
       ]),
-      if (s != null) Padding(padding: const EdgeInsets.only(left: 33, top: 2),
+      if (s != null) Padding(padding: const EdgeInsets.only(left: 26, top: 1),
         child: Text('${s.lat.abs().toStringAsFixed(4)}° ${s.lat >= 0 ? 'N' : 'S'}, '
           '${s.lng.abs().toStringAsFixed(4)}° ${s.lng >= 0 ? 'E' : 'W'}',
-          style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 12))),
-      Padding(padding: const EdgeInsets.only(top: 8),
-        child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11))),
+      Padding(padding: const EdgeInsets.only(top: 6),
+        child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(color: const Color(0xFF0B2E4C),
-            border: Border.all(color: const Color(0xFF245372)), borderRadius: BorderRadius.circular(10)),
+            border: Border.all(color: const Color(0xFF245372)), borderRadius: BorderRadius.circular(9)),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.calendar_month_outlined, color: Color(0xFF9CC1DE), size: 17),
-            const SizedBox(width: 6),
-            Text(dateStr, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
+            const Icon(Icons.calendar_month_outlined, color: Color(0xFF9CC1DE), size: 14),
+            const SizedBox(width: 5),
+            Text(dateStr, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
           ]))),
     ]);
   }
@@ -4213,82 +4218,79 @@ class _TidesSheetState extends State<TidesSheet> {
     Widget chip(String u) {
       final on = _unit == u;
       return Material(color: on ? const Color(0xFF1466C7) : Colors.transparent,
-        borderRadius: BorderRadius.circular(9),
-        child: InkWell(borderRadius: BorderRadius.circular(9), onTap: () => _setUnit(u),
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(borderRadius: BorderRadius.circular(8), onTap: () => _setUnit(u),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Text(u, style: TextStyle(color: on ? Colors.white : const Color(0xFF9CC1DE),
-              fontWeight: FontWeight.w800, fontSize: 12)))));
+              fontWeight: FontWeight.w800, fontSize: 11)))));
     }
     return Container(padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(color: const Color(0xFF0B2E4C),
-        border: Border.all(color: const Color(0xFF2D5C7C)), borderRadius: BorderRadius.circular(12)),
+        border: Border.all(color: const Color(0xFF2D5C7C)), borderRadius: BorderRadius.circular(11)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [chip('ft'), chip('m')]));
   }
 
+  // Sub-labels ("Good conditions" etc.) dropped — same meaning already carried by color+label
+  // elsewhere (hourly table), and cutting them saves a whole extra text line here.
   Widget _legend() {
-    Widget dot(Color c, String l, String sub) => Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: c)),
-      const SizedBox(width: 6),
-      Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(l, style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 12)),
-        Text(sub, style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
-      ]),
+    Widget dot(Color c, String l) => Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: c)),
+      const SizedBox(width: 5),
+      Text(l, style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 11)),
     ]);
-    return Wrap(spacing: 22, runSpacing: 6, children: [
-      dot(const Color(0xFF22C55E), 'Calm', 'Good conditions'),
-      dot(const Color(0xFFF2A93B), 'Fair', 'Use caution'),
-      dot(const Color(0xFFD93A2B), 'Rough', 'Challenging'),
+    return Wrap(spacing: 14, runSpacing: 4, children: [
+      dot(const Color(0xFF22C55E), 'Calm'),
+      dot(const Color(0xFFF2A93B), 'Fair'),
+      dot(const Color(0xFFD93A2B), 'Rough'),
     ]);
   }
 
   Widget _hiLoCards(List<TidePoint> pts) {
-    Widget card(TidePoint p, bool compact) {
+    // This card is now always embedded in the ~350-390px-wide "Set up your boat" sheet, never
+    // a wide standalone modal, so it's always in its compact form — the old dual-size switch
+    // just doubled the maintenance surface for a "wide" case that can no longer occur.
+    Widget card(TidePoint p) {
       final isHigh = p.type == 'H';
       final color = isHigh ? const Color(0xFF35E96A) : const Color(0xFFFF5A55);
-      final iconSize = compact ? 24.0 : 34.0;
-      return Container(padding: EdgeInsets.all(compact ? 6 : 12),
+      return Container(padding: const EdgeInsets.all(5),
         decoration: BoxDecoration(color: const Color(0xFF0B2C47),
-          border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(16),
-          boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 14, offset: Offset(0, 6))]),
+          border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(13),
+          boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 10, offset: Offset(0, 4))]),
         child: Row(children: [
-          Container(width: iconSize, height: iconSize,
+          Container(width: 20, height: 20,
             decoration: BoxDecoration(shape: BoxShape.circle,
               border: Border.all(color: color, width: 2)),
-            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward,
-              color: color, size: compact ? 14 : 18)),
-          SizedBox(width: compact ? 5 : 10),
+            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 12)),
+          const SizedBox(width: 5),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(isHigh ? 'High Tide' : 'Low Tide', maxLines: 1,
-              style: TextStyle(color: const Color(0xAA9CC1DE), fontSize: compact ? 9 : 11, fontWeight: FontWeight.w600)),
+              style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 8, fontWeight: FontWeight.w600)),
             FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-              child: Text(_fmtTime(p.t), style: TextStyle(color: Colors.white,
-                fontWeight: FontWeight.w800, fontSize: compact ? 12 : 15))),
+              child: Text(_fmtTime(p.t), style: const TextStyle(color: Colors.white,
+                fontWeight: FontWeight.w800, fontSize: 12))),
             Text('${_fmtV(p.v)} $_unit', maxLines: 1,
-              style: TextStyle(color: const Color(0xEEFFFFFF), fontSize: compact ? 9 : 11)),
+              style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 8)),
           ])),
         ]));
     }
-    if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
-      child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 12)));
-    return LayoutBuilder(builder: (context, constraints) {
-      final compact = constraints.maxWidth < 310;
-      return GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+    if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 6),
+      child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)));
+    return GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
       crossAxisCount: 2,
-      crossAxisSpacing: 9, mainAxisSpacing: 9,
-      childAspectRatio: compact ? 1.3 : 1.7,
-      children: pts.map((p) => card(p, compact)).toList());
-    });
+      crossAxisSpacing: 6, mainAxisSpacing: 6,
+      childAspectRatio: 1.5,
+      children: pts.map(card).toList());
   }
 
   Widget _footer() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('⚓  Plan Better. Boat Safer.',
-        style: TextStyle(color: Color(0xFF9CC1DE), fontSize: 12, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 4),
+        style: TextStyle(color: Color(0xFF9CC1DE), fontSize: 11, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 3),
       Text('≈ Tide Data · ${widget.station?.name ?? "—"}',
-        style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)),
+        style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
       const Text('NOAA CO-OPS astronomical predictions · updates every 20 min',
-        style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
+        style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 9)),
     ]);
   }
 
