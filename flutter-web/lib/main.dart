@@ -4167,8 +4167,14 @@ class _TidesSheetState extends State<TidesSheet> {
           const SizedBox(height: 8),
           _legend(),
           const SizedBox(height: 8),
+          // PWA's chart is a fixed viewBox="0 0 360 220" (index.html:886), scaled via
+          // width:100%/height:auto — i.e. a FIXED 360:220 aspect ratio. The painter's margins
+          // (mL/mR/mT/mB below) are pixel constants tuned to that exact ratio; an earlier pass
+          // changed this to 150/360 to save vertical space, which distorted the ratio and cut
+          // the chart off. Restored to the real ratio — this section's own height stays this
+          // real size; the space savings live in the padding/gaps/fonts around it instead.
           LayoutBuilder(builder: (context, box) => SizedBox(
-            height: (box.maxWidth * 150 / 360).clamp(115.0, 190.0).toDouble(),
+            height: (box.maxWidth * 220 / 360).clamp(165.0, 280.0).toDouble(),
             child: CustomPaint(painter: _TidePainter(
               curve: windowCurve, hilo: windowHilo,
               t0: t0, t1: t1, now: now,
@@ -4245,41 +4251,48 @@ class _TidesSheetState extends State<TidesSheet> {
     ]);
   }
 
+  // PWA's #tideCards (index.html:145-153): a plain 2-col CSS grid, gap 9px, each .tcard sized
+  // by its own content (flex row, padding 11px, icon-text gap 10px) — NOT a fixed aspect ratio.
+  // GridView.count(childAspectRatio:...) forced every card to a taller box than its content
+  // needed, leaving dead space that read as "a lot of padding". Rebuilt as natural-height rows
+  // (IntrinsicHeight keeps the two cards in each row equal-height without forcing either
+  // taller than needed) to match the PWA's actual sizing exactly.
   Widget _hiLoCards(List<TidePoint> pts) {
-    // This card is now always embedded in the ~350-390px-wide "Set up your boat" sheet, never
-    // a wide standalone modal, so it's always in its compact form — the old dual-size switch
-    // just doubled the maintenance surface for a "wide" case that can no longer occur.
     Widget card(TidePoint p) {
       final isHigh = p.type == 'H';
       final color = isHigh ? const Color(0xFF35E96A) : const Color(0xFFFF5A55);
-      return Container(padding: const EdgeInsets.all(5),
+      return Container(padding: const EdgeInsets.all(11),
         decoration: BoxDecoration(color: const Color(0xFF0B2C47),
-          border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(13),
-          boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 10, offset: Offset(0, 4))]),
-        child: Row(children: [
-          Container(width: 20, height: 20,
-            decoration: BoxDecoration(shape: BoxShape.circle,
-              border: Border.all(color: color, width: 2)),
-            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 12)),
-          const SizedBox(width: 5),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(16),
+          boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 14, offset: Offset(0, 6))]),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(width: 30, height: 30,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF17313D),
+              border: Border.all(color: color, width: 3)),
+            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 15)),
+          const SizedBox(width: 10),
+          Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(isHigh ? 'High Tide' : 'Low Tide', maxLines: 1,
-              style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 8, fontWeight: FontWeight.w600)),
-            FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-              child: Text(_fmtTime(p.t), style: const TextStyle(color: Colors.white,
-                fontWeight: FontWeight.w800, fontSize: 12))),
+              style: const TextStyle(color: Color(0xFFD7ECFF), fontSize: 11)),
+            Text(_fmtTime(p.t), maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17, height: 1.15)),
             Text('${_fmtV(p.v)} $_unit', maxLines: 1,
-              style: const TextStyle(color: Color(0xEEFFFFFF), fontSize: 8)),
+              style: const TextStyle(color: Color(0xFF8FB5D6), fontSize: 12)),
           ])),
         ]));
     }
     if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 6),
       child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)));
-    return GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      crossAxisSpacing: 6, mainAxisSpacing: 6,
-      childAspectRatio: 1.5,
-      children: pts.map(card).toList());
+    final rows = <Widget>[];
+    for (var i = 0; i < pts.length; i += 2) {
+      if (i > 0) rows.add(const SizedBox(height: 9));
+      rows.add(IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Expanded(child: card(pts[i])),
+        if (i + 1 < pts.length) ...[const SizedBox(width: 9), Expanded(child: card(pts[i + 1]))]
+        else const Spacer(),
+      ])));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows);
   }
 
   Widget _footer() {
