@@ -3423,8 +3423,9 @@ class GlassWarningCard extends StatelessWidget {
   final Widget content;
   final VoidCallback? onDismiss;
   final VoidCallback? onIconTap;
+  final bool expanded;
   const GlassWarningCard({super.key, required this.severity, required this.icon,
-    required this.content, this.onDismiss, this.onIconTap});
+    required this.content, this.onDismiss, this.onIconTap, required this.expanded});
 
   @override
   Widget build(BuildContext context) {
@@ -3432,19 +3433,7 @@ class GlassWarningCard extends StatelessWidget {
     final glow = isAmber ? const Color(0xFFFFAA24) : const Color(0xFFFF304B);
     final core = isAmber ? const Color(0xFFFFF3B0) : const Color(0xFFFFE9E9);
 
-    return CustomPaint(
-      // Paint after the clipped glass: its tint must not dim the neon or hotspots.
-      foregroundPainter: _WarningEdgeGlow(isAmber: isAmber),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: CustomPaint(
-            painter: _WarningGlassSurface(isAmber: isAmber),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                GestureDetector(
+    final iconButton = GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: onIconTap,
                   child: Semantics(
@@ -3497,7 +3486,25 @@ class GlassWarningCard extends StatelessWidget {
                   ]),
                     ),
                   ),
-                ),
+    );
+
+    if (!expanded) {
+      return Align(alignment: Alignment.centerLeft, child: iconButton);
+    }
+
+    return CustomPaint(
+      // Paint after the clipped glass: its tint must not dim the neon or hotspots.
+      foregroundPainter: _WarningEdgeGlow(isAmber: isAmber),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+          child: CustomPaint(
+            painter: _WarningGlassSurface(isAmber: isAmber),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                iconButton,
                 const SizedBox(width: 12),
                 Expanded(child: content),
                 if (onDismiss != null) ...[
@@ -3668,14 +3675,20 @@ class _AlertBanner extends StatefulWidget {
 class _AlertBannerState extends State<_AlertBanner> {
   bool _open = false;
   @override
+  void didUpdateWidget(covariant _AlertBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.alert.event != widget.alert.event ||
+        oldWidget.alert.headline != widget.alert.headline) _open = false;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => setState(() => _open = !_open),
-      child: GlassWarningCard(
+    return GlassWarningCard(
         // NWS alerts are always amber; the boat-conditions warning below is red.
         severity: GlassSeverity.amber,
         icon: Icons.warning_amber_rounded,
         onIconTap: () => setState(() => _open = !_open),
+        expanded: _open,
         onDismiss: widget.onDismiss,
         content: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text(widget.alert.event, style: const TextStyle(color: Color(0xFFFFC846), fontWeight: FontWeight.w700, fontSize: 15)),
@@ -3683,8 +3696,6 @@ class _AlertBannerState extends State<_AlertBanner> {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(widget.alert.headline,
-                maxLines: _open ? null : 2,
-                overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis,
                 style: TextStyle(color: Colors.white.withOpacity(.93), fontSize: 12, height: 1.3)),
             ),
           if (_open && widget.alert.description.isNotEmpty) Padding(
@@ -3693,7 +3704,6 @@ class _AlertBannerState extends State<_AlertBanner> {
               style: TextStyle(color: Colors.white.withOpacity(.85), fontSize: 12, height: 1.35)),
           ),
         ]),
-      ),
     );
   }
 }
@@ -3707,8 +3717,13 @@ class _BoatWarningBanner extends StatefulWidget {
 }
 
 class _BoatWarningBannerState extends State<_BoatWarningBanner> {
-  // Start open so the original warning and its measured values remain visible.
-  bool _open = true;
+  bool _open = false;
+
+  @override
+  void didUpdateWidget(covariant _BoatWarningBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.severity != widget.severity) _open = false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3717,9 +3732,8 @@ class _BoatWarningBannerState extends State<_BoatWarningBanner> {
       severity: GlassSeverity.red,
       icon: Icons.error_outline_rounded,
       onIconTap: () => setState(() => _open = !_open),
+      expanded: _open,
       content: Text(widget.text,
-        maxLines: _open ? null : 1,
-        overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis,
         style: TextStyle(
         color: isNear ? const Color(0xFFFFC846) : Colors.white,
         fontWeight: FontWeight.w700, fontSize: 13, height: 1.3)),
