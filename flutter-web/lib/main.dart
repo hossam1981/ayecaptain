@@ -3428,10 +3428,10 @@ class GlassWarningCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAmber = severity == GlassSeverity.amber;
-    // Keep the map recognizable through the glass. A strong backdrop blur turns the map
-    // into a flat olive/gray fill, even when the foreground color is quite transparent.
-    final Color darkBase = isAmber ? const Color(0xFF141412) : const Color(0xFF07131F);
-    final double baseOpacity = isAmber ? .14 : .16;
+    // A smoky tint keeps white text legible over bright map tiles while leaving the
+    // geography visible. The glow is painted as an outline, never a filled shadow.
+    final Color darkBase = isAmber ? const Color(0xFF142330) : const Color(0xFF2B1426);
+    final double baseOpacity = isAmber ? .52 : .58;
     final Color edgeColor = isAmber ? const Color(0xFFFFC44D) : const Color(0xFFFF6070);
     final Color glowWide = isAmber ? const Color(0xFFFFB52E) : const Color(0xFFFF4055);
     final Color glowTight = isAmber ? const Color(0xFFFFD36A) : const Color(0xFFFF6375);
@@ -3447,26 +3447,26 @@ class GlassWarningCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+          filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
           child: Container(
             decoration: BoxDecoration(
               color: darkBase.withOpacity(baseOpacity),
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: edgeColor.withOpacity(.90), width: 1.2),
+              border: Border.all(color: edgeColor.withOpacity(.98), width: 1.4),
             ),
             child: Stack(children: [
-            // Very subtle internal accent tint — light inside the glass, not paint.
+            // Warm amber / burgundy light inside the glass, strongest near the edge.
             Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [
-                glowWide.withOpacity(.08),
+                glowWide.withOpacity(isAmber ? .14 : .19),
                 Colors.transparent,
-                glowWide.withOpacity(.03),
+                glowWide.withOpacity(isAmber ? .06 : .09),
               ]),
             ))),
             // Faint top glass reflection — not a neon rim, just enough to read as glass.
             Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(.15), Colors.white.withOpacity(.02), Colors.white.withOpacity(0)],
+                colors: [Colors.white.withOpacity(.10), Colors.white.withOpacity(.015), Colors.white.withOpacity(0)],
                 stops: const [0, .12, .40]),
             )))),
             Padding(
@@ -3506,15 +3506,15 @@ class _WarningEdgeGlow extends CustomPainter {
     final edge = RRect.fromRectAndRadius(
       (Offset.zero & size).deflate(1.5), const Radius.circular(16.5));
     canvas.drawRRect(edge, Paint()
-      ..color = wide.withOpacity(.78)
+      ..color = wide.withOpacity(.9)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 11));
+      ..strokeWidth = 4
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
     canvas.drawRRect(edge, Paint()
-      ..color = tight.withOpacity(.85)
+      ..color = tight.withOpacity(.95)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 3));
+      ..strokeWidth = 2.5
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
   }
 
   @override
