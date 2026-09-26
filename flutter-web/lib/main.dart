@@ -2615,22 +2615,45 @@ class _TopHud extends StatelessWidget {
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
-                Text(speedKt.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w700, height: 1)),
-                const SizedBox(width: 4),
-                const Text('kn', style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
-              ]),
-              const SizedBox(height: 2),
-              Text(status, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), boxShadow: [
+              BoxShadow(color: const Color(0xFF28AFFF).withOpacity(.38), blurRadius: 18, spreadRadius: 1),
+              BoxShadow(color: Colors.black.withOpacity(.24), blurRadius: 12, offset: const Offset(0, 5)),
             ]),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFB7EBFF).withOpacity(.82), width: 1.2),
+                    gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+                      colors: [Color(0xB31C507D), Color(0xB309213A)]),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+                      Text(speedKt.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w700, height: 1)),
+                      const SizedBox(width: 4),
+                      const Text('kn', style: TextStyle(color: Color(0xFFB7E7FF), fontSize: 12)),
+                    ]),
+                    const SizedBox(height: 2),
+                    Tooltip(message: status, child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 120),
+                      child: Text(status, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 12)),
+                    )),
+                  ]),
+                ),
+              ),
+            ),
           ),
           // PWA has no separate boat chip in the top HUD — boat identity lives in the sheet
           // header only (index.html speed HUD has just kn + status line).
-          const Spacer(),
-          _BaseSwitcher(base: base, onChange: onBaseChange),
+          const SizedBox(width: 8),
+          Expanded(child: Align(alignment: Alignment.centerRight,
+            child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerRight,
+              child: _BaseSwitcher(base: base, onChange: onBaseChange)))),
         ]),
       ]);
 }
@@ -2641,11 +2664,28 @@ class _BaseSwitcher extends StatelessWidget {
   const _BaseSwitcher({required this.base, required this.onChange});
   @override
   Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(color: const Color(0xE6F4F8FA), borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.all(3),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          for (final b in Basemap.values) _basemapButton(b),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(15), boxShadow: [
+          BoxShadow(color: const Color(0xFF36B9FF).withOpacity(.32), blurRadius: 16),
+          BoxShadow(color: Colors.black.withOpacity(.18), blurRadius: 12, offset: const Offset(0, 4)),
         ]),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(15),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white.withOpacity(.78), width: 1.1),
+                gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+                  colors: [Color(0x995BA7CF), Color(0x6643637C)]),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                for (final b in Basemap.values) _basemapButton(b),
+              ]),
+            ),
+          ),
+        ),
       );
   Widget _basemapButton(Basemap b) {
     final selected = b == base;
@@ -2653,9 +2693,15 @@ class _BaseSwitcher extends StatelessWidget {
       onTap: () => onChange(b),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 1),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(color: selected ? const Color(0xFF0F2A44) : Colors.transparent, borderRadius: BorderRadius.circular(9)),
-        child: Text(_basemapNames[b]!, style: TextStyle(color: selected ? Colors.white : const Color(0xFF2E6F9E), fontWeight: FontWeight.w700, fontSize: 13)),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xBF082C4D) : Colors.transparent,
+          borderRadius: BorderRadius.circular(11),
+          border: selected ? Border.all(color: const Color(0xFF48D8FF), width: 1.5) : null,
+          boxShadow: selected ? [BoxShadow(color: const Color(0xFF21C5FF).withOpacity(.75), blurRadius: 12, spreadRadius: 1)] : null,
+        ),
+        child: Text(_basemapNames[b]!, style: TextStyle(
+          color: selected ? Colors.white : const Color(0xFFE3F5FF), fontWeight: FontWeight.w700, fontSize: 13)),
       ),
     );
   }
@@ -3382,14 +3428,10 @@ class GlassWarningCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAmber = severity == GlassSeverity.amber;
-    // Second correction pass: first version's dark base (~48% alpha) and single weak glow
-    // (18% alpha) read as "dark card + colored border" with the map barely visible and no
-    // real bloom. Values below are the user's explicit re-spec: much lower base alpha (map
-    // stays clearly visible), lower blur sigma, and a two-tier glow (wide+soft, tight+bright)
-    // plus a separate depth shadow, all living on the OUTER (unblurred) Container so the glow
-    // itself doesn't get blurred away — only the glass content inside ClipRRect does.
+    // Keep the map recognizable through the glass. A strong backdrop blur turns the map
+    // into a flat olive/gray fill, even when the foreground color is quite transparent.
     final Color darkBase = isAmber ? const Color(0xFF141412) : const Color(0xFF07131F);
-    final double baseOpacity = isAmber ? .26 : .28;
+    final double baseOpacity = isAmber ? .14 : .16;
     final Color edgeColor = isAmber ? const Color(0xFFFFC44D) : const Color(0xFFFF6070);
     final Color glowWide = isAmber ? const Color(0xFFFFB52E) : const Color(0xFFFF4055);
     final Color glowTight = isAmber ? const Color(0xFFFFD36A) : const Color(0xFFFF6375);
@@ -3398,14 +3440,14 @@ class GlassWarningCard extends StatelessWidget {
     return Container(
       // Border + drop shadow + accent bloom live on this OUTER box, separate from the
       // blurred glass content below — keeps the glow crisp instead of getting blurred too,
-      // and unclipped so the 10-18px bloom outside the edge can actually render (checked: no
+      // and unclipped so the bloom outside the edge can actually render (checked: no
       // ancestor Positioned/Column between here and the HUD root sets a clipBehavior).
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
-          BoxShadow(color: glowWide.withOpacity(.40), blurRadius: 18, spreadRadius: 1),
-          BoxShadow(color: glowTight.withOpacity(.24), blurRadius: 6),
-          BoxShadow(color: Colors.black.withOpacity(.30), blurRadius: 18, offset: const Offset(0, 8)),
+          BoxShadow(color: glowWide.withOpacity(.52), blurRadius: 26, spreadRadius: 2),
+          BoxShadow(color: glowTight.withOpacity(.46), blurRadius: 9, spreadRadius: 1),
+          BoxShadow(color: Colors.black.withOpacity(.22), blurRadius: 16, offset: const Offset(0, 7)),
         ],
       ),
       // Blur only this card's own rect (ClipRRect+BackdropFilter scoped per-card), not the
@@ -3413,7 +3455,7 @@ class GlassWarningCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          filter: ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3),
           child: Container(
             decoration: BoxDecoration(
               color: darkBase.withOpacity(baseOpacity),
@@ -3424,15 +3466,15 @@ class GlassWarningCard extends StatelessWidget {
             // Very subtle internal accent tint — light inside the glass, not paint.
             Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [
-                glowWide.withOpacity(.10),
+                glowWide.withOpacity(.08),
                 Colors.transparent,
-                glowWide.withOpacity(.05),
+                glowWide.withOpacity(.03),
               ]),
             ))),
             // Faint top glass reflection — not a neon rim, just enough to read as glass.
             Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(.12), Colors.white.withOpacity(.025), Colors.white.withOpacity(0)],
+                colors: [Colors.white.withOpacity(.15), Colors.white.withOpacity(.02), Colors.white.withOpacity(0)],
                 stops: const [0, .12, .40]),
             )))),
             Padding(
