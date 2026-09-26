@@ -55,12 +55,39 @@ class BaysideApp extends StatelessWidget {
 
 enum Basemap { map, chart, sat, dark }
 const _basemapNames = {Basemap.map:'Map', Basemap.chart:'Chart', Basemap.sat:'Sat', Basemap.dark:'Dark'};
-String _tileUrl(Basemap b) {
+const _esriStreetUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+const _esriImageryUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const _esriDarkBaseUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+const _esriDarkRefUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
+String _cartoUrl(String style, String key) =>
+  'https://{s}.basemaps.cartocdn.com/rastertiles/$style/{z}/{x}/{y}.png?key=$key';
+const _cartoSubdomains = ['a', 'b', 'c', 'd'];
+
+// PWA index.html:507-533 — an optional CARTO key gives the cleanest street/place labels on
+// Map and Dark; without one it falls back to key-free Esri tiles (World_Street_Map for Map,
+// a layered Dark_Gray_Base+Reference pair for Dark — never a broken/watermarked Carto tile).
+// Chart reuses the same base as Map (the NOAA ENC overlay is what makes it "Chart", added by
+// the caller) — it was wrongly pointed at a different OSM tile entirely.
+List<TileLayer> _baseLayers(Basemap b, String cartoKey) {
+  final hasKey = cartoKey.trim().isNotEmpty;
   switch (b) {
-    case Basemap.map:   return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
-    case Basemap.chart: return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-    case Basemap.sat:   return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-    case Basemap.dark:  return 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png';
+    case Basemap.map:
+    case Basemap.chart:
+      return [TileLayer(
+        urlTemplate: hasKey ? _cartoUrl('voyager', cartoKey) : _esriStreetUrl,
+        subdomains: hasKey ? _cartoSubdomains : const [],
+        userAgentPackageName: 'net.bayside.flutter')];
+    case Basemap.sat:
+      return [TileLayer(urlTemplate: _esriImageryUrl, userAgentPackageName: 'net.bayside.flutter')];
+    case Basemap.dark:
+      if (hasKey) {
+        return [TileLayer(urlTemplate: _cartoUrl('dark_all', cartoKey),
+          subdomains: _cartoSubdomains, userAgentPackageName: 'net.bayside.flutter')];
+      }
+      return [
+        TileLayer(urlTemplate: _esriDarkBaseUrl, userAgentPackageName: 'net.bayside.flutter'),
+        TileLayer(urlTemplate: _esriDarkRefUrl, userAgentPackageName: 'net.bayside.flutter'),
+      ];
   }
 }
 const _noaaChartUrl = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}';
@@ -268,6 +295,19 @@ class BoatProfile {
       if (s == null) return BoatProfile();
       return fromJson(jsonDecode(s) as Map<String, dynamic>);
     } catch (_) { return BoatProfile(); }
+  }
+  // PWA index.html:500 — `if (!store.get('boat')) setTimeout(openProfile, 1500)` checks
+  // whether the localStorage key exists at all, not whether any particular field is filled
+  // in. The auto-open check here used to test `name.isEmpty && lengthFt == null`, which
+  // wrongly re-opened the modal on every load for anyone who saved a profile without typing
+  // a boat name or length (e.g. only adjusted comfort limits/cruise speed) — the save itself
+  // worked, the app just didn't recognize it as saved. This checks key existence instead,
+  // matching the PWA exactly.
+  static Future<bool> hasSaved() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      return sp.containsKey('boatProfile');
+    } catch (_) { return false; }
   }
   Future<void> save() async {
     try {
@@ -1058,6 +1098,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   StreamSubscription<Position>? _gpsSub;
 
   Basemap _base = Basemap.map;
+  String _cartoKey = '';   // PWA index.html:507-512 — optional, saved alongside the boat profile
   LatLng? _me;
   double _heading = 0;
   double _speedKt = 0;
@@ -1148,17 +1189,23 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     BoatProfile.load().then((p) {
       if (!mounted) return;
       setState(() => _profile = p);
-      // PWA index.html:500 — after 1.5 s on first launch (no saved profile), open the modal.
-      if (p.name.isEmpty && p.lengthFt == null) {
-        Future.delayed(const Duration(milliseconds: 1500), () {
-          if (mounted && _profile.name.isEmpty && _profile.lengthFt == null) _openBoatProfile();
+      // PWA index.html:500 — after 1.5 s on first launch (no saved profile at all), open the
+      // modal. Checks whether a profile was ever saved, not whether specific fields are
+      // filled in — see BoatProfile.hasSaved().
+      BoatProfile.hasSaved().then((saved) {
+        if (saved || !mounted) return;
+        Future.delayed(const Duration(milliseconds: 1500), () async {
+          if (!mounted) return;
+          if (!(await BoatProfile.hasSaved()) && mounted) _openBoatProfile();
         });
-      }
+      });
     });
     // Restore last-chosen tide unit (ft/m).
     SharedPreferences.getInstance().then((sp) {
       final u = sp.getString('tideUnit');
       if (u != null && (u == 'ft' || u == 'm') && mounted) setState(() => _tideUnit = u);
+      final k = sp.getString('cartoKey');
+      if (k != null && k.isNotEmpty && mounted) setState(() => _cartoKey = k);
     });
     _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) {
       final at = _me ?? _homeCenter;
@@ -1637,9 +1684,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       backgroundColor: Colors.transparent,
       builder: (ctx) => BoatProfileSheet(
         initial: _profile,
-        onSave: (p) async {
+        initialCartoKey: _cartoKey,
+        onSave: (p, cartoKey) async {
           await p.save();
-          if (mounted) setState(() { _profile = p; _wxAt.clear(); });
+          final sp = await SharedPreferences.getInstance();
+          await sp.setString('cartoKey', cartoKey);
+          if (mounted) setState(() { _profile = p; _cartoKey = cartoKey; _wxAt.clear(); });
           _gradeRouteWaypoints();   // re-grade against the new limits
         },
       ),
@@ -1692,7 +1742,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
               ),
               children: [
-                TileLayer(urlTemplate: _tileUrl(_base), userAgentPackageName: 'net.bayside.flutter'),
+                ..._baseLayers(_base, _cartoKey),
                 // NOAA ENC MarineChart on every non-plain-Map basemap — matches the PWA
                 // which overlays it on Chart, Sat and Dark alike (index.html:535, 543-545).
                 if (_base != Basemap.map)
@@ -2833,15 +2883,23 @@ class MoreToolsSheet extends StatelessWidget {
 // Type dropdown offers "Use defaults" that snap limits/cruise to the type presets.
 class BoatProfileSheet extends StatefulWidget {
   final BoatProfile initial;
-  final Future<void> Function(BoatProfile) onSave;
-  const BoatProfileSheet({super.key, required this.initial, required this.onSave});
+  final String initialCartoKey;
+  final Future<void> Function(BoatProfile, String cartoKey) onSave;
+  const BoatProfileSheet({super.key, required this.initial, required this.initialCartoKey, required this.onSave});
   @override
   State<BoatProfileSheet> createState() => _BoatProfileSheetState();
 }
 class _BoatProfileSheetState extends State<BoatProfileSheet> {
   late BoatProfile p;
+  late final TextEditingController _cartoKeyCtrl;
   @override
-  void initState() { super.initState(); p = BoatProfile.fromJson(widget.initial.toJson()); }
+  void initState() {
+    super.initState();
+    p = BoatProfile.fromJson(widget.initial.toJson());
+    _cartoKeyCtrl = TextEditingController(text: widget.initialCartoKey);
+  }
+  @override
+  void dispose() { _cartoKeyCtrl.dispose(); super.dispose(); }
   TextEditingController _num(double v) => TextEditingController(text: v == 0 ? '' : v.toString());
   // PWA #pform input (index.html:182): white bg, ink text, light navy border; labels are
   // var(--sea) (index.html:181). Was wrongly white-on-dark.
@@ -2943,12 +3001,33 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           const SizedBox(width: 12),
           Expanded(child: _field('Tank size', p.tank, (v) => setState(() => p.tank = v), suffix: 'gal')),
         ]),
+        const SizedBox(height: 20),
+        // PWA #pKey (index.html:507-511): optional CARTO key, saved on this device, used for
+        // the cleanest street/place labels on Map + Dark; falls back to Esri tiles without one.
+        Text('Map', style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        Text('CARTO map key — optional, gives the cleanest labels (free at carto.com/basemaps/apikey). '
+            'Saved on this device; leave blank to use the Esri street map.',
+            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.6), fontSize: 11)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _cartoKeyCtrl,
+          style: const TextStyle(color: Color(0xFF0F2A44)),
+          decoration: InputDecoration(
+            filled: true, fillColor: Colors.white,
+            labelText: 'CARTO map key', labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
+            isDense: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
+          ),
+        ),
         const SizedBox(height: 24),
         // PWA #pform .save (index.html:184): background:var(--ink), colour:var(--paper) —
         // dark navy, not green.
         Material(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(10),
           child: InkWell(borderRadius: BorderRadius.circular(10),
-            onTap: () async { await widget.onSave(p); if (context.mounted) Navigator.of(context).pop(); },
+            onTap: () async { await widget.onSave(p, _cartoKeyCtrl.text.trim()); if (context.mounted) Navigator.of(context).pop(); },
             child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),
               child: Center(child: Text('Save', style: TextStyle(color: Color(0xFFF4F8FA), fontWeight: FontWeight.w800, fontSize: 15)))),
           ),
