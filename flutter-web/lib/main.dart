@@ -1425,6 +1425,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   void _onFix(Position p) {
+    final wasNav3D = _navigating && _mapStyleUrl.isNotEmpty && _mobPoint == null && _anchorPoint == null;
     final here = LatLng(p.latitude, p.longitude);
     double h = _heading;
     if (p.heading > 0) {
@@ -1476,7 +1477,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       if (breached != _anchorBreached) setState(() => _anchorBreached = breached);
     }
     // follow the boat (and course-up rotate in nav mode)
-    if (_follow) {
+    // FlutterMap is removed from the tree while the MapLibre nav view is shown.
+    // Its controller must only be used when its map is attached.
+    if (_follow && !wasNav3D && !(_navigating && _mapStyleUrl.isNotEmpty && _mobPoint == null && _anchorPoint == null)) {
       _controller.move(here, math.max(_controller.camera.zoom, _navigating ? 16 : 14));
       if (_navigating) _controller.rotate(-h);   // rotate so heading is up
     }
@@ -1689,7 +1692,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (_waypoints.isEmpty) return;
     setState(() { _navigating = true; _follow = true; _picking = false; _legIdx = 0; });
     try { await WakelockPlus.enable(); } catch (_) {}
-    if (_me != null) _controller.move(_me!, math.max(_controller.camera.zoom, 16));
+    if (_me != null && (_mapStyleUrl.isEmpty || _mobPoint != null || _anchorPoint != null)) {
+      _controller.move(_me!, math.max(_controller.camera.zoom, 16));
+    }
   }
 
   Future<void> _openBoatProfile() async {
@@ -1713,9 +1718,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
   Future<void> _stopRide() async {
+    final wasNav3D = _navigating && _mapStyleUrl.isNotEmpty && _mobPoint == null && _anchorPoint == null;
     setState(() => _navigating = false);
+    if (wasNav3D) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _navigating) return;
+        _controller.move(_me ?? _homeCenter, 16);
+        _controller.rotate(0);
+      });
+    } else {
+      _controller.rotate(0);   // back to north-up
+    }
     try { await WakelockPlus.disable(); } catch (_) {}
-    _controller.rotate(0);   // back to north-up
   }
 
   @override
@@ -1740,6 +1754,20 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     // and never while MOB/anchor-watch is active — those safety overlays aren't ported to
     // Nav3DView in this pass, so stay on the regular (working) view rather than hide them.
     final useNav3D = _navigating && _mapStyleUrl.isNotEmpty && _mobPoint == null && _anchorPoint == null;
+    final route3DSegments = <Nav3DRouteSegment>[];
+    if (useNav3D && routeLine.length >= 2) {
+      final graded = _gradedRouteSegments(routeLine);
+      // The first polyline of each pair is a halo; the second carries the
+      // warning grade. Preserve the existing grade calculation in 3D.
+      for (var i = 1; i < graded.length; i += 2) {
+        final p = graded[i];
+        route3DSegments.add(Nav3DRouteSegment(
+          p.points.first, p.points.last,
+          _routeUnverified ? const Color(0xAA8A94A3) : p.color,
+          p.strokeWidth,
+        ));
+      }
+    }
     return Scaffold(
       body: SafeArea(
         child: Stack(children: [
@@ -1751,7 +1779,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               onMapTap: _handleMapPoint,
               boatPosition: _me ?? _homeCenter,
               headingDeg: _heading,
-              routeLine: routeLine,
+              follow: _follow,
+              routeSegments: route3DSegments,
               waypoints: _waypoints,
             )
           else
@@ -2021,7 +2050,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             mobOn: _mobPoint != null,
             onFollow: () => setState(() {
               _follow = !_follow;
-              if (_follow && _me != null) _controller.move(_me!, math.max(_controller.camera.zoom, 14));
+              if (_follow && _me != null && !useNav3D) _controller.move(_me!, math.max(_controller.camera.zoom, 14));
             }),
             // PWA index.html:1413 — turning picking on closes the sheet so the map is unobstructed.
             onGoto: () => setState(() { _picking = !_picking; if (_picking) _sheetExpanded = false; }),

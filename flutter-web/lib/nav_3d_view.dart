@@ -21,13 +21,21 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 LatLng _toMlLatLng(ll.LatLng p) => LatLng(p.latitude, p.longitude);
 
+class Nav3DRouteSegment {
+  final ll.LatLng from, to;
+  final Color color;
+  final double width;
+  const Nav3DRouteSegment(this.from, this.to, this.color, this.width);
+}
+
 class Nav3DView extends StatefulWidget {
   final String styleUrl;
   final String basemap;
   final ValueChanged<ll.LatLng> onMapTap;
   final ll.LatLng boatPosition;
   final double headingDeg;
-  final List<ll.LatLng> routeLine;
+  final bool follow;
+  final List<Nav3DRouteSegment> routeSegments;
   final List<ll.LatLng> waypoints;
   const Nav3DView({
     super.key,
@@ -36,7 +44,8 @@ class Nav3DView extends StatefulWidget {
     required this.onMapTap,
     required this.boatPosition,
     required this.headingDeg,
-    required this.routeLine,
+    required this.follow,
+    required this.routeSegments,
     required this.waypoints,
   });
 
@@ -49,7 +58,7 @@ class _Nav3DViewState extends State<Nav3DView> {
 
   MapLibreMapController? _controller;
   Symbol? _boatSymbol;
-  Line? _routeLineAnnotation;
+  final List<Line> _routeAnnotations = [];
   final Map<int, Circle> _waypointCircles = {};
   bool _ready = false;
   bool _syncing = false;
@@ -115,7 +124,7 @@ class _Nav3DViewState extends State<Nav3DView> {
     // The controller's annotation managers are ready at this callback and
     // belong to the current style. A new map/style gets fresh managers.
     _boatSymbol = null;
-    _routeLineAnnotation = null;
+    _routeAnnotations.clear();
     _waypointCircles.clear();
     _ready = true;
     await _syncMap();
@@ -154,22 +163,40 @@ class _Nav3DViewState extends State<Nav3DView> {
       await controller.updateSymbol(_boatSymbol!, boatOptions);
     }
 
-    // Active route line.
-    if (widget.routeLine.length >= 2) {
-      final lineOptions = LineOptions(
-        geometry: widget.routeLine.map(_toMlLatLng).toList(),
-        lineColor: '#2E6F9E',
-        lineWidth: 4.0,
-        lineOpacity: 0.85,
-      );
-      if (_routeLineAnnotation == null) {
-        _routeLineAnnotation = await controller.addLine(lineOptions);
-      } else {
-        await controller.updateLine(_routeLineAnnotation!, lineOptions);
+    // Use the existing route grading from main.dart. Each segment draws 3/13
+    // of its length so both verified and unverified paths keep their dashes.
+    final options = <LineOptions>[
+      for (final segment in widget.routeSegments)
+        LineOptions(
+          geometry: [
+            _toMlLatLng(segment.from),
+            _toMlLatLng(
+              ll.LatLng(
+                segment.from.latitude +
+                    (segment.to.latitude - segment.from.latitude) * 3 / 13,
+                segment.from.longitude +
+                    (segment.to.longitude - segment.from.longitude) * 3 / 13,
+              ),
+            ),
+          ],
+          lineColor:
+              '#${segment.color.value.toRadixString(16).padLeft(8, '0').substring(2)}',
+          lineOpacity: segment.color.alpha / 255,
+          lineWidth: segment.width,
+        ),
+    ];
+    if (_routeAnnotations.length != options.length) {
+      if (_routeAnnotations.isNotEmpty)
+        await controller.removeLines(_routeAnnotations);
+      _routeAnnotations
+        ..clear()
+        ..addAll(
+          options.isEmpty ? <Line>[] : await controller.addLines(options),
+        );
+    } else {
+      for (var i = 0; i < options.length; i++) {
+        await controller.updateLine(_routeAnnotations[i], options[i]);
       }
-    } else if (_routeLineAnnotation != null) {
-      await controller.removeLine(_routeLineAnnotation!);
-      _routeLineAnnotation = null;
     }
 
     // Remaining waypoints — plain colored dots for this MVP pass (no teardrop-pin asset
@@ -201,6 +228,7 @@ class _Nav3DViewState extends State<Nav3DView> {
 
     // Camera follow — course-up bearing (mirrors the existing flutter_map
     // _controller.rotate(-heading) behavior) with a real pitch instead of the CSS-tilt hack.
+    if (!widget.follow) return;
     await controller.animateCamera(
       CameraUpdate.newCameraPosition(
         CameraPosition(
