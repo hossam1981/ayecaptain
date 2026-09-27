@@ -46,13 +46,8 @@ class Nav3DView extends StatefulWidget {
 
 class _Nav3DViewState extends State<Nav3DView> {
   static const _boatIconName = 'nav3d-boat-icon';
-  static const _boatSymbolId = 'nav3d-boat';
-  static const _routeLineId = 'nav3d-route';
 
   MapLibreMapController? _controller;
-  SymbolManager? _symbolManager;
-  LineManager? _lineManager;
-  CircleManager? _circleManager;
   Symbol? _boatSymbol;
   Line? _routeLineAnnotation;
   final Map<int, Circle> _waypointCircles = {};
@@ -76,7 +71,9 @@ class _Nav3DViewState extends State<Nav3DView> {
       ],
       _ => <String>[
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-        'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}',
+        // NOAA's cached tile grid starts at a different zoom/origin from XYZ.
+        // Export by Web Mercator bounds so the chart aligns with this map.
+        'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image',
       ],
     };
     return jsonEncode({
@@ -86,7 +83,7 @@ class _Nav3DViewState extends State<Nav3DView> {
           'base-$i': {
             'type': 'raster',
             'tiles': [urls[i]],
-            'tileSize': i == 1 && widget.basemap == 'chart' ? 1024 : 256,
+            'tileSize': 256,
           },
       },
       'layers': [
@@ -114,18 +111,12 @@ class _Nav3DViewState extends State<Nav3DView> {
     if (controller == null) return;
     final bd = await rootBundle.load('assets/icons/boat-3d_small.png');
     await controller.addImage(_boatIconName, bd.buffer.asUint8List());
-    final symbols = SymbolManager(controller, iconAllowOverlap: true);
-    final lines = LineManager(controller);
-    final circles = CircleManager(controller);
-    // These managers are created manually, so initialize their backing style
-    // sources/layers before add or set. Constructor alone does not do this.
-    await symbols.initialize();
-    await lines.initialize();
-    await circles.initialize();
     if (!mounted) return;
-    _symbolManager = symbols;
-    _lineManager = lines;
-    _circleManager = circles;
+    // The controller's annotation managers are ready at this callback and
+    // belong to the current style. A new map/style gets fresh managers.
+    _boatSymbol = null;
+    _routeLineAnnotation = null;
+    _waypointCircles.clear();
     _ready = true;
     await _syncMap();
   }
@@ -147,15 +138,8 @@ class _Nav3DViewState extends State<Nav3DView> {
   }
 
   Future<void> _applyMapState() async {
-    final symbolManager = _symbolManager,
-        lineManager = _lineManager,
-        circleManager = _circleManager;
     final controller = _controller;
-    if (symbolManager == null ||
-        lineManager == null ||
-        circleManager == null ||
-        controller == null)
-      return;
+    if (controller == null || !_ready || !mounted) return;
 
     // Boat marker.
     final boatOptions = SymbolOptions(
@@ -165,11 +149,9 @@ class _Nav3DViewState extends State<Nav3DView> {
       iconSize: 0.35,
     );
     if (_boatSymbol == null) {
-      _boatSymbol = Symbol(_boatSymbolId, boatOptions);
-      await symbolManager.add(_boatSymbol!);
+      _boatSymbol = await controller.addSymbol(boatOptions);
     } else {
-      _boatSymbol = Symbol(_boatSymbol!.id, boatOptions);
-      await symbolManager.set(_boatSymbol!);
+      await controller.updateSymbol(_boatSymbol!, boatOptions);
     }
 
     // Active route line.
@@ -181,14 +163,12 @@ class _Nav3DViewState extends State<Nav3DView> {
         lineOpacity: 0.85,
       );
       if (_routeLineAnnotation == null) {
-        _routeLineAnnotation = Line(_routeLineId, lineOptions);
-        await lineManager.add(_routeLineAnnotation!);
+        _routeLineAnnotation = await controller.addLine(lineOptions);
       } else {
-        _routeLineAnnotation = Line(_routeLineAnnotation!.id, lineOptions);
-        await lineManager.set(_routeLineAnnotation!);
+        await controller.updateLine(_routeLineAnnotation!, lineOptions);
       }
     } else if (_routeLineAnnotation != null) {
-      await lineManager.remove(_routeLineAnnotation!);
+      await controller.removeLine(_routeLineAnnotation!);
       _routeLineAnnotation = null;
     }
 
@@ -205,13 +185,9 @@ class _Nav3DViewState extends State<Nav3DView> {
       );
       final existing = _waypointCircles[i];
       if (existing == null) {
-        final c = Circle('nav3d-wp-$i', options);
-        await circleManager.add(c);
-        _waypointCircles[i] = c;
+        _waypointCircles[i] = await controller.addCircle(options);
       } else {
-        final c = Circle(existing.id, options);
-        await circleManager.set(c);
-        _waypointCircles[i] = c;
+        await controller.updateCircle(existing, options);
       }
     }
     // Drop circles left over from a shorter waypoint list (e.g. after Undo).
@@ -219,7 +195,7 @@ class _Nav3DViewState extends State<Nav3DView> {
         .where((i) => i >= widget.waypoints.length)
         .toList();
     for (final i in stale) {
-      await circleManager.remove(_waypointCircles[i]!);
+      await controller.removeCircle(_waypointCircles[i]!);
       _waypointCircles.remove(i);
     }
 
