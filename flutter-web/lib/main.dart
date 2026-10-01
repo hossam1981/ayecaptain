@@ -30,6 +30,10 @@ import 'package:web/web.dart' as web;
 
 import 'nav_3d_view.dart';
 
+// From flutter-web/.env via --dart-define-from-file=.env. Not typed in the boat profile.
+const _envCartoKey = String.fromEnvironment('CARTO_KEY');
+const _envMapStyleUrl = String.fromEnvironment('MAPLIBRE_STYLE_URL');
+
 void main() => runApp(const BaysideApp());
 
 class BaysideApp extends StatelessWidget {
@@ -1104,12 +1108,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   StreamSubscription<Position>? _gpsSub;
 
   Basemap _base = Basemap.map;
-  String _cartoKey = '';   // PWA index.html:507-512 — optional, saved alongside the boat profile
-  // Optional MapLibre style URL (Mapbox or any other MapLibre-compatible hosted style, full
-  // URL with the user's own token already embedded) — enables the real-3D nav-only view
-  // (see Nav3DView). No PWA equivalent; a Flutter-side enhancement, same "optional, graceful
-  // fallback if unset" shape as _cartoKey.
-  String _mapStyleUrl = '';
+  // Optional. Comes from flutter-web/.env (CARTO_KEY / MAPLIBRE_STYLE_URL), not the boat form.
+  // Empty CARTO_KEY falls back to Esri tiles. Empty MAPLIBRE_STYLE_URL keeps the flat map.
+  final String _cartoKey = _envCartoKey;
+  final String _mapStyleUrl = _envMapStyleUrl;
   LatLng? _me;
   double _heading = 0;
   double _speedKt = 0;
@@ -1215,10 +1217,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     SharedPreferences.getInstance().then((sp) {
       final u = sp.getString('tideUnit');
       if (u != null && (u == 'ft' || u == 'm') && mounted) setState(() => _tideUnit = u);
-      final k = sp.getString('cartoKey');
-      if (k != null && k.isNotEmpty && mounted) setState(() => _cartoKey = k);
-      final m = sp.getString('mapStyleUrl');
-      if (m != null && m.isNotEmpty && mounted) setState(() => _mapStyleUrl = m);
     });
     _wxTimer = Timer.periodic(const Duration(minutes: 20), (_) {
       final at = _me ?? _homeCenter;
@@ -1704,14 +1702,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       backgroundColor: Colors.transparent,
       builder: (ctx) => BoatProfileSheet(
         initial: _profile,
-        initialCartoKey: _cartoKey,
-        initialMapStyleUrl: _mapStyleUrl,
-        onSave: (p, cartoKey, mapStyleUrl) async {
+        onSave: (p) async {
           await p.save();
-          final sp = await SharedPreferences.getInstance();
-          await sp.setString('cartoKey', cartoKey);
-          await sp.setString('mapStyleUrl', mapStyleUrl);
-          if (mounted) setState(() { _profile = p; _cartoKey = cartoKey; _mapStyleUrl = mapStyleUrl; _wxAt.clear(); });
+          if (mounted) setState(() { _profile = p; _wxAt.clear(); });
           _gradeRouteWaypoints();   // re-grade against the new limits
         },
       ),
@@ -2960,27 +2953,18 @@ class MoreToolsSheet extends StatelessWidget {
 // Type dropdown offers "Use defaults" that snap limits/cruise to the type presets.
 class BoatProfileSheet extends StatefulWidget {
   final BoatProfile initial;
-  final String initialCartoKey;
-  final String initialMapStyleUrl;
-  final Future<void> Function(BoatProfile, String cartoKey, String mapStyleUrl) onSave;
-  const BoatProfileSheet({super.key, required this.initial, required this.initialCartoKey,
-    required this.initialMapStyleUrl, required this.onSave});
+  final Future<void> Function(BoatProfile) onSave;
+  const BoatProfileSheet({super.key, required this.initial, required this.onSave});
   @override
   State<BoatProfileSheet> createState() => _BoatProfileSheetState();
 }
 class _BoatProfileSheetState extends State<BoatProfileSheet> {
   late BoatProfile p;
-  late final TextEditingController _cartoKeyCtrl;
-  late final TextEditingController _mapStyleUrlCtrl;
   @override
   void initState() {
     super.initState();
     p = BoatProfile.fromJson(widget.initial.toJson());
-    _cartoKeyCtrl = TextEditingController(text: widget.initialCartoKey);
-    _mapStyleUrlCtrl = TextEditingController(text: widget.initialMapStyleUrl);
   }
-  @override
-  void dispose() { _cartoKeyCtrl.dispose(); _mapStyleUrlCtrl.dispose(); super.dispose(); }
   TextEditingController _num(double v) => TextEditingController(text: v == 0 ? '' : v.toString());
   // PWA #pform input (index.html:182): white bg, ink text, light navy border; labels are
   // var(--sea) (index.html:181). Was wrongly white-on-dark.
@@ -3082,55 +3066,13 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           const SizedBox(width: 12),
           Expanded(child: _field('Tank size', p.tank, (v) => setState(() => p.tank = v), suffix: 'gal')),
         ]),
-        const SizedBox(height: 20),
-        // PWA #pKey (index.html:507-511): optional CARTO key, saved on this device, used for
-        // the cleanest street/place labels on Map + Dark; falls back to Esri tiles without one.
-        Text('Map', style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 4),
-        Text('CARTO map key — optional, gives the cleanest labels (free at carto.com/basemaps/apikey). '
-            'Saved on this device; leave blank to use the Esri street map.',
-            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.6), fontSize: 11)),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _cartoKeyCtrl,
-          style: const TextStyle(color: Color(0xFF0F2A44)),
-          decoration: InputDecoration(
-            filled: true, fillColor: Colors.white,
-            labelText: 'CARTO map key', labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
-            isDense: true,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
-          ),
-        ),
-        const SizedBox(height: 16),
-        // No PWA equivalent — a Flutter-side enhancement. Optional: when set, navigating
-        // switches to a real 3D MapLibre GL camera instead of the usual flat map; when blank,
-        // navigating looks exactly as it does today (see Nav3DView / _MapScreenState).
-        Text('Full style JSON URL from a Mapbox or other MapLibre-compatible account '
-            '(your own token included in the URL). Optional — leave blank to keep the '
-            'regular map while navigating.',
-            style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.6), fontSize: 11)),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _mapStyleUrlCtrl,
-          style: const TextStyle(color: Color(0xFF0F2A44)),
-          decoration: InputDecoration(
-            filled: true, fillColor: Colors.white,
-            labelText: 'MapLibre style URL (3D navigation)', labelStyle: const TextStyle(color: Color(0xFF2E6F9E), fontSize: 12, fontWeight: FontWeight.w700),
-            isDense: true,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0x400F2A44))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2E6F9E), width: 2)),
-          ),
-        ),
         const SizedBox(height: 24),
         // PWA #pform .save (index.html:184): background:var(--ink), colour:var(--paper) —
         // dark navy, not green.
         Material(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(10),
           child: InkWell(borderRadius: BorderRadius.circular(10),
             onTap: () async {
-              await widget.onSave(p, _cartoKeyCtrl.text.trim(), _mapStyleUrlCtrl.text.trim());
+              await widget.onSave(p);
               if (context.mounted) Navigator.of(context).pop();
             },
             child: const Padding(padding: EdgeInsets.symmetric(vertical: 14),

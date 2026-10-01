@@ -18,13 +18,27 @@
     flutter config --enable-web
     flutter --version
     flutter pub get
+    # Map keys live in flutter-web/.env locally. On Netlify, set CARTO_KEY and
+    # MAPLIBRE_STYLE_URL as site env vars — they are compiled in here. A checked-out
+    # .env wins when the file is present.
+    BUILD_ARGS=(--release --pwa-strategy=offline-first)
+    if [ -f .env ]; then
+      BUILD_ARGS+=(--dart-define-from-file=.env)
+    else
+      if [ -n "${CARTO_KEY:-}" ]; then
+        BUILD_ARGS+=(--dart-define="CARTO_KEY=${CARTO_KEY}")
+      fi
+      if [ -n "${MAPLIBRE_STYLE_URL:-}" ]; then
+        BUILD_ARGS+=(--dart-define="MAPLIBRE_STYLE_URL=${MAPLIBRE_STYLE_URL}")
+      fi
+    fi
     # --pwa-strategy=offline-first (was =none): Chrome requires an active service worker
     # with a fetch handler before it will ever fire beforeinstallprompt, so the "Add to home
     # screen" feature needs one. Known tradeoff, accepted deliberately: the service worker
     # caches aggressively, so after every push you likely need to manually clear the
     # browser's cached images/files (or hard-reload twice) to see the new build — same as
     # the PWA on `main` already requires. `none` avoided this but made install() impossible.
-    flutter build web --release --pwa-strategy=offline-first
+    flutter build web "${BUILD_ARGS[@]}"
   """
 
 # Cache directives so returning visitors don't hard-refresh the whole bundle every reload
