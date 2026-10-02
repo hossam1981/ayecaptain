@@ -1966,7 +1966,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 ]),
               ],
               ),
-              // Weather-animation canvas — wind streaks + rain particles, driven by live wx.
+              // Weather-animation canvas — wind, rain, snow, lightning, driven by live wx.
               // Sits above the map inside the same tilt Transform so it feels like weather over
               // the water rather than the screen.
               Positioned.fill(child: IgnorePointer(child: FxCanvas(
@@ -1975,6 +1975,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 windDirDeg: (_weather?.windDirDeg ?? 0).toDouble(),
                 precipPct: _weather?.precipPct ?? 0,
                 boatSpeedKt: _speedKt,
+                weatherCode: _weather?.weatherCode ?? 0,
                 lightBasemap: _base == Basemap.map || _base == Basemap.chart,
               ))),
             ]),
@@ -2092,41 +2093,93 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 // widgets
 // ==================================================================================================
 
-// Batch B.5: weather-animation canvas. Full-viewport overlay above the map, ignoring pointer
-// events. Wind streaks scale density with (wind + gust*0.5) and slant along wind direction;
-// rain drops appear when precipPct > 0. Wake spray is a placeholder — needs boat screen-projection
-// which is nontrivial with `flutter_map` and will land in Batch C.
+// Weather-animation canvas. Full-viewport overlay above the map, ignoring pointer events.
+// Two depth layers each for wind streaks and rain (near = closer/faster/brighter, far =
+// slower/dimmer) read as real atmospheric parallax instead of one flat particle speed; a
+// periodic gust envelope (mirrors the PWA's rich-mode gust surge, index.html:1061-1065)
+// makes wind speed pulse instead of sitting at a constant rate; rain spawns small splash
+// rings scattered across the surface (not tied to a horizon line — this view is top-down,
+// unlike the PWA's tilted map, so "where rain lands" has no single waterline here); snow
+// and lightning are net-new (the PWA's own "thunder" was a flat screen flash with no bolt
+// and no sound — index.html:1098,1109). Wake spray is a separate widget (_WakeSpray, above).
 class FxCanvas extends StatefulWidget {
   final double windKt, gustKt, windDirDeg, precipPct, boatSpeedKt;
+  final int weatherCode;   // Open-Meteo WMO code — drives snow/thunder gating
   final bool lightBasemap;   // Map/Chart = true (dark streaks), Sat/Dark = false (white streaks)
   const FxCanvas({super.key, required this.windKt, required this.gustKt, required this.windDirDeg,
-    required this.precipPct, required this.boatSpeedKt, this.lightBasemap = true});
+    required this.precipPct, required this.boatSpeedKt, this.weatherCode = 0, this.lightBasemap = true});
   @override
   State<FxCanvas> createState() => _FxCanvasState();
 }
 class _FxCanvasState extends State<FxCanvas> with SingleTickerProviderStateMixin {
   late final _tick = createTicker(_step);
   final math.Random _rng = math.Random();
-  final List<_WindStreak> _streaks = [];
-  final List<_RainDrop> _drops = [];
+  final List<_WindStreak> _streaksFar = [], _streaksNear = [];
+  final List<_RainDrop> _dropsFar = [], _dropsNear = [];
+  final List<_SnowFlake> _flakes = [];
+  final List<_Splash> _splashes = [];
+  final List<_Bolt> _bolts = [];
+  double _flash = 0;
+  double _gustPhase = 0, _gustEnv = 0, _gustCooldown = 2;
+  double _nextStrike = 4;
   int _lastMs = 0;
   Size _size = Size.zero;
+  web.AudioContext? _audioCtx;
+
+  // PWA's own raining()/snowing() thresholds (index.html:999-1000) — kept identical so the
+  // Flutter FX layer triggers on the same conditions the weather HUD/condition text does.
+  bool get _raining => widget.precipPct > 0 ||
+      (widget.weatherCode >= 51 && widget.weatherCode <= 67) ||
+      (widget.weatherCode >= 80 && widget.weatherCode <= 82) ||
+      widget.weatherCode >= 95;
+  bool get _snowing => widget.weatherCode >= 71 && widget.weatherCode <= 77;
+  bool get _thunderstorm => widget.weatherCode >= 95;
 
   @override
   void initState() {
     super.initState();
+    _nextStrike = 3 + _rng.nextDouble() * 4;
     _tick.start();
   }
   @override
-  void dispose() { _tick.dispose(); super.dispose(); }
-
-  int _targetStreaks() {
-    final eff = widget.windKt + widget.gustKt * 0.4;
-    return math.min(120, (eff * 3.5).round());
+  void dispose() {
+    _tick.dispose();
+    try { _audioCtx?.close(); } catch (_) {}
+    super.dispose();
   }
-  int _targetDrops() {
-    if (widget.precipPct <= 0) return 0;
-    return math.min(140, (widget.precipPct * 1.8).round());
+
+  // Effective wind = base + a gust boost that rises and decays instead of a flat blend —
+  // only engages when the gust is actually meaningfully above the sustained speed, same
+  // gate the PWA uses (index.html:1063: `wx.gust > wx.wind+1`).
+  double get _effWind {
+    final gust = math.max(0.0, math.sin(_gustPhase)) * _gustEnv;
+    return widget.windKt + (widget.gustKt - widget.windKt) * gust;
+  }
+  void _stepGust(double dt) {
+    _gustCooldown -= dt;
+    if (_gustCooldown <= 0 && widget.gustKt > widget.windKt + 1) {
+      _gustCooldown = 3.5 + _rng.nextDouble() * 4;
+      _gustPhase = 0;
+      _gustEnv = 1;
+    }
+    _gustPhase += dt * 1.1;
+    _gustEnv *= math.pow(0.22, dt).toDouble();
+  }
+
+  // Wind vector — screen x/y for a "wind is BLOWING TOWARD" motion. Meteorology gives dir
+  // wind comes FROM, so motion travels toward dir+180. [mult] separates the depth layers.
+  _Vec _windVec(double mult) {
+    final rad = (widget.windDirDeg + 180) * math.pi / 180;
+    final eff = _effWind * mult * 6;
+    return _Vec(math.sin(rad) * eff, -math.cos(rad) * eff);
+  }
+
+  int _targetStreaks(double mult) => math.min(90, (10 + _effWind * 2.4 * mult).round());
+  int _targetDrops(double mult) {
+    if (!_raining) return 0;
+    final floor = widget.weatherCode >= 95 ? 70.0 : widget.weatherCode >= 63 ? 50.0 : widget.weatherCode >= 51 ? 20.0 : 0.0;
+    final base = math.max(floor, widget.precipPct * 1.6);
+    return math.min(140, (8 + base * mult).round());
   }
 
   void _step(Duration elapsed) {
@@ -2134,33 +2187,42 @@ class _FxCanvasState extends State<FxCanvas> with SingleTickerProviderStateMixin
     final now = elapsed.inMilliseconds;
     final dt = _lastMs == 0 ? 0.016 : math.min(0.05, (now - _lastMs) / 1000);
     _lastMs = now;
-    // top-up streaks/drops toward the target counts
-    while (_streaks.length < _targetStreaks()) _streaks.add(_spawnStreak());
-    while (_streaks.length > _targetStreaks()) _streaks.removeLast();
-    while (_drops.length < _targetDrops()) _drops.add(_spawnDrop());
-    while (_drops.length > _targetDrops()) _drops.removeLast();
-    // wind vector — screen x/y for a "wind is BLOWING TOWARD" motion vector.
-    // Meteorology gives dir wind comes FROM, so the streak travels toward dir+180.
-    final rad = (widget.windDirDeg + 180) * math.pi / 180;
-    final vx = math.sin(rad) * (widget.windKt + widget.gustKt * 0.5) * 6;
-    final vy = -math.cos(rad) * (widget.windKt + widget.gustKt * 0.5) * 6;
-    for (final s in _streaks) {
-      s.x += vx * dt;
-      s.y += vy * dt;
-      if (s.x < -20 || s.x > _size.width + 20 || s.y < -20 || s.y > _size.height + 20) {
-        _resetStreak(s);
-      }
-    }
-    for (final d in _drops) {
-      d.x += vx * 0.15 * dt;
-      d.y += d.speed * dt;
-      if (d.y > _size.height + 4) { d.x = _rng.nextDouble() * _size.width; d.y = -8; }
-    }
+
+    _stepGust(dt);
+    final farVec = _windVec(0.6), nearVec = _windVec(1.0);
+
+    _syncStreaks(_streaksFar, _targetStreaks(0.55));
+    _syncStreaks(_streaksNear, _targetStreaks(1.0));
+    _advanceStreaks(_streaksFar, farVec, dt);
+    _advanceStreaks(_streaksNear, nearVec, dt);
+
+    _syncDrops(_dropsFar, _targetDrops(0.55), 240, 340);
+    _syncDrops(_dropsNear, _targetDrops(1.0), 340, 480);
+    _advanceDrops(_dropsFar, farVec, dt);
+    _advanceDrops(_dropsNear, nearVec, dt);
+    _stepSplashes(dt);
+
+    _syncFlakes(_snowing ? 150 : 0);
+    _advanceFlakes(nearVec, dt);
+
+    _stepLightning(dt);
+
     setState(() {});
   }
 
+  // ---- wind streaks ----
+  void _syncStreaks(List<_WindStreak> list, int target) {
+    while (list.length < target) list.add(_spawnStreak());
+    while (list.length > target) list.removeLast();
+  }
+  void _advanceStreaks(List<_WindStreak> list, _Vec v, double dt) {
+    for (final s in list) {
+      s.x += v.x * dt; s.y += v.y * dt;
+      if (s.x < -20 || s.x > _size.width + 20 || s.y < -20 || s.y > _size.height + 20) _resetStreak(s);
+    }
+  }
   _WindStreak _spawnStreak() {
-    final s = _WindStreak(0, 0, 8 + _rng.nextDouble() * 20, .3 + _rng.nextDouble() * .5);
+    final s = _WindStreak(0, 0, 8 + _rng.nextDouble() * 20);
     _resetStreak(s);
     return s;
   }
@@ -2168,64 +2230,236 @@ class _FxCanvasState extends State<FxCanvas> with SingleTickerProviderStateMixin
     s.x = _rng.nextDouble() * (_size.width + 40) - 20;
     s.y = _rng.nextDouble() * (_size.height + 40) - 20;
   }
-  _RainDrop _spawnDrop() => _RainDrop(
-    _rng.nextDouble() * _size.width,
-    _rng.nextDouble() * _size.height,
-    260 + _rng.nextDouble() * 140,
+
+  // ---- rain ----
+  void _syncDrops(List<_RainDrop> list, int target, double speedMin, double speedMax) {
+    while (list.length < target) list.add(_spawnDrop(speedMin, speedMax));
+    while (list.length > target) list.removeLast();
+  }
+  void _advanceDrops(List<_RainDrop> list, _Vec v, double dt) {
+    for (final d in list) {
+      d.x += v.x * 0.15 * dt; d.y += d.speed * dt;
+      if (d.y > _size.height + 4) { d.x = _rng.nextDouble() * _size.width; d.y = -8; }
+    }
+  }
+  _RainDrop _spawnDrop(double speedMin, double speedMax) => _RainDrop(
+    _rng.nextDouble() * _size.width, _rng.nextDouble() * _size.height,
+    speedMin + _rng.nextDouble() * (speedMax - speedMin),
   );
+
+  // Splash rings scattered across the water — density tracks rain intensity. Not tied to
+  // individual drops or a waterline: this is a top-down chart, every pixel is water, so
+  // "rain hitting the surface" is its own ambient particle system, not a per-drop impact.
+  void _stepSplashes(double dt) {
+    if (_raining) {
+      final perSec = math.min(6.0, widget.precipPct / 10 + (_thunderstorm ? 2.5 : 0));
+      if (_rng.nextDouble() < perSec * dt) {
+        _splashes.add(_Splash(_rng.nextDouble() * _size.width, _rng.nextDouble() * _size.height, 1, 0.6));
+      }
+    }
+    for (final s in _splashes) { s.r += 60 * dt; s.a -= dt * 2.2; }
+    _splashes.removeWhere((s) => s.a <= 0);
+  }
+
+  // ---- snow ----
+  void _syncFlakes(int target) {
+    while (_flakes.length < target) _flakes.add(_spawnFlake());
+    while (_flakes.length > target) _flakes.removeLast();
+  }
+  void _advanceFlakes(_Vec windNear, double dt) {
+    for (final f in _flakes) {
+      f.phase += dt * 0.9; f.twinkle += dt * 2.2;
+      f.y += f.speed; f.x += math.sin(f.phase) * 0.5 + windNear.x * 0.05 * dt;
+      if (f.y > _size.height) { f.y = -6; f.x = _rng.nextDouble() * _size.width; }
+    }
+  }
+  _SnowFlake _spawnFlake() => _SnowFlake(
+    _rng.nextDouble() * _size.width, _rng.nextDouble() * _size.height,
+    1.1 + _rng.nextDouble() * 2.3, 0.6 + _rng.nextDouble() * 1.1,
+    _rng.nextDouble() * 10, _rng.nextDouble() * 6,
+  );
+
+  // ---- lightning: a real branching bolt (midpoint displacement) + afterglow + rumble ----
+  void _midpointBolt(double x1, double y1, double x2, double y2, double disp, int depth,
+      List<_BoltSeg> segs, double branchProb) {
+    if (depth <= 0 || disp < 4) { segs.add(_BoltSeg(x1, y1, x2, y2, 1)); return; }
+    final mx = (x1 + x2) / 2 + (_rng.nextDouble() - 0.5) * disp;
+    final my = (y1 + y2) / 2 + (_rng.nextDouble() - 0.5) * disp * 0.4;
+    _midpointBolt(x1, y1, mx, my, disp * 0.55, depth - 1, segs, branchProb);
+    _midpointBolt(mx, my, x2, y2, disp * 0.55, depth - 1, segs, branchProb);
+    if (_rng.nextDouble() < branchProb && depth > 1) {
+      final bx = x2 + (_rng.nextDouble() - 0.5) * disp * 2.2;
+      final by = y2 + _rng.nextDouble() * disp * 2.2;
+      _midpointBolt(mx, my, bx, by, disp * 0.45, depth - 2, segs, branchProb * 0.4);
+      if (segs.isNotEmpty) segs.last.alphaMul = 0.55;
+    }
+  }
+  void _strike() {
+    final x1 = _size.width * (0.15 + _rng.nextDouble() * 0.7), y1 = -10.0;
+    final x2 = x1 + (_rng.nextDouble() - 0.5) * _size.width * 0.18;
+    final y2 = _size.height * (0.35 + _rng.nextDouble() * 0.3);
+    final segs = <_BoltSeg>[];
+    _midpointBolt(x1, y1, x2, y2, _size.width * 0.05, 6, segs, 0.35);
+    _bolts.add(_Bolt(segs, 1));
+    _flash = 1;
+    _thunder();
+  }
+  void _stepLightning(double dt) {
+    if (!_thunderstorm) { _bolts.clear(); _flash = 0; return; }
+    _nextStrike -= dt;
+    if (_nextStrike <= 0 && _size != Size.zero) { _strike(); _nextStrike = 3 + _rng.nextDouble() * 4; }
+    for (final b in _bolts) { b.life -= dt * 7; }
+    _bolts.removeWhere((b) => b.life <= 0);
+    _flash = math.max(0.0, _flash - dt * 2.4);
+  }
+
+  // Synthesized rumble — a filtered noise burst whose lowpass sweeps down and whose start
+  // is delayed relative to the flash, the way real thunder lags its lightning. Defensive
+  // try/catch: browsers can refuse AudioContext before a user gesture, and that should
+  // never surface as a crash in a boat-navigation app.
+  void _thunder() {
+    try {
+      final ctx = _audioCtx ??= web.AudioContext();
+      final delay = 0.25 + _rng.nextDouble() * 0.7;
+      final dur = 1.6 + _rng.nextDouble() * 1.0;
+      final sampleRate = ctx.sampleRate;
+      final bufSize = (sampleRate * dur).floor();
+      final buffer = ctx.createBuffer(1, bufSize, sampleRate);
+      final data = buffer.getChannelData(0).toDart;
+      for (var i = 0; i < data.length; i++) { data[i] = (_rng.nextDouble() * 2 - 1) * 0.6; }
+      final src = ctx.createBufferSource()..buffer = buffer;
+      final filt = ctx.createBiquadFilter()..type = 'lowpass';
+      final now = ctx.currentTime;
+      filt.frequency
+        ..setValueAtTime(900, now + delay)
+        ..exponentialRampToValueAtTime(70, now + delay + dur);
+      final gain = ctx.createGain();
+      gain.gain
+        ..setValueAtTime(0.0001, now + delay)
+        ..linearRampToValueAtTime(0.5, now + delay + 0.08)
+        ..exponentialRampToValueAtTime(0.001, now + delay + dur);
+      src.connect(filt);
+      filt.connect(gain);
+      gain.connect(ctx.destination);
+      src.start(now + delay);
+      src.stop(now + delay + dur + 0.05);
+    } catch (_) {
+      // No audio output available (autoplay policy, unsupported browser) — the bolt and
+      // flash still read as a strike on their own.
+    }
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (ctx, cs) {
     final s = Size(cs.maxWidth, cs.maxHeight);
     if (s != _size) _size = s;
     return CustomPaint(painter: _FxPainter(
-      streaks: _streaks, drops: _drops, windDirDeg: widget.windDirDeg,
-      precipPct: widget.precipPct, lightBasemap: widget.lightBasemap,
+      streaksFar: _streaksFar, streaksNear: _streaksNear,
+      dropsFar: _dropsFar, dropsNear: _dropsNear,
+      flakes: _flakes, splashes: _splashes, bolts: _bolts, flash: _flash,
+      windDirDeg: widget.windDirDeg, lightBasemap: widget.lightBasemap,
     ), size: s);
   });
 }
 
-class _WindStreak {
-  double x, y, length, alpha;
-  _WindStreak(this.x, this.y, this.length, this.alpha);
+class _Vec { final double x, y; const _Vec(this.x, this.y); }
+class _WindStreak { double x, y, length; _WindStreak(this.x, this.y, this.length); }
+class _RainDrop { double x, y, speed; _RainDrop(this.x, this.y, this.speed); }
+class _SnowFlake {
+  double x, y, r, speed, phase, twinkle;
+  _SnowFlake(this.x, this.y, this.r, this.speed, this.phase, this.twinkle);
 }
-class _RainDrop {
-  double x, y, speed;
-  _RainDrop(this.x, this.y, this.speed);
+class _Splash { double x, y, r, a; _Splash(this.x, this.y, this.r, this.a); }
+class _BoltSeg {
+  double x1, y1, x2, y2, alphaMul;
+  _BoltSeg(this.x1, this.y1, this.x2, this.y2, this.alphaMul);
 }
+class _Bolt { final List<_BoltSeg> segs; double life; _Bolt(this.segs, this.life); }
+
 class _FxPainter extends CustomPainter {
-  final List<_WindStreak> streaks;
-  final List<_RainDrop> drops;
-  final double windDirDeg, precipPct;
+  final List<_WindStreak> streaksFar, streaksNear;
+  final List<_RainDrop> dropsFar, dropsNear;
+  final List<_SnowFlake> flakes;
+  final List<_Splash> splashes;
+  final List<_Bolt> bolts;
+  final double flash, windDirDeg;
   final bool lightBasemap;
-  _FxPainter({required this.streaks, required this.drops, required this.windDirDeg, required this.precipPct,
-    required this.lightBasemap});
+  _FxPainter({required this.streaksFar, required this.streaksNear, required this.dropsFar,
+    required this.dropsNear, required this.flakes, required this.splashes, required this.bolts,
+    required this.flash, required this.windDirDeg, required this.lightBasemap});
+
   @override
   void paint(Canvas canvas, Size size) {
-    // Streaks — direction the wind is BLOWING TOWARD (dir + 180).
+    // Direction the wind is BLOWING TOWARD (dir + 180) — shared by streaks and rain lean.
     final rad = (windDirDeg + 180) * math.pi / 180;
     final dx = math.sin(rad), dy = -math.cos(rad);
     // PWA index.html:1071: dark navy 50% on Map/Chart, white 70% on Sat/Dark — Flutter's
     // earlier white-only ~5-13% opacity was nearly invisible against a detailed basemap.
-    final streakColor = lightBasemap
-      ? const Color(0xFF0F2A44).withOpacity(.5)
-      : Colors.white.withOpacity(.7);
-    final streakPaint = Paint()..color = streakColor..strokeWidth = 1.3..strokeCap = StrokeCap.round;
-    for (final s in streaks) {
-      canvas.drawLine(Offset(s.x, s.y),
-        Offset(s.x + dx * s.length, s.y + dy * s.length), streakPaint);
-    }
-    // Rain drops — small vertical lines with a slight wind lean.
-    if (precipPct > 0) {
-      // Was capped at .36 max (barely visible) — PWA rain reaches up to .85 (index.html:1082).
-      final rainPaint = Paint()..strokeWidth = 1.4..strokeCap = StrokeCap.round
-        ..color = const Color(0xFF78AADC).withOpacity(math.min(.75, .3 + precipPct / 130));
-      for (final d in drops) {
-        canvas.drawLine(Offset(d.x, d.y),
-          Offset(d.x + dx * 3, d.y + 8), rainPaint);
-      }
+    final streakColor = lightBasemap ? const Color(0xFF0F2A44) : Colors.white;
+    _paintStreaks(canvas, streaksFar, streakColor.withOpacity(.22), 1.0, dx, dy);
+    _paintStreaks(canvas, streaksNear, streakColor.withOpacity(.42), 1.4, dx, dy);
+    // Was capped at .36 max (barely visible) — PWA rain reaches up to .85 (index.html:1082).
+    _paintRain(canvas, dropsFar, .32, 1.1, dx, dy);
+    _paintRain(canvas, dropsNear, .58, 1.5, dx, dy);
+    _paintSplashes(canvas);
+    _paintSnow(canvas);
+    _paintLightning(canvas, size);
+  }
+
+  void _paintStreaks(Canvas canvas, List<_WindStreak> list, Color color, double widthPx, double dx, double dy) {
+    if (list.isEmpty) return;
+    final paint = Paint()..color = color..strokeWidth = widthPx..strokeCap = StrokeCap.round;
+    for (final s in list) {
+      canvas.drawLine(Offset(s.x, s.y), Offset(s.x + dx * s.length, s.y + dy * s.length), paint);
     }
   }
+
+  void _paintRain(Canvas canvas, List<_RainDrop> list, double alpha, double widthPx, double dx, double dy) {
+    if (list.isEmpty) return;
+    final paint = Paint()..strokeWidth = widthPx..strokeCap = StrokeCap.round
+      ..color = const Color(0xFF78AADC).withOpacity(alpha);
+    for (final d in list) {
+      canvas.drawLine(Offset(d.x, d.y), Offset(d.x + dx * 4, d.y + 10), paint);
+    }
+  }
+
+  void _paintSplashes(Canvas canvas) {
+    if (splashes.isEmpty) return;
+    for (final s in splashes) {
+      final paint = Paint()
+        ..style = PaintingStyle.stroke..strokeWidth = 1
+        ..color = const Color(0xFFC8E1F5).withOpacity(s.a.clamp(0, 1).toDouble());
+      canvas.drawOval(Rect.fromCenter(center: Offset(s.x, s.y), width: s.r * 2, height: s.r * 0.7), paint);
+    }
+  }
+
+  void _paintSnow(Canvas canvas) {
+    if (flakes.isEmpty) return;
+    for (final f in flakes) {
+      final tw = 0.65 + math.sin(f.twinkle) * 0.35;
+      canvas.drawCircle(Offset(f.x, f.y), f.r,
+        Paint()..color = Colors.white.withOpacity((0.55 + tw * 0.4).clamp(0, 1).toDouble()));
+    }
+  }
+
+  void _paintLightning(Canvas canvas, Size size) {
+    for (final b in bolts) {
+      final a = b.life.clamp(0, 1).toDouble();
+      for (final seg in b.segs) {
+        final paint = Paint()
+          ..color = const Color(0xFFFFF8E1).withOpacity((a * seg.alphaMul).clamp(0, 1).toDouble())
+          ..strokeWidth = seg.alphaMul > 0.7 ? 2.4 : 1.3
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * a);
+        canvas.drawLine(Offset(seg.x1, seg.y1), Offset(seg.x2, seg.y2), paint);
+      }
+    }
+    if (flash > 0) {
+      canvas.drawRect(Offset.zero & size,
+        Paint()..color = const Color(0xFFFFF8E1).withOpacity((flash * 0.45).clamp(0, 1).toDouble()));
+    }
+  }
+
   @override
   bool shouldRepaint(covariant _FxPainter old) => true;   // frame-driven repaint
 }
