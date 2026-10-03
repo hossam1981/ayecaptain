@@ -3345,25 +3345,48 @@ class _RouteBar extends StatelessWidget {
   Widget build(BuildContext context) {
     // index.html:1414 — bar only shows while picking or once a route exists.
     if (!picking && !_has) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(14)),
-      child: Row(children: [
-        Expanded(child: Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          _stat(_has ? '$waypointCount' : '0', _has ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
-          _has ? _etaStat() : _stat('tap map', 'to add'),
-        ])),
-        const SizedBox(width: 8),
-        _bigBtn(navigating ? 'Stop' : 'Start',
-          navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
-          navigating ? onStop : onStart),
-        const SizedBox(width: 6),
-        _smallBtn('Undo', onUndoRoute),
-        const SizedBox(width: 6),
-        _smallBtn('GPX', onGpx),
-        const SizedBox(width: 6),
-        _smallBtn('Clear', onClearRoute),
-      ]),
+    // Calm blue/cyan glass (GlassSeverity.nav) — same layered recipe as the warning
+    // banners (.claude/skills/ayecaptain-glass-design/SKILL.md), not a new one-off style.
+    // Radius 14 matches this bar's own prior flat corner radius — _WarningEdgeGlow's rim
+    // is told that explicitly so it doesn't default to the warning cards' 18.
+    return CustomPaint(
+      foregroundPainter: const _WarningEdgeGlow(severity: GlassSeverity.nav, radius: 13.2),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+          child: CustomPaint(
+            painter: const _WarningGlassSurface(severity: GlassSeverity.nav),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              // Stats row above a separate buttons row — Undo/GPX/Clear sharing one Row with
+              // the stats + Start/Stop could overflow its width once all 4 buttons show
+              // together (any time a route exists), independent of the glass styling above.
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  _stat(_has ? '$waypointCount' : '0', _has ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
+                  _has ? _etaStat() : _stat('tap map', 'to add'),
+                ]),
+                const SizedBox(height: 9),
+                Row(children: [
+                  // flex:2 vs the small buttons' flex:1 — Start/Stop is the primary action,
+                  // it should read bigger than Undo/GPX/Clear, not get squeezed to its own
+                  // tightest-fit width while they stretch to fill the rest.
+                  Expanded(flex: 2, child: _bigBtn(navigating ? 'Stop' : 'Start',
+                    navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
+                    navigating ? onStop : onStart)),
+                  const SizedBox(width: 6),
+                  Expanded(child: _smallBtn('Undo', onUndoRoute)),
+                  const SizedBox(width: 6),
+                  Expanded(child: _smallBtn('GPX', onGpx)),
+                  const SizedBox(width: 6),
+                  Expanded(child: _smallBtn('Clear', onClearRoute)),
+                ]),
+              ]),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -3387,11 +3410,14 @@ class _RouteBar extends StatelessWidget {
     TextSpan(text: ' $light', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500, height: 1.6)),
   ]), maxLines: 1, overflow: TextOverflow.ellipsis);
 
+  // Now rendered via Expanded(flex: 2, ...) in build() so it's wider than its own text —
+  // Center it, same as _smallBtn's textAlign does for its (also now Expanded) buttons.
   Widget _bigBtn(String label, Color color, VoidCallback onTap) => Material(
         color: color, borderRadius: BorderRadius.circular(9),
         child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+            child: Center(child:
+              Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13))),
           ),
         ),
       );
@@ -3780,7 +3806,9 @@ class _HourlyTable extends StatelessWidget {
 // warning). Visual treatment only — the caller picks the amber/red gradient+border+glow;
 // the actual title/body content and the optional close callback stay fully owned by the
 // caller, so none of the underlying warning logic/data lives here.
-enum GlassSeverity { amber, red }
+// `nav` is the calmer blue/cyan variant for non-alert chrome (route bar, future nav sheet) —
+// see .claude/skills/ayecaptain-glass-design/SKILL.md for the color-token rationale.
+enum GlassSeverity { amber, red, nav }
 
 // Crossfade the round alert icon and the full card while animating their height.
 // Keeping expansion here leaves alert/weather visibility decisions in the callers.
@@ -3888,13 +3916,13 @@ class GlassWarningCard extends StatelessWidget {
 
     return CustomPaint(
       // Paint after the clipped glass: its tint must not dim the neon or hotspots.
-      foregroundPainter: _WarningEdgeGlow(isAmber: isAmber),
+      foregroundPainter: _WarningEdgeGlow(severity: severity),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
           child: CustomPaint(
-            painter: _WarningGlassSurface(isAmber: isAmber),
+            painter: _WarningGlassSurface(severity: severity),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
               child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -3919,19 +3947,24 @@ class GlassWarningCard extends StatelessWidget {
 // Translucent colored glass, with broad reflections and pools of light at the rim.
 // All fills are clipped by the card. The map supplies the detail behind the glass.
 class _WarningGlassSurface extends CustomPainter {
-  final bool isAmber;
-  const _WarningGlassSurface({required this.isAmber});
+  final GlassSeverity severity;
+  const _WarningGlassSurface({required this.severity});
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final color = isAmber ? const Color(0xFFFFAA24) : const Color(0xFFFF304B);
-    canvas.drawRect(rect, Paint()..color =
-      (isAmber ? const Color(0xFF162932) : const Color(0xFF30182C)).withOpacity(.43));
+    // (glow color, base tint wash, base wash opacity, overall intensity — `nav` reads calm
+    // rather than alarming, so it runs denser/more opaque but visually quieter than a warning).
+    final (color, baseTint, baseOpacity, intensity) = switch (severity) {
+      GlassSeverity.amber => (const Color(0xFFFFAA24), const Color(0xFF162932), .43, 1.0),
+      GlassSeverity.red => (const Color(0xFFFF304B), const Color(0xFF30182C), .43, 1.0),
+      GlassSeverity.nav => (const Color(0xFF19C8FF), const Color(0xFF041E32), .78, .6),
+    };
+    canvas.drawRect(rect, Paint()..color = baseTint.withOpacity(baseOpacity));
     canvas.drawRect(rect, Paint()..shader = LinearGradient(
       begin: Alignment.topCenter, end: Alignment.bottomCenter,
-      colors: [color.withOpacity(.40), color.withOpacity(.08),
-        color.withOpacity(.03), color.withOpacity(.26)],
+      colors: [color.withOpacity(.40 * intensity), color.withOpacity(.08 * intensity),
+        color.withOpacity(.03 * intensity), color.withOpacity(.26 * intensity)],
       stops: const [0, .28, .68, 1],
     ).createShader(rect));
 
@@ -3954,29 +3987,37 @@ class _WarningGlassSurface extends CustomPainter {
           color.withOpacity(0)], const [0, .42, 1]));
       canvas.restore();
     }
-    light(.02, .10, .40, 1.5, .36);
-    light(.90, .02, .50, 1.3, .44);
-    light(.09, 1, .42, .85, .40);
-    light(.98, .95, .32, 1.1, .30);
+    light(.02, .10, .40, 1.5, .36 * intensity);
+    light(.90, .02, .50, 1.3, .44 * intensity);
+    light(.09, 1, .42, .85, .40 * intensity);
+    light(.98, .95, .32, 1.1, .30 * intensity);
   }
 
   @override
-  bool shouldRepaint(covariant _WarningGlassSurface old) => old.isAmber != isAmber;
+  bool shouldRepaint(covariant _WarningGlassSurface old) => old.severity != severity;
 }
 
 class _WarningEdgeGlow extends CustomPainter {
-  final bool isAmber;
-  const _WarningEdgeGlow({required this.isAmber});
+  final GlassSeverity severity;
+  // Matches the card's own ClipRRect radius minus the .8 deflate below (18 - .8 ≈ 17.2) —
+  // pass the caller's actual corner radius so the rim doesn't mismatch a differently-rounded card.
+  final double radius;
+  const _WarningEdgeGlow({required this.severity, this.radius = 17.2});
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = (Offset.zero & size).deflate(.8);
-    final edge = RRect.fromRectAndRadius(rect, const Radius.circular(17.2));
-    final color = isAmber ? const Color(0xFFFFB52E) : const Color(0xFFFF304B);
-    final core = isAmber ? const Color(0xFFFFFFBC) : const Color(0xFFFFEEEE);
+    final edge = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+    final isAmber = severity == GlassSeverity.amber;
+    final (color, core, intensity) = switch (severity) {
+      GlassSeverity.amber => (const Color(0xFFFFB52E), const Color(0xFFFFFFBC), 1.0),
+      GlassSeverity.red => (const Color(0xFFFF304B), const Color(0xFFFFEEEE), 1.0),
+      // Deliberately quieter than the alert severities — this is calm chrome, not a warning.
+      GlassSeverity.nav => (const Color(0xFF19C8FF), const Color(0xFFD7F3FF), .55),
+    };
     // Keep the continuous rim restrained so individual reflections can shine brighter.
     canvas.drawRRect(edge, Paint()
-      ..color = color.withOpacity(.65)
+      ..color = color.withOpacity(.65 * intensity)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
@@ -3998,7 +4039,8 @@ class _WarningEdgeGlow extends CustomPainter {
         final ink = layer[1] == 0 ? core : color;
         final paint = Paint()
           ..shader = ui.Gradient.radial(center, reach,
-            [ink.withOpacity(layer[2]), ink.withOpacity(layer[2] * .65), ink.withOpacity(0)],
+            [ink.withOpacity(layer[2] * intensity), ink.withOpacity(layer[2] * .65 * intensity),
+              ink.withOpacity(0)],
             const [0, .25, 1])
           ..style = PaintingStyle.stroke
           ..strokeWidth = layer[0];
@@ -4024,14 +4066,15 @@ class _WarningEdgeGlow extends CustomPainter {
         ..strokeWidth = 1.35
         ..strokeCap = StrokeCap.round);
     }
-    glint(isAmber ? .26 : .08, isAmber ? .52 : .27, edge.top, .88);
-    glint(isAmber ? .82 : .70, .96, edge.top, .96);
-    glint(.04, isAmber ? .22 : .18, edge.bottom, .83);
-    glint(.77, .96, edge.bottom, .92);
+    glint(isAmber ? .26 : .08, isAmber ? .52 : .27, edge.top, .88 * intensity);
+    glint(isAmber ? .82 : .70, .96, edge.top, .96 * intensity);
+    glint(.04, isAmber ? .22 : .18, edge.bottom, .83 * intensity);
+    glint(.77, .96, edge.bottom, .92 * intensity);
   }
 
   @override
-  bool shouldRepaint(covariant _WarningEdgeGlow old) => old.isAmber != isAmber;
+  bool shouldRepaint(covariant _WarningEdgeGlow old) =>
+      old.severity != severity || old.radius != radius;
 }
 
 // Transparent normally, subtle translucent-white circle while pressed — per the design brief,

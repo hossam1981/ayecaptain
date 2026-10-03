@@ -51,6 +51,14 @@ These have broken the build multiple times. A code-review pass must explicitly c
   automated agent — no real location. They stay unverified until manually checked on a phone.
 - End responses with a short recap of what changed and what's still open.
 
+## Visual design system
+
+Before building or restyling any HUD badge, warning banner, rail button, or bottom-sheet-style
+panel, check `.claude/skills/ayecaptain-glass-design/SKILL.md` — the neon-glow glass recipe
+(exact color tokens per severity, the existing `GlassWarningCard` painter pattern to extend
+rather than duplicate) and the "one sheet shell, state-driven content, never stacked panels"
+architecture rule. Source reference images: `~/Downloads/ayecaptain_flutter/design_references/`.
+
 ## Dart/Flutter skills (`.agents/skills/`, from `dart-lang/skills` + `flutter/skills`)
 
 Before starting non-trivial Flutter work, scan this list for a fit — check it every time,
