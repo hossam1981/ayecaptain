@@ -561,6 +561,24 @@ String _wxIcon(int? code) {
   return '⛈️';
 }
 
+// Real photo assets exist for a subset of conditions (clear/partly-cloudy/rain + night) —
+// use those where available, fall back to the emoji glyphs above for the rest (cloudy, fog,
+// snow, thunder) rather than stretching a mismatched image over a condition it doesn't depict.
+Widget _wxIconWidget(int? code, {required double size, bool isNight = false}) {
+  String? asset;
+  if (isNight) {
+    asset = 'assets/icons/wx_moon_full.png';
+  } else if (code == 0) {
+    asset = 'assets/icons/wx_sun.png';
+  } else if (code != null && code <= 2) {
+    asset = 'assets/icons/wx_sun_cloud.png';
+  } else if (code != null && ((code >= 51 && code <= 67) || (code >= 80 && code <= 82))) {
+    asset = 'assets/icons/wx_rain_cloud.png';
+  }
+  if (asset != null) return Image.asset(asset, width: size, height: size, fit: BoxFit.contain);
+  return Text(isNight ? '🌙' : _wxIcon(code), style: TextStyle(fontSize: size * .82));
+}
+
 // ==================================================================================================
 // Batch C — sun/moon edge marker. Port of the PWA's `solarPos` + `sunEdge` (index.html:1144-1197):
 // a real ecliptic-coordinate solar-position solver, pinned to the viewport edge along its true
@@ -2045,6 +2063,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             onLocate: _startGps,
             onMob: _toggleMob,
             onMoreTools: _openMoreTools,
+            onBoatProfile: _openBoatProfile,
           )),
           // PWA desktop CSS (index.html:273): `#sheet{left:12px;right:auto;width:390px;...}`.
           // _NavShell is its own sibling widget above _BottomSheet (own shape/decoration,
@@ -2081,7 +2100,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               ),
               if (_picking || _waypoints.isNotEmpty) const SizedBox(height: 10),
               _BottomSheet(
-                weather: _weather, onEditProfile: _openBoatProfile,
+                weather: _weather,
                 window: bestWindow(_hourly, _profile),
                 hourly: _hourly, daily: _daily, profile: _profile,
                 tideStation: _tideStation, tides: _tides, tideUnit: _tideUnit,
@@ -3019,12 +3038,19 @@ class _BaseSwitcher extends StatelessWidget {
 // The four ad-hoc singleton buttons for fuel/anchor/forecast/smart moved into `_MoreToolsSheet`.
 class _RightRail extends StatelessWidget {
   final bool follow, picking, gpsOn, mobOn;
-  final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools;
+  final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools, onBoatProfile;
   const _RightRail({required this.follow, required this.picking, required this.gpsOn, required this.mobOn,
     required this.onFollow, required this.onGoto, required this.onLocate, required this.onMob,
-    required this.onMoreTools});
+    required this.onMoreTools, required this.onBoatProfile});
   @override
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
+        // Was the "Edit" text link inside the weather sheet header — moved here (its own
+        // glass icon button, like the map tools below it) per ayecaptain-glass-design
+        // SKILL.md. Green-tinted so it reads as a different category of action from the
+        // blue map-view tools and the red MOB button.
+        _btn(icon: Icons.sailing, active: false, onTap: onBoatProfile, tip: 'Boat profile',
+          accentColor: const Color(0xFF6FE8BC)),
+        const SizedBox(height: 8),
         _btn(icon: Icons.navigation, active: follow, onTap: onFollow, tip: 'Follow my boat'),
         const SizedBox(height: 8),
         _btn(icon: Icons.add_location_alt, active: picking, onTap: onGoto, tip: 'Go to a point'),
@@ -3040,7 +3066,8 @@ class _RightRail extends StatelessWidget {
   // the reference design (.claude/skills/ayecaptain-glass-design/SKILL.md), not a PWA port.
   // Active state keeps a filled accent disc behind the icon (the glass ring alone reads too
   // subtly as "on" at 46px) rather than swapping the whole button to solid navy like before.
-  Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip}) {
+  Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip,
+      Color? accentColor}) {
     return SizedBox(
       width: 46, height: 46,
       child: _GlassSurface(
@@ -3053,7 +3080,7 @@ class _RightRail extends StatelessWidget {
             child: InkWell(
               customBorder: const CircleBorder(),
               onTap: onTap,
-              child: Icon(icon, color: active ? Colors.white : const Color(0xFFB7E7FF)),
+              child: Icon(icon, color: active ? Colors.white : (accentColor ?? const Color(0xFFB7E7FF))),
             ),
           ),
         ),
@@ -3503,7 +3530,6 @@ class _BottomSheet extends StatefulWidget {
   final List<TidePoint> tides;
   final String tideUnit;
   final ValueChanged<String> onTideUnitChanged;
-  final VoidCallback onEditProfile;
   final BestWindow? window;
   final List<HourlyPoint> hourly;
   final List<DailyForecast> daily;
@@ -3512,7 +3538,7 @@ class _BottomSheet extends StatefulWidget {
   final ValueChanged<bool> onExpandedChanged;
   final bool showInstallPrompt;
   final VoidCallback onInstall;
-  const _BottomSheet({required this.weather, required this.onEditProfile,
+  const _BottomSheet({required this.weather,
     required this.window, required this.hourly, required this.daily,
     required this.tideStation, required this.tides, required this.tideUnit,
     required this.onTideUnitChanged,
@@ -3527,40 +3553,32 @@ class _BottomSheetState extends State<_BottomSheet> {
   double _dragDy = 0;          // accumulated vertical drag for swipe-to-toggle
   bool get _expanded => widget.expanded;
   void _setExpanded(bool v) => widget.onExpandedChanged(v);
-  // Fixed chrome shown above the scrollable content: grab handle + route row + boat header +
-  // warning banner. Extracted so it can go either above a separate scroll view (expanded) or
-  // stand alone at its natural compact size (collapsed).
+  // Fixed chrome shown above the scrollable content: grab handle + boat header. Extracted so
+  // it can go either above a separate scroll view (expanded) or stand alone at its natural
+  // compact size (collapsed).
+  // "Edit" used to live here as a text link (PWA #boatline, index.html:185-186) — moved to a
+  // dedicated boat-profile icon on the right rail instead (ayecaptain-glass-design SKILL.md);
+  // this header is now just the summary line + expand/collapse chevron.
   Widget _fixedChrome() => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-    // Grab handle — PWA #grab (index.html:81-82): 40×5 pill, rgba(15,42,68,.28) — dark navy
-    // translucent, sitting on the sheet's light gradient. (Previously tuned white/light,
-    // which only made sense when the sheet was wrongly dark navy — see panel colour fix below.)
+    // Grab handle — was PWA-exact dark-on-light (#grab, index.html:81-82); now light-on-glass
+    // to match the sheet's new dark background.
     Center(child: InkWell(
       onTap: () => _setExpanded(!_expanded),
       borderRadius: BorderRadius.circular(3),
       child: SizedBox(width: 60, height: 24, child: Center(
         child: Container(width: 40, height: 5,
-          decoration: BoxDecoration(color: const Color(0x470F2A44),
+          decoration: BoxDecoration(color: Colors.white.withOpacity(.30),
             borderRadius: BorderRadius.circular(3))),
       )),
     )),
-    // header — "Set up your boat" / boat summary + Edit + expand/collapse. PWA #boatline
-    // (index.html:185-186): no background, sits directly on the gradient, text colour
-    // var(--sea) #2E6F9E for both the name and the underlined "Edit" link.
     InkWell(
       onTap: () => _setExpanded(!_expanded),
       child: Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(children: [
-          Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xFF2E6F9E), size: 20),
+          Icon(_expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up, color: const Color(0xFFB7E7FF), size: 20),
           const SizedBox(width: 6),
-          Expanded(child: Text(_headerText(), style: const TextStyle(color: Color(0xFF2E6F9E), fontWeight: FontWeight.w800, fontSize: 15))),
-          Material(
-            color: Colors.transparent,
-            child: InkWell(onTap: widget.onEditProfile,
-              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: Text('Edit', style: TextStyle(color: Color(0xFF2E6F9E), fontWeight: FontWeight.w700,
-                  fontSize: 13, decoration: TextDecoration.underline)))),
-          ),
+          Expanded(child: Text(_headerText(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
         ]),
       ),
     ),
@@ -3586,41 +3604,34 @@ class _BottomSheetState extends State<_BottomSheet> {
         else if (_dragDy > 40 && _expanded) _setExpanded(false);
         _dragDy = 0;
       },
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        // PWA #sheet (index.html:79): `linear-gradient(180deg,#d3e8f6 0%,#e9e8d6 42%,#f4edd8 66%)`
-        // — a light sky-blue-to-sand gradient. Was wrongly a solid dark navy card.
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [Color(0xFFD3E8F6), Color(0xFFE9E8D6), Color(0xFFF4EDD8)],
-            stops: [0, .42, .66]),
-          borderRadius: BorderRadius.circular(14)),
-        // PWA index.html:79 `transition: transform .28s cubic-bezier(.2,.8,.2,1)`.
-        child: AnimatedSize(
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: _expanded
-            ? ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: sheetMaxH),
-                child: SingleChildScrollView(
-                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _fixedChrome(),
-                    // PWA #body (index.html:106): background:var(--paper) #F4F8FA, rounded top
-                    // corners — the actual scrollable content area sits on near-white, not the
-                    // gradient directly, with dark ink text throughout (was wrongly white).
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                      decoration: const BoxDecoration(color: Color(0xFFF4F8FA),
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-                        children: _expandedBody()),
-                    ),
-                  ]),
-                ),
-              )
-            : _fixedChrome(),
+      // Was PWA-exact light sky-to-sand gradient (#sheet, index.html:79) — deliberately
+      // departed from that here, same glass recipe as _NavShell/the rail buttons
+      // (ayecaptain-glass-design SKILL.md), not a PWA port.
+      child: _GlassSurface(
+        severity: GlassSeverity.nav, borderRadius: 14,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: _expanded
+              ? ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: sheetMaxH),
+                  child: SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      _fixedChrome(),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(0, 12, 0, 4),
+                        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+                          children: _expandedBody()),
+                      ),
+                    ]),
+                  ),
+                )
+              : _fixedChrome(),
+          ),
         ),
       ),
     );
@@ -3648,7 +3659,7 @@ class _BottomSheetState extends State<_BottomSheet> {
       const SizedBox(height: 10),
       _DayTabs(daily: widget.daily, selected: _dayIdx, onSelect: (i) => setState(() => _dayIdx = i)),
       const SizedBox(height: 8),
-      Text('Best time to boat', style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.9),
+      const Text('Best time to boat', style: TextStyle(color: Colors.white,
         fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
       const SizedBox(height: 4),
       _HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
@@ -3679,22 +3690,21 @@ class _BottomSheetState extends State<_BottomSheet> {
 
   Widget _weatherBlock(Weather w) {
     final isNight = w.sunset != null && DateTime.now().isAfter(w.sunset!);
-    final icon = isNight ? '🌙' : _wxIcon(w.weatherCode);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // PWA: temp 42 pt weight-700 + condition small top-right (index.html #wxhead).
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(icon, style: const TextStyle(fontSize: 38)),
+        _wxIconWidget(w.weatherCode, size: 42, isNight: isNight),
         const SizedBox(width: 8),
         Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
           child: Text('${w.tempF?.round() ?? '—'}°',
-            style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 42, fontWeight: FontWeight.w800, height: 1))),
+            style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, height: 1))),
         const SizedBox(width: 2),
         const Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
-          child: Text('F', style: TextStyle(color: Color(0xAA0F2A44), fontSize: 15, fontWeight: FontWeight.w700))),
+          child: Text('F', style: TextStyle(color: Color(0xFFB7E7FF), fontSize: 15, fontWeight: FontWeight.w700))),
         const Spacer(),
         Padding(padding: const EdgeInsets.only(top: 2),
           child: Text(_condText(w.weatherCode),
-            style: const TextStyle(color: Color(0xCC0F2A44), fontSize: 14, fontWeight: FontWeight.w600))),
+            style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 14, fontWeight: FontWeight.w600))),
       ]),
       const SizedBox(height: 10),
       // PWA grid gap 12 px.
@@ -3711,8 +3721,8 @@ class _BottomSheetState extends State<_BottomSheet> {
   }
 
   Widget _wxCell(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-    Text(label, style: const TextStyle(color: Color(0xAA0F2A44), fontSize: 10, letterSpacing: 0.5)),
-    Text(value, style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 14, fontWeight: FontWeight.w700)),
+    Text(label, style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 10, letterSpacing: 0.5)),
+    Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
   ]);
 
 }
@@ -3756,8 +3766,9 @@ class _BestWindowPill extends StatelessWidget {
         Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
         const SizedBox(width: 8),
         Text('Best window: $day ${_fmtTime(win.start)}–${_fmtTime(win.end)} · $label',
-          // PWA #bestWin{color:var(--ink)} (index.html:226) — dark text on the light tinted pill.
-          style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 12.5)),
+          // PWA #bestWin{color:var(--ink)} (index.html:226) was dark text on a light tinted
+          // pill — inverted to white now that the sheet itself is dark glass, not light paper.
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
       ]),
     );
   }
@@ -3789,13 +3800,20 @@ class _DayTabs extends StatelessWidget {
         // PWA #days button (index.html:111-112): inactive rgba(15,42,68,.10) bg + ink text;
         // active var(--ink) bg + white text.
         return Padding(padding: const EdgeInsets.only(right: 8),
-          child: Material(color: sel ? const Color(0xFF0F2A44) : const Color(0x1A0F2A44),
-            borderRadius: BorderRadius.circular(999),
-            child: InkWell(borderRadius: BorderRadius.circular(999), onTap: () => onSelect(i),
-              child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Text(labels[i], style: TextStyle(
-                  color: sel ? Colors.white : const Color(0xFF0F2A44),
-                  fontWeight: FontWeight.w700, fontSize: 13))))),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: sel ? const LinearGradient(colors: [Color(0xE65FB3E8), Color(0x8019C8FF)]) : null,
+              color: sel ? null : Colors.white.withOpacity(.08),
+              border: sel ? Border.all(color: Colors.white.withOpacity(.3)) : null,
+            ),
+            child: Material(color: Colors.transparent, borderRadius: BorderRadius.circular(999),
+              child: InkWell(borderRadius: BorderRadius.circular(999), onTap: () => onSelect(i),
+                child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Text(labels[i], style: TextStyle(
+                    color: sel ? Colors.white : const Color(0xFF8FB6D6),
+                    fontWeight: FontWeight.w700, fontSize: 13))))),
+          ),
         );
       })),
     );
@@ -3811,7 +3829,7 @@ class _HourlyTable extends StatelessWidget {
   Widget build(BuildContext context) {
     if (hourly.isEmpty) {
       return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
-        child: Text('Loading hourly forecast…', style: TextStyle(color: Color(0xAA0F2A44), fontSize: 12)));
+        child: Text('Loading hourly forecast…', style: TextStyle(color: Color(0xFF8FB6D6), fontSize: 12)));
     }
     final today = DateTime.now();
     final target = DateTime(today.year, today.month, today.day).add(Duration(days: dayIdx));
@@ -3824,7 +3842,7 @@ class _HourlyTable extends StatelessWidget {
     if (rows.isEmpty) {
       return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
         child: Text('No more daylight hours today — swipe to Fri for tomorrow.',
-          style: TextStyle(color: Color(0xAA0F2A44), fontSize: 12)));
+          style: TextStyle(color: Color(0xFF8FB6D6), fontSize: 12)));
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows.map((h) => _row(h)).toList());
   }
@@ -3835,17 +3853,17 @@ class _HourlyTable extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(children: [
-        SizedBox(width: 46, child: Text(_hourLabel(h.t), style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w700, fontSize: 12))),
+        SizedBox(width: 46, child: Text(_hourLabel(h.t), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
         Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
         const SizedBox(width: 6),
         SizedBox(width: 40, child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 11))),
-        Text(_wxIcon(h.weatherCode), style: const TextStyle(fontSize: 14)),
+        _wxIconWidget(h.weatherCode, size: 16),
         const SizedBox(width: 4),
-        SizedBox(width: 36, child: Text('${h.tempF?.round() ?? '—'}°', style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 12, fontWeight: FontWeight.w700))),
-        SizedBox(width: 70, child: Text('${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}', style: const TextStyle(color: Color(0xFF0F2A44), fontSize: 11))),
-        SizedBox(width: 42, child: Text('g${h.gustKt?.round() ?? '—'}', style: const TextStyle(color: Color(0xCC0F2A44), fontSize: 11))),
+        SizedBox(width: 36, child: Text('${h.tempF?.round() ?? '—'}°', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700))),
+        SizedBox(width: 70, child: Text('${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}', style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 11))),
+        SizedBox(width: 42, child: Text('g${h.gustKt?.round() ?? '—'}', style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 11))),
         if (h.precipPct != null && h.precipPct! > 0)
-          Text('${h.precipPct!.round()}%', style: const TextStyle(color: Color(0xCC0F2A44), fontSize: 11)),
+          Text('${h.precipPct!.round()}%', style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 11)),
       ]),
     );
   }
@@ -4620,20 +4638,16 @@ class _TidesSheetState extends State<TidesSheet> {
     final windowCurve = curve.where((s) => !s.t.isBefore(t0) && !s.t.isAfter(t1)).toList();
     final windowHilo = tides.where((p) => !p.t.isBefore(t0) && !p.t.isAfter(t1)).toList();
     final nextFour = tides.where((p) => !p.t.isBefore(now)).take(4).toList();
-    return Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(begin: Alignment(0, -1), end: Alignment(0, 1),
-            colors: [Color(0xFF0B2740), Color(0xFF061A2D)]),
-          borderRadius: BorderRadius.all(Radius.circular(20)),
-          boxShadow: [BoxShadow(color: Color(0x40000000), blurRadius: 24, offset: Offset(0, 10))]),
-        // This card was originally a full-screen tide modal (TODO.md) and got embedded
-        // directly into the "Set up your boat" sheet, which caps at 50% of screen height
-        // total (_BottomSheetState.sheetMaxH) — shared with the weather block, day tabs and
-        // hourly table above it. Sizing below is tightened throughout (padding, gaps, chart
-        // height, card/footer text) so this one sub-section doesn't dwarf that whole budget.
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    // Used to be its own dark-navy card (own gradient/shadow/radius) hand-embedded inside the
+    // light "Set up your boat" sheet — a mismatch (dark card floating in a light sheet) that
+    // only existed because this was originally a standalone full-screen tide modal (TODO.md).
+    // Now that the sheet itself is glass (ayecaptain-glass-design SKILL.md), this is just a
+    // divider + continuation of the same card, not a nested one.
+    // Sizing below is tightened throughout (padding, gaps, chart height, card/footer text) so
+    // this one sub-section doesn't dwarf the sheet's 50%-of-screen height budget
+    // (_BottomSheetState.sheetMaxH), shared with the weather block/day tabs/hourly table above.
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Container(height: 1, color: Colors.white.withOpacity(.10), margin: const EdgeInsets.only(bottom: 12)),
           _header(),
           const SizedBox(height: 8),
           _legend(),
@@ -4659,8 +4673,7 @@ class _TidesSheetState extends State<TidesSheet> {
           _hiLoCards(nextFour),
           const SizedBox(height: 8),
           _footer(),
-        ]),
-    );
+        ]);
   }
 
   Widget _header() {
@@ -4732,23 +4745,25 @@ class _TidesSheetState extends State<TidesSheet> {
     Widget card(TidePoint p) {
       final isHigh = p.type == 'H';
       final color = isHigh ? const Color(0xFF35E96A) : const Color(0xFFFF5A55);
-      return Container(padding: const EdgeInsets.all(11),
-        decoration: BoxDecoration(color: const Color(0xFF0B2C47),
-          border: Border.all(color: const Color(0xFF194762)), borderRadius: BorderRadius.circular(16),
-          boxShadow: const [BoxShadow(color: Color(0x38000000), blurRadius: 14, offset: Offset(0, 6))]),
+      // Sized for this embedded context, not the original standalone-modal constants (11px
+      // padding/30px ring/17px time) — those read as oversized once placed among the sheet's
+      // other compact rows; caught via a live demo pass, not a style preference.
+      return Container(padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+        decoration: BoxDecoration(color: const Color(0x8C0B2C47),
+          border: Border.all(color: const Color(0x33194762)), borderRadius: BorderRadius.circular(12)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 30, height: 30,
+          Container(width: 22, height: 22,
             decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF17313D),
-              border: Border.all(color: color, width: 3)),
-            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 15)),
-          const SizedBox(width: 10),
+              border: Border.all(color: color, width: 2)),
+            child: Icon(isHigh ? Icons.arrow_upward : Icons.arrow_downward, color: color, size: 10)),
+          const SizedBox(width: 8),
           Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(isHigh ? 'High Tide' : 'Low Tide', maxLines: 1,
-              style: const TextStyle(color: Color(0xFFD7ECFF), fontSize: 11)),
+              style: const TextStyle(color: Color(0xFF9FC1DE), fontSize: 9)),
             Text(_fmtTime(p.t), maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17, height: 1.15)),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13, height: 1.2)),
             Text('${_fmtV(p.v)} $_unit', maxLines: 1,
-              style: const TextStyle(color: Color(0xFF8FB5D6), fontSize: 12)),
+              style: const TextStyle(color: Color(0xFF8FB5D6), fontSize: 10)),
           ])),
         ]));
     }
@@ -4833,12 +4848,16 @@ class _TidePainter extends CustomPainter {
       begin: Alignment.topCenter, end: Alignment.bottomCenter,
       colors: [Color(0xFF0B2A44), Color(0xFF061A2D)]).createShader(bgRect));
 
-    // 2) Grid lines every 2 tide units.
+    // 2) Grid lines every 2 tide units, with a value label on each — the lines existed before
+    // but had no numbers alongside them; added per live feedback on the preview (not present
+    // in the original design, not just a contrast fix).
     final grid = Paint()..color = const Color(0xFF1D4C6A).withOpacity(.5)..strokeWidth = 0.7;
     final vFirst = (vmin / 2).ceil() * 2.0;
     for (double v = vFirst; v <= vmax; v += 2) {
       final gy = y(v);
       canvas.drawLine(Offset(mL, gy), Offset(mL + plotW, gy), grid);
+      _text(canvas, v.round().toString(), Offset(mL - 6, gy), 9.5, FontWeight.w600,
+        const Color(0xFFE3F0FA), center: true);
     }
     // X-ticks every 12 h (12 AM, 12 PM) — draw thin vertical guide.
     var tick = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
@@ -4861,8 +4880,18 @@ class _TidePainter extends CustomPainter {
       final xc = x(t);
       // waterline at 80% down (PWA magic wl=0.80)
       final rect = Rect.fromLTWH(xc - sw / 2, horizonY - sh * 0.80, sw, sh);
+      // The sun assets' own edge alpha doesn't fully reach 0 right at the bounding box —
+      // visible as a faint box behind the icon once composited on the glass card (caught via
+      // a live demo, not guessed). Draw into a layer, then knock the edges out with a radial
+      // gradient in dstIn so only the center stays, feathering to the card color at the rim.
+      canvas.saveLayer(rect, Paint());
       canvas.drawImageRect(img, Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
         rect, Paint()..color = Colors.white.withOpacity(.95));
+      canvas.drawRect(rect, Paint()
+        ..shader = ui.Gradient.radial(rect.center, rect.longestSide * .58,
+          const [Colors.white, Colors.white, Colors.transparent], const [0, .62, 1])
+        ..blendMode = BlendMode.dstIn);
+      canvas.restore();
     }
     for (final t in sunrises) { drawSun(sunriseImg, t); }
     for (final t in sunsets) { drawSun(sunsetImg, t); }
@@ -4870,8 +4899,14 @@ class _TidePainter extends CustomPainter {
     // 4) Ocean band under the horizon.
     if (oceanImg != null) {
       final rect = Rect.fromLTWH(mL, horizonY - 5, plotW, (base - horizonY) + 14);
+      // ocean.png fades to transparent at its own left/right edges (measured: solid from
+      // x≈80 to x≈680 of 760px) — stretching the whole image left that fade visible mid-band
+      // once drawn full-width. Crop to the solid center slice instead (same asset, same
+      // stretch, just not the fading parts of it).
+      final srcW = oceanImg!.width.toDouble();
+      final cropL = srcW * (80 / 760), cropR = srcW * (680 / 760);
       canvas.drawImageRect(oceanImg!,
-        Rect.fromLTWH(0, 0, oceanImg!.width.toDouble(), oceanImg!.height.toDouble()),
+        Rect.fromLTWH(cropL, 0, cropR - cropL, oceanImg!.height.toDouble()),
         rect, Paint()..color = Colors.white.withOpacity(.8));
     }
 
@@ -4953,7 +4988,7 @@ class _TidePainter extends CustomPainter {
     }
 
     // 9) Y-axis label and x-tick times.
-    _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 9, FontWeight.w600, const Color(0xAA9CC1DE), center: true, rotate: -math.pi / 2);
+    _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 9, FontWeight.w600, const Color(0xFFCFE3F2), center: true, rotate: -math.pi / 2);
     var tt = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
     double? lastTickX;
     while (tt.isBefore(t1)) {

@@ -98,11 +98,12 @@ a route bar *and* a separate MOB panel both visible at once). Instead:
 - Sheet height is **content-driven** (wrap its content, cap with a max-height only for
   genuinely long scrollable content like the weather/hourly panel) — never a fixed tall box
   with empty space to "make room" for buttons that could just sit in their own row.
-- The **weather/boat-profile sheet stays light** (PWA-exact, `main.dart:3504-3509` /
-  `index.html:79`) — the dark glass treatment is for the nav/route/MOB region only, not the
-  weather content. Confirmed from the reference set's own 3rd panel (`Marine Navigation App
-  UI Comparison.png`), which shows the weather/conditions panel as white, separate from the
-  dark nav bar.
+- ~~The weather/boat-profile sheet stays light (PWA-exact)~~ — **overridden by the user.**
+  This was grounded in the reference set's own 3rd panel showing a white conditions panel
+  separate from the dark nav bar — a real signal, not a guess, but the user asked for the
+  weather sheet in glass anyway once they saw both side by side. It's glass now too (see the
+  gap list below). Treat "the references say X" as a strong default, not an override of an
+  explicit, informed user request to do otherwise.
 
 ## 3. Workflow when applying this elsewhere
 
@@ -145,6 +146,34 @@ Same pattern already established this session — don't skip steps:
 - Fuel burn-rate (GPH) and tank-remaining-% have no backing state anywhere yet — the
   Waypoint Navigation and MOB content intentionally omit the demo's fuel-burn-rate/%-
   remaining and route-progress-bar elements for this reason (still true, not newly closed).
+- ~~`_BottomSheet` (weather/boat-profile sheet) is light, PWA-exact~~ — **done, deliberately
+  reversed.** Earlier guidance in this file said to keep it light, grounded in the reference
+  set's own white "Conditions" panel — the user later asked for it in glass anyway. It's now
+  `_GlassSurface(severity: nav)`, same as everything else; `TidesSheet` no longer has its own
+  nested dark card (that was a pre-existing mismatch — a dark card hand-embedded in a light
+  sheet — now just a divider + continuation of the same glass card). The "Edit" text link
+  moved off the sheet header onto a new green-tinted boat-profile icon at the top of
+  `_RightRail` (`Icons.sailing`).
+- Real weather-condition images now exist (`assets/icons/wx_sun.png`, `wx_sun_cloud.png`,
+  `wx_rain_cloud.png`, `wx_moon_full.png`, `wx_moon_half.png`) and are used via `_wxIconWidget()`
+  in `_weatherBlock`/`_HourlyTable` in place of ☀️/🌤️/🌙 emoji. No asset yet for plain overcast
+  (☁️), fog, snow, or thunder — those still fall back to emoji. The separate "7-day forecast"
+  popover (`main.dart` ~line 4564) wasn't touched — still emoji, out of scope for this pass.
+  **Lesson from sourcing these assets**: verify actual transparency with a real pixel check
+  (`PIL`/`sips -g hasAlpha`, or just sample corner/edge pixel alpha directly) before trusting
+  how an image *looks* in a preview tool — this session's own preview rendering was unreliable
+  both ways (showed a black matte on files that were actually transparent, and didn't surface
+  a real soft-edge alpha issue on `wx_sun.png` that only showed up once composited in the app).
+- `_TidePainter` gained three fixes caught via a live demo, not present in the original
+  design: (1) Y-axis value labels (0/2/4/6) next to the grid lines — these never existed, not
+  a contrast fix on something present; (2) the ocean-band image is now cropped to its solid
+  center slice (x≈80–680 of 760px) instead of stretching the whole asset including its own
+  edge fade; (3) the sun images are drawn into a layer and masked with a radial gradient
+  (`BlendMode.dstIn`) so their edges blend into the card instead of showing a faint box —
+  the asset's own alpha doesn't fully reach 0 at its bounding-box edge.
+- `_hiLoCards()` (tide hi/lo footer cards) shrunk from its original standalone-modal sizing
+  (11px padding/30px ring/17px time) to roughly 70% scale — that sizing predates this card
+  being embedded in a shared, denser sheet and reads oversized next to everything else now.
 - ~~`_RightRail` buttons are flat Material circles, no glass~~ — **done.** The 4 regular
   buttons (`_btn`, `main.dart:3069`) now use `GlassSeverity.nav` glass (circular, via
   `ClipOval` + the shared painters at `radius: 23`); active state is a filled accent disc

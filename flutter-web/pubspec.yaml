@@ -36,3 +36,8 @@ flutter:
     - assets/icons/sunrise.png
     - assets/icons/sunset.png
     - assets/icons/ocean.png
+    - assets/icons/wx_sun.png
+    - assets/icons/wx_sun_cloud.png
+    - assets/icons/wx_rain_cloud.png
+    - assets/icons/wx_moon_full.png
+    - assets/icons/wx_moon_half.png
