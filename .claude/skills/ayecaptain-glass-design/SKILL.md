@@ -14,9 +14,15 @@ as the functionality spec, same as the PWA-parity rule in the top-level `CLAUDE.
 ## 1. The glass recipe
 
 Every HUD badge, warning banner, rail accent, and sheet panel uses the **same layered
-recipe**, just retinted per severity. It already exists and ships today as
-`GlassWarningCard` / `_WarningGlassSurface` / `_WarningEdgeGlow` in
-`flutter-web/lib/main.dart:3813-4061` — don't reinvent it, extend it with new color tokens.
+recipe**, just retinted per severity. It already exists and ships today as a reusable
+`_GlassSurface` widget (composing `_WarningGlassSurface`/`_WarningEdgeGlow`) in
+`flutter-web/lib/main.dart` — **use `_GlassSurface(severity:..., borderRadius:... or
+circular: true, child:...)` directly, don't hand-nest `CustomPaint`/`ClipRRect or
+ClipOval`/`BackdropFilter`/`CustomPaint` again** (that nesting used to be duplicated three
+times — `GlassWarningCard`, `_RouteBar`, the rail buttons — before being extracted).
+For a circular shape, leave `edgeRadius` unset: `_WarningEdgeGlow` auto-clamps an
+oversized radius down to a true half-size circle, so you don't need to know the exact
+pixel size of whatever you're wrapping.
 
 Layer order (back to front):
 1. **Tinted base fill** — a dark, mostly-opaque color wash (not black) behind a blur.
@@ -105,9 +111,9 @@ Same pattern already established this session — don't skip steps:
    grounded in the real field names/values from step 1. Get it approved.
 3. **Ask before touching `main.dart`.** Porting a preview into real Dart is still a code
    change — confirm first, same as the standing "ask before push" rule.
-4. Port using the existing `GlassWarningCard`/`_WarningGlassSurface`/`_WarningEdgeGlow`
-   painters, generalized with a new color-token parameter, rather than writing a parallel
-   implementation.
+4. Port using the existing `_GlassSurface` widget (new severity tokens go in
+   `_WarningGlassSurface`/`_WarningEdgeGlow`'s switch expressions, not a parallel
+   implementation).
 
 ## Known gaps as of 2026-10-03 (update this list as they're closed)
 

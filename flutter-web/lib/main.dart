@@ -3092,25 +3092,17 @@ class _RightRail extends StatelessWidget {
   Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip}) {
     return SizedBox(
       width: 46, height: 46,
-      child: CustomPaint(
-        foregroundPainter: const _WarningEdgeGlow(severity: GlassSeverity.nav, radius: 23),
-        child: ClipOval(
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-            child: CustomPaint(
-              painter: const _WarningGlassSurface(severity: GlassSeverity.nav),
-              child: Material(
-                color: active ? const Color(0xFF2E6F9E).withOpacity(.55) : Colors.transparent,
-                shape: const CircleBorder(),
-                child: Tooltip(
-                  message: tip,
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: onTap,
-                    child: Icon(icon, color: active ? Colors.white : const Color(0xFFB7E7FF)),
-                  ),
-                ),
-              ),
+      child: _GlassSurface(
+        severity: GlassSeverity.nav, circular: true,
+        child: Material(
+          color: active ? const Color(0xFF2E6F9E).withOpacity(.55) : Colors.transparent,
+          shape: const CircleBorder(),
+          child: Tooltip(
+            message: tip,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onTap,
+              child: Icon(icon, color: active ? Colors.white : const Color(0xFFB7E7FF)),
             ),
           ),
         ),
@@ -3375,45 +3367,34 @@ class _RouteBar extends StatelessWidget {
     if (!picking && !_has) return const SizedBox.shrink();
     // Calm blue/cyan glass (GlassSeverity.nav) — same layered recipe as the warning
     // banners (.claude/skills/ayecaptain-glass-design/SKILL.md), not a new one-off style.
-    // Radius 14 matches this bar's own prior flat corner radius — _WarningEdgeGlow's rim
-    // is told that explicitly so it doesn't default to the warning cards' 18.
-    return CustomPaint(
-      foregroundPainter: const _WarningEdgeGlow(severity: GlassSeverity.nav, radius: 13.2),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-          child: CustomPaint(
-            painter: const _WarningGlassSurface(severity: GlassSeverity.nav),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              // Stats row above a separate buttons row — Undo/GPX/Clear sharing one Row with
-              // the stats + Start/Stop could overflow its width once all 4 buttons show
-              // together (any time a route exists), independent of the glass styling above.
-              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                  _stat(_has ? '$waypointCount' : '0', _has ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
-                  _has ? _etaStat() : _stat('tap map', 'to add'),
-                ]),
-                const SizedBox(height: 9),
-                Row(children: [
-                  // flex:2 vs the small buttons' flex:1 — Start/Stop is the primary action,
-                  // it should read bigger than Undo/GPX/Clear, not get squeezed to its own
-                  // tightest-fit width while they stretch to fill the rest.
-                  Expanded(flex: 2, child: _bigBtn(navigating ? 'Stop' : 'Start',
-                    navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
-                    navigating ? onStop : onStart)),
-                  const SizedBox(width: 6),
-                  Expanded(child: _smallBtn('Undo', onUndoRoute)),
-                  const SizedBox(width: 6),
-                  Expanded(child: _smallBtn('GPX', onGpx)),
-                  const SizedBox(width: 6),
-                  Expanded(child: _smallBtn('Clear', onClearRoute)),
-                ]),
-              ]),
-            ),
-          ),
-        ),
+    return _GlassSurface(
+      severity: GlassSeverity.nav, borderRadius: 14,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        // Stats row above a separate buttons row — Undo/GPX/Clear sharing one Row with
+        // the stats + Start/Stop could overflow its width once all 4 buttons show
+        // together (any time a route exists), independent of the glass styling above.
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            _stat(_has ? '$waypointCount' : '0', _has ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
+            _has ? _etaStat() : _stat('tap map', 'to add'),
+          ]),
+          const SizedBox(height: 9),
+          Row(children: [
+            // flex:2 vs the small buttons' flex:1 — Start/Stop is the primary action,
+            // it should read bigger than Undo/GPX/Clear, not get squeezed to its own
+            // tightest-fit width while they stretch to fill the rest.
+            Expanded(flex: 2, child: _bigBtn(navigating ? 'Stop' : 'Start',
+              navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
+              navigating ? onStop : onStart)),
+            const SizedBox(width: 6),
+            Expanded(child: _smallBtn('Undo', onUndoRoute)),
+            const SizedBox(width: 6),
+            Expanded(child: _smallBtn('GPX', onGpx)),
+            const SizedBox(width: 6),
+            Expanded(child: _smallBtn('Clear', onClearRoute)),
+          ]),
+        ]),
       ),
     );
   }
@@ -3942,32 +3923,60 @@ class GlassWarningCard extends StatelessWidget {
         child: Padding(padding: const EdgeInsets.only(left: 15), child: iconButton));
     }
 
+    return _GlassSurface(
+      severity: severity, borderRadius: 18, blurSigma: 5,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          iconButton,
+          const SizedBox(width: 12),
+          Expanded(child: content),
+          if (onDismiss != null) ...[
+            const SizedBox(width: 8),
+            Container(width: .7, height: 34, color: glow.withOpacity(.70)),
+            const SizedBox(width: 3),
+            _GlassCloseButton(onTap: onDismiss!),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+// Shared glass-card shell — composes the layered recipe (edge glow painted over a
+// blurred, tinted, reflective fill) used by GlassWarningCard, _RouteBar, and the
+// right-rail buttons. One place to adjust if the recipe itself ever changes, instead of
+// three hand-nested CustomPaint/Clip/BackdropFilter stacks drifting apart over time.
+// For `circular: true`, `edgeRadius` is left at its large default so _WarningEdgeGlow's
+// own RRect clamps it down to a true half-size circle regardless of the child's actual
+// size — avoids hardcoding a radius that only happens to match one particular button size.
+class _GlassSurface extends StatelessWidget {
+  final GlassSeverity severity;
+  final Widget child;
+  final double borderRadius;
+  final bool circular;
+  final double blurSigma;
+  final double? edgeRadius;
+  const _GlassSurface({
+    required this.severity, required this.child,
+    this.borderRadius = 14, this.circular = false, this.blurSigma = 6, this.edgeRadius,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final blurred = BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+      child: CustomPaint(painter: _WarningGlassSurface(severity: severity), child: child),
+    );
     return CustomPaint(
       // Paint after the clipped glass: its tint must not dim the neon or hotspots.
-      foregroundPainter: _WarningEdgeGlow(severity: severity),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: CustomPaint(
-            painter: _WarningGlassSurface(severity: severity),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                iconButton,
-                const SizedBox(width: 12),
-                Expanded(child: content),
-                if (onDismiss != null) ...[
-                  const SizedBox(width: 8),
-                  Container(width: .7, height: 34, color: glow.withOpacity(.70)),
-                  const SizedBox(width: 3),
-                  _GlassCloseButton(onTap: onDismiss!),
-                ],
-              ]),
-            ),
-          ),
-        ),
+      foregroundPainter: _WarningEdgeGlow(
+        severity: severity,
+        radius: edgeRadius ?? (circular ? 999 : borderRadius - .8),
       ),
+      child: circular
+        ? ClipOval(child: blurred)
+        : ClipRRect(borderRadius: BorderRadius.circular(borderRadius), child: blurred),
     );
   }
 }
