@@ -76,8 +76,9 @@ architecture, exact nav/MOB hex values) published earlier this session.
 
 ## 2. Panel architecture: one shell, swapped content — never stacked
 
-The map screen must never show two permanent panels doing the same job (e.g. a route bar
-*and* a separate MOB panel both visible at once). Instead:
+**Implemented** as `_NavShell` (route planning / waypoint navigation / MOB — see the gap
+list below). The map screen must never show two permanent panels doing the same job (e.g.
+a route bar *and* a separate MOB panel both visible at once). Instead:
 
 - There is **one bottom-sheet region** whose content is driven by app state, not multiple
   independent widgets stacked vertically. Model it as an enum-like set of states
@@ -88,8 +89,12 @@ The map screen must never show two permanent panels doing the same job (e.g. a r
   above it.
 - The floating right-rail (Follow / Go-to / Locate / More / **MOB**) is separate from the
   sheet and stays on screen regardless of sheet state — the MOB button lives there
-  (`_RightRail._mobButton()`, `main.dart:3101`), not inside the sheet itself. Tapping it
-  switches the *existing* sheet into MOB state; it doesn't spawn a new widget.
+  (`_RightRail._mobButton()`), not inside the sheet itself. Tapping it switches the
+  *existing* sheet into MOB state; it doesn't spawn a new widget.
+- Mode entry must never be gated on `_me != null` (GPS) — actions like Start/MOB take
+  effect without GPS, so the mode switch must too. Pass `_me ?? _homeCenter` as the
+  position and let content gracefully show `—` for anything that genuinely can't be
+  computed (e.g. ETA at 0 speed), rather than hiding the whole mode change.
 - Sheet height is **content-driven** (wrap its content, cap with a max-height only for
   genuinely long scrollable content like the weather/hourly panel) — never a fixed tall box
   with empty space to "make room" for buttons that could just sit in their own row.
@@ -123,11 +128,23 @@ Same pattern already established this session — don't skip steps:
   `_WarningEdgeGlow` so callers with a different corner radius than the warning cards' 18 can
   pass their own). Amber/red output is pixel-identical to before — the new `nav` branch is
   additive, not a rewrite of the existing severities.
-- `_NavBar` (`main.dart:2721`) still lives in the top HUD, not the bottom sheet — merging it
-  into a single state-driven bottom shell per §2 is an architecture change, not done yet.
-- `_MobHud` (`main.dart:4354`) only computes distance + bearing; ETA-to-MOB and live SOG
-  would need adding if/when MOB becomes a bottom-sheet state instead of a top-HUD card.
-- Fuel burn-rate (GPH) and tank-remaining-% have no backing state anywhere yet.
+- ~~`_NavBar`/`_MobHud` live in the top HUD, not merged into one state-driven bottom
+  shell~~ — **done.** `_RouteBar`/`_NavBar`/`_MobHud` are gone; replaced by `_NavShell`
+  (`main.dart`, search `class _NavShell`), a single `_GlassSurface`-wrapped widget with 3
+  mutually-exclusive modes (`_NavMode.planning/navigating/mob`) computed once from existing
+  state (`_mobPoint`/`_navigating`/`_waypoints`) — no new state model introduced. MOB takes
+  priority over navigating, which takes priority over planning. Mode entry is deliberately
+  NOT gated on `_me != null` (an earlier draft was, and silently fell back to showing
+  Planning again when Start/MOB was tapped without GPS — caught via live testing, fixed by
+  passing `me: _me ?? _homeCenter`, the same fallback `_toggleMob` already used). Added a
+  4th `GlassSeverity.mob` (distinct dark/saturated red, `#190A15`/`#FF4055`) since MOB is a
+  different urgency register than the warning-red severity. ETA-to-MOB and live SOG (the
+  previously-flagged `_MobHud` gap) are now both surfaced — both were already fully
+  computable from existing real data (distance + live speed), just not previously exposed;
+  ETA shows `—` rather than a fabricated number when speed is 0.
+- Fuel burn-rate (GPH) and tank-remaining-% have no backing state anywhere yet — the
+  Waypoint Navigation and MOB content intentionally omit the demo's fuel-burn-rate/%-
+  remaining and route-progress-bar elements for this reason (still true, not newly closed).
 - ~~`_RightRail` buttons are flat Material circles, no glass~~ — **done.** The 4 regular
   buttons (`_btn`, `main.dart:3069`) now use `GlassSeverity.nav` glass (circular, via
   `ClipOval` + the shared painters at `radius: 23`); active state is a filled accent disc

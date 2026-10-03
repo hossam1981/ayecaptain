@@ -2016,20 +2016,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 onDismiss: () => setState(() => _dismissedBoatWarningSeverity = boatWarning.severity),
               ),
             ],
-            if (_mobPoint != null && _me != null) ...[
-              const SizedBox(height: 8),
-              _MobHud(from: _me!, to: _mobPoint!, onClear: _toggleMob),
-            ],
+            // MOB and active-navigation summaries used to float here as separate top-HUD
+            // cards (_MobHud/_NavBar) — both now live in _NavShell below, as states of the
+            // same region instead of independent widgets. Anchor watch is a different
+            // feature, not part of that merge, and stays here untouched.
             if (_anchorPoint != null && _me != null) ...[
               const SizedBox(height: 8),
               _AnchorHud(from: _me!, to: _anchorPoint!, radiusFt: _anchorRadiusFt, breached: _anchorBreached,
                 onPlus: () => _bumpAnchor(25), onMinus: () => _bumpAnchor(-25), onStop: _toggleAnchor),
-            ],
-            if (_navigating && _waypoints.isNotEmpty && _legIdx < _waypoints.length && _me != null) ...[
-              const SizedBox(height: 8),
-              _NavBar(from: _me!, target: _waypoints[_legIdx], legIdx: _legIdx, totalWps: _waypoints.length,
-                  nmToFinal: _routeNm(), etaMin: _etaMin(), headingDeg: _heading,
-                  cruiseKt: _profile.cruise, gal: _fuelGal(), onDone: _stopRide),
             ],
           ])),
           // Tap-catcher — a transparent full-screen layer that closes the sheet when the user
@@ -2053,21 +2047,37 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             onMoreTools: _openMoreTools,
           )),
           // PWA desktop CSS (index.html:273): `#sheet{left:12px;right:auto;width:390px;...}`.
-          // #routebar (index.html:66) is its own fixed-position element, independent of #sheet —
-          // stacked here as a true sibling widget (own shape/decoration) with a gap between them,
-          // not nested inside the sheet's Container/decoration.
+          // _NavShell is its own sibling widget above _BottomSheet (own shape/decoration,
+          // a gap between them), not nested inside the sheet's Container/decoration — same
+          // separate-element relationship index.html keeps between #routebar and #sheet,
+          // even though _NavShell itself now covers more than #routebar alone did.
           Positioned(left: 12, bottom: 12,
             right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
             width: MediaQuery.sizeOf(context).width >= 820 ? 390 : null,
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              _RouteBar(
+              _NavShell(
+                // MOB takes priority over navigating, which takes priority over plain
+                // planning. Deliberately NOT gated on _me != null — _startRide()/_toggleMob()
+                // both take effect without GPS, so the mode switch (and the Stop/End Route/
+                // Stop Guidance button appearing) must too; only the distance/bearing shown
+                // fall back to home-center below when there's no real fix yet.
+                mode: _mobPoint != null
+                  ? _NavMode.mob
+                  : (_navigating && _waypoints.isNotEmpty && _legIdx < _waypoints.length
+                      ? _NavMode.navigating
+                      : _NavMode.planning),
+                me: _me ?? _homeCenter,
                 routeNm: _routeNm(), etaMin: _etaMin(), fuelGal: _fuelGal(),
                 waypointCount: _waypoints.length, picking: _picking,
-                unverified: _routeUnverified, navigating: _navigating,
+                unverified: _routeUnverified,
                 onClearRoute: () async { setState(() { _waypoints.clear(); _picking = false; _routedPath = null; _legIdx = 0; }); await _stopRide(); },
                 onUndoRoute: () { if (_waypoints.isEmpty) return; setState(() { _waypoints.removeLast(); if (_legIdx >= _waypoints.length) _legIdx = math.max(0, _waypoints.length - 1); }); _recomputeRoute(); },
-                onStart: _startRide, onStop: _stopRide,
+                onStart: _startRide,
                 onGpx: _gpxPlaceholder,
+                navTarget: _legIdx < _waypoints.length ? _waypoints[_legIdx] : null,
+                legIdx: _legIdx, totalWps: _waypoints.length, speedKt: _speedKt,
+                onEndRoute: _stopRide,
+                mobPoint: _mobPoint, onStopGuidance: _toggleMob,
               ),
               if (_picking || _waypoints.isNotEmpty) const SizedBox(height: 10),
               _BottomSheet(
@@ -2716,65 +2726,6 @@ class _ShadowedBoatImage extends StatelessWidget {
   ]);
 }
 
-// Small floating bar shown while navigating — mirrors the PWA's #nav ("steer XXX° · point N of M ·
-// to final N.N nm"). Sits just below the top HUD.
-class _NavBar extends StatelessWidget {
-  final LatLng from;
-  final LatLng target;
-  final int legIdx;
-  final int totalWps;
-  final double nmToFinal;
-  final int etaMin;
-  final double headingDeg;
-  final double cruiseKt;
-  final double gal;
-  final VoidCallback onDone;
-  const _NavBar({required this.from, required this.target, required this.legIdx, required this.totalWps,
-      required this.nmToFinal, required this.etaMin, required this.headingDeg,
-      required this.cruiseKt, required this.gal, required this.onDone});
-  @override
-  Widget build(BuildContext context) {
-    final brg = _bearingDeg(from, target);
-    final dm = _haversineM(from, target);
-    final distStr = dm < 370 ? '${(dm * 3.28).round()} ft' : '${(dm/1852).toStringAsFixed(dm/1852<10?2:1)} nm';
-    final galStr = gal < 10 ? '${gal.toStringAsFixed(1)} gal' : '${gal.round()} gal';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: const Color(0xE60F2A44), borderRadius: BorderRadius.circular(12)),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          Transform.rotate(
-            angle: (brg - headingDeg) * math.pi / 180,
-            child: const Icon(Icons.navigation, color: Color(0xFFF2A93B), size: 26),
-          ),
-          const SizedBox(width: 10),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(distStr, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
-            const SizedBox(height: 2),
-            Text('steer ${brg.round().toString().padLeft(3, '0')}° ${_dirName(brg)} · point ${legIdx+1} of $totalWps',
-                style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
-          ]),
-          const SizedBox(width: 16),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text(etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
-            const SizedBox(height: 2),
-            Text('${nmToFinal.toStringAsFixed(1)} nm to final', style: const TextStyle(fontSize: 11, color: Color(0xCCFFFFFF))),
-          ]),
-          const SizedBox(width: 10),
-          Material(color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(9),
-            child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onDone,
-              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                child: Text('Done', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13))))),
-        ]),
-        const SizedBox(height: 4),
-        Text('at ${cruiseKt.round()} kn cruise · ~$galStr',
-          style: const TextStyle(fontSize: 11, color: Color(0xAAFFFFFF), fontWeight: FontWeight.w600)),
-      ]),
-    );
-  }
-}
-
 // PWA `pinIcon()` (index.html:1563-1573) — a teardrop SVG, 34x46 for the destination pin,
 // 28x38 (34/46 * 0.82) for interim waypoints, anchored at the bottom point. Flutter previously
 // used a generic Material location_on glyph at 32/26px — noticeably shorter and genericer than
@@ -3339,64 +3290,94 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
   );
 }
 
-// PWA's #routebar (index.html:66-74, 316-321) is a SEPARATE fixed-position dark pill,
-// independent of #sheet — not nested inside it. It's hidden entirely (`display:none`)
-// until the user starts picking a route or has waypoints (index.html:1414:
-// `$('#routebar').classList.toggle('show', picking || wps.length>0)`), unlike the sheet
-// which is always visible. Content is two `.stat` blocks (bold value + light label,
-// index.html:316-317, 1485-1486) then Start/Undo/GPX/Clear buttons pushed to the right
-// (`button{margin-left:auto}`, index.html:71).
-class _RouteBar extends StatelessWidget {
+// One bottom-sheet region whose content is driven by app state, not three independent
+// widgets (formerly _RouteBar here + _NavBar/_MobHud floating separately in the top HUD)
+// — see .claude/skills/ayecaptain-glass-design/SKILL.md §2. Exactly one mode shows at a
+// time; MOB takes priority over navigating, which takes priority over plain planning.
+//
+// This absorbs the PWA's separate #routebar (index.html:66-74,316-321), #nav bar, and MOB
+// chip into one region — a deliberate Flutter-side structural departure from the PWA
+// (which keeps all three as independent DOM elements), not a port of PWA structure.
+enum _NavMode { planning, navigating, mob }
+
+class _NavShell extends StatelessWidget {
+  final _NavMode mode;
+  // Caller passes `_me ?? _homeCenter` (same no-GPS fallback _toggleMob already uses) —
+  // navigating/MOB mode must render immediately on tap regardless of GPS, same as the old
+  // _RouteBar's Start/Stop button never depended on _me. Only the distance/bearing shown
+  // end up relative to home-center instead of a real fix when GPS isn't available yet.
+  final LatLng me;
+
+  // planning
   final int waypointCount;
   final double routeNm, fuelGal;
   final int etaMin;
-  final bool picking, unverified, navigating;
-  final VoidCallback onClearRoute, onUndoRoute, onStart, onStop, onGpx;
-  const _RouteBar({
+  final bool picking, unverified;
+  final VoidCallback onStart, onUndoRoute, onGpx, onClearRoute;
+
+  // navigating — leg-specific distance/bearing computed from me/navTarget below; etaMin
+  // and fuelGal above are reused as-is (the same whole-remaining-route figures the old
+  // _NavBar took, not re-derived).
+  final LatLng? navTarget;
+  final int legIdx, totalWps;
+  final double speedKt;
+  final VoidCallback onEndRoute;
+
+  // mob
+  final LatLng? mobPoint;
+  final VoidCallback onStopGuidance;
+
+  const _NavShell({
+    required this.mode, required this.me,
     required this.waypointCount, required this.routeNm, required this.etaMin, required this.fuelGal,
-    required this.picking, required this.unverified, required this.navigating,
-    required this.onClearRoute, required this.onUndoRoute, required this.onStart, required this.onStop,
-    required this.onGpx,
+    required this.picking, required this.unverified,
+    required this.onStart, required this.onUndoRoute, required this.onGpx, required this.onClearRoute,
+    required this.navTarget, required this.legIdx, required this.totalWps, required this.speedKt,
+    required this.onEndRoute,
+    required this.mobPoint, required this.onStopGuidance,
   });
 
-  bool get _has => waypointCount > 0;
+  bool get _hasRoute => waypointCount > 0;
 
   @override
   Widget build(BuildContext context) {
-    // index.html:1414 — bar only shows while picking or once a route exists.
-    if (!picking && !_has) return const SizedBox.shrink();
-    // Calm blue/cyan glass (GlassSeverity.nav) — same layered recipe as the warning
-    // banners (.claude/skills/ayecaptain-glass-design/SKILL.md), not a new one-off style.
+    // index.html:1414 equivalent — planning mode only shows while picking or once a
+    // route exists; navigating/mob modes are only ever entered with real state backing
+    // them (guarded by the caller), so they always render.
+    if (mode == _NavMode.planning && !picking && !_hasRoute) return const SizedBox.shrink();
     return _GlassSurface(
-      severity: GlassSeverity.nav, borderRadius: 14,
+      severity: mode == _NavMode.mob ? GlassSeverity.mob : GlassSeverity.nav,
+      borderRadius: 14,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        // Stats row above a separate buttons row — Undo/GPX/Clear sharing one Row with
-        // the stats + Start/Stop could overflow its width once all 4 buttons show
-        // together (any time a route exists), independent of the glass styling above.
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            _stat(_has ? '$waypointCount' : '0', _has ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
-            _has ? _etaStat() : _stat('tap map', 'to add'),
-          ]),
-          const SizedBox(height: 9),
-          Row(children: [
-            // flex:2 vs the small buttons' flex:1 — Start/Stop is the primary action,
-            // it should read bigger than Undo/GPX/Clear, not get squeezed to its own
-            // tightest-fit width while they stretch to fill the rest.
-            Expanded(flex: 2, child: _bigBtn(navigating ? 'Stop' : 'Start',
-              navigating ? const Color(0xFFD93A2B) : const Color(0xFF1F8A5B),
-              navigating ? onStop : onStart)),
-            const SizedBox(width: 6),
-            Expanded(child: _smallBtn('Undo', onUndoRoute)),
-            const SizedBox(width: 6),
-            Expanded(child: _smallBtn('GPX', onGpx)),
-            const SizedBox(width: 6),
-            Expanded(child: _smallBtn('Clear', onClearRoute)),
-          ]),
-        ]),
+        child: switch (mode) {
+          _NavMode.planning => _planningContent(),
+          _NavMode.navigating => _navigatingContent(),
+          _NavMode.mob => _mobContent(),
+        },
       ),
     );
+  }
+
+  // ---- planning: same content/behavior the old _RouteBar always showed, minus the
+  // Stop-button variant — navigating now has its own mode, so this is always "Start". ----
+  Widget _planningContent() {
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 14, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        _stat(_hasRoute ? '$waypointCount' : '0', _hasRoute ? 'point${waypointCount > 1 ? 's' : ''}' : 'points'),
+        _hasRoute ? _etaStat() : _stat('tap map', 'to add'),
+      ]),
+      const SizedBox(height: 9),
+      Row(children: [
+        Expanded(flex: 2, child: _bigBtn('Start', onStart)),
+        const SizedBox(width: 6),
+        Expanded(child: _smallBtn('Undo', onUndoRoute)),
+        const SizedBox(width: 6),
+        Expanded(child: _smallBtn('GPX', onGpx)),
+        const SizedBox(width: 6),
+        Expanded(child: _smallBtn('Clear', onClearRoute)),
+      ]),
+    ]);
   }
 
   // index.html:1480-1486 — nm bold, then "{mins} · arrive {time}{gal}" light, plus an
@@ -3414,15 +3395,85 @@ class _RouteBar extends StatelessWidget {
     ]);
   }
 
+  // ---- navigating: was _NavBar (top HUD) — identical distance/bearing math, "Done"
+  // renamed "End Route" per the approved sheet-architecture design. Distance/bearing are
+  // leg-specific (to the current target); ETA/fuel stay whole-remaining-route figures. ----
+  Widget _navigatingContent() {
+    final from = me, target = navTarget!;
+    final brg = _bearingDeg(from, target);
+    final dm = _haversineM(from, target);
+    final distStr = dm < 370 ? '${(dm * 3.28).round()} ft' : '${(dm / 1852).toStringAsFixed(dm / 1852 < 10 ? 2 : 1)} nm';
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Text('⚑', style: TextStyle(fontSize: 16)),
+        const SizedBox(width: 7),
+        Expanded(child: Text('Waypoint ${legIdx + 1} of $totalWps', maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+        _smallBtn('End Route', onEndRoute),
+      ]),
+      _glassDivider(),
+      Row(children: [
+        _metric(distStr, 'DISTANCE'),
+        _metric(etaMin >= 60 ? '${etaMin ~/ 60}h ${etaMin % 60}m' : '${math.max(1, etaMin)} min', 'ETA'),
+        _metric('${brg.round().toString().padLeft(3, '0')}°', 'BEARING'),
+        _metric('${speedKt.toStringAsFixed(1)} kn', 'SOG'),
+      ]),
+      if (fuelGal > 0) ...[
+        _glassDivider(),
+        Text('~${fuelGal < 10 ? fuelGal.toStringAsFixed(1) : fuelGal.round()} gal to finish',
+          style: const TextStyle(color: Color(0xFFD7ECFF), fontSize: 12, fontWeight: FontWeight.w600)),
+      ],
+    ]);
+  }
+
+  // ---- mob: was _MobHud (top HUD) — identical distance/bearing math, "Clear MOB"
+  // renamed "Stop Guidance". ETA/SOG are new here: both were already fully computable
+  // from existing real data (distance + live speed), just not previously surfaced. ----
+  Widget _mobContent() {
+    final from = me, to = mobPoint!;
+    final d = _haversineM(from, to);
+    final b = _bearingDeg(from, to);
+    final dist = d < 370 ? '${(d * 3.28).round()} ft' : '${(d / 1852).toStringAsFixed(d / 1852 < 10 ? 2 : 1)} nm';
+    final etaStr = speedKt > 0 ? '${math.max(1, (d / 1852 / speedKt * 60).round())} min' : '—';
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Text('🛟', style: TextStyle(fontSize: 16)),
+        const SizedBox(width: 7),
+        const Expanded(child: Text('Man Overboard', maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+        _smallBtn('Stop Guidance', onStopGuidance),
+      ]),
+      _glassDivider(),
+      Row(children: [
+        _metric(dist, 'DISTANCE'),
+        _metric(etaStr, 'ETA'),
+        _metric('${b.round().toString().padLeft(3, '0')}°', 'BEARING'),
+        _metric('${speedKt.toStringAsFixed(1)} kn', 'SOG'),
+      ]),
+    ]);
+  }
+
+  Widget _glassDivider() => Container(
+    height: 1, margin: const EdgeInsets.symmetric(vertical: 9),
+    color: Colors.white.withOpacity(.10),
+  );
+
+  Widget _metric(String value, String label) => Expanded(child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+      Text(label, style: TextStyle(
+        color: mode == _NavMode.mob ? const Color(0xFFD98A96) : const Color(0xFF8FB6D6),
+        fontSize: 9.5, letterSpacing: .4)),
+    ],
+  ));
+
   Widget _stat(String bold, String light) => Text.rich(TextSpan(children: [
     TextSpan(text: bold, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
     TextSpan(text: ' $light', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500, height: 1.6)),
   ]), maxLines: 1, overflow: TextOverflow.ellipsis);
 
-  // Now rendered via Expanded(flex: 2, ...) in build() so it's wider than its own text —
-  // Center it, same as _smallBtn's textAlign does for its (also now Expanded) buttons.
-  Widget _bigBtn(String label, Color color, VoidCallback onTap) => Material(
-        color: color, borderRadius: BorderRadius.circular(9),
+  Widget _bigBtn(String label, VoidCallback onTap) => Material(
+        color: const Color(0xFF1F8A5B), borderRadius: BorderRadius.circular(9),
         child: InkWell(borderRadius: BorderRadius.circular(9), onTap: onTap,
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             child: Center(child:
@@ -3443,8 +3494,9 @@ class _RouteBar extends StatelessWidget {
 
 // Batch A.5: rewrite as a stateful sheet that hosts the "Set up your boat" content
 // (weather block + best-window pill + day tabs + hourly "Best time to boat" table).
-// The route summary card lives separately in _RouteBar (PWA's #routebar is its own
-// fixed element, not nested in #sheet).
+// The route/nav/MOB summary lives separately in _NavShell — this sheet stays the PWA-
+// exact light card (index.html:79); _NavShell is the deliberately-glassed, state-driven
+// region above it.
 class _BottomSheet extends StatefulWidget {
   final Weather? weather;
   final TideStation? tideStation;
@@ -3815,9 +3867,11 @@ class _HourlyTable extends StatelessWidget {
 // warning). Visual treatment only — the caller picks the amber/red gradient+border+glow;
 // the actual title/body content and the optional close callback stay fully owned by the
 // caller, so none of the underlying warning logic/data lives here.
-// `nav` is the calmer blue/cyan variant for non-alert chrome (route bar, future nav sheet) —
-// see .claude/skills/ayecaptain-glass-design/SKILL.md for the color-token rationale.
-enum GlassSeverity { amber, red, nav }
+// `nav` is the calmer blue/cyan variant for non-alert chrome (the nav shell's planning/
+// navigating states). `mob` is a deliberately distinct, darker/denser red from the `red`
+// warning severity above — an active emergency mode, not a dismissible alert — see
+// .claude/skills/ayecaptain-glass-design/SKILL.md for the color-token rationale.
+enum GlassSeverity { amber, red, nav, mob }
 
 // Crossfade the round alert icon and the full card while animating their height.
 // Keeping expansion here leaves alert/weather visibility decisions in the callers.
@@ -3944,22 +3998,21 @@ class GlassWarningCard extends StatelessWidget {
 }
 
 // Shared glass-card shell — composes the layered recipe (edge glow painted over a
-// blurred, tinted, reflective fill) used by GlassWarningCard, _RouteBar, and the
+// blurred, tinted, reflective fill) used by GlassWarningCard, _NavShell, and the
 // right-rail buttons. One place to adjust if the recipe itself ever changes, instead of
 // three hand-nested CustomPaint/Clip/BackdropFilter stacks drifting apart over time.
-// For `circular: true`, `edgeRadius` is left at its large default so _WarningEdgeGlow's
-// own RRect clamps it down to a true half-size circle regardless of the child's actual
-// size — avoids hardcoding a radius that only happens to match one particular button size.
+// For `circular: true`, the edge radius is a large sentinel so _WarningEdgeGlow's own
+// RRect clamps it down to a true half-size circle regardless of the child's actual size —
+// avoids hardcoding a radius that only happens to match one particular button size.
 class _GlassSurface extends StatelessWidget {
   final GlassSeverity severity;
   final Widget child;
   final double borderRadius;
   final bool circular;
   final double blurSigma;
-  final double? edgeRadius;
   const _GlassSurface({
     required this.severity, required this.child,
-    this.borderRadius = 14, this.circular = false, this.blurSigma = 6, this.edgeRadius,
+    this.borderRadius = 14, this.circular = false, this.blurSigma = 6,
   });
 
   @override
@@ -3972,7 +4025,7 @@ class _GlassSurface extends StatelessWidget {
       // Paint after the clipped glass: its tint must not dim the neon or hotspots.
       foregroundPainter: _WarningEdgeGlow(
         severity: severity,
-        radius: edgeRadius ?? (circular ? 999 : borderRadius - .8),
+        radius: circular ? 999 : borderRadius - .8,
       ),
       child: circular
         ? ClipOval(child: blurred)
@@ -3996,6 +4049,8 @@ class _WarningGlassSurface extends CustomPainter {
       GlassSeverity.amber => (const Color(0xFFFFAA24), const Color(0xFF162932), .43, 1.0),
       GlassSeverity.red => (const Color(0xFFFF304B), const Color(0xFF30182C), .43, 1.0),
       GlassSeverity.nav => (const Color(0xFF19C8FF), const Color(0xFF041E32), .78, .6),
+      // Darker/denser than the warning red, full intensity (urgent, not muted like nav).
+      GlassSeverity.mob => (const Color(0xFFFF4055), const Color(0xFF190A15), .80, 1.0),
     };
     canvas.drawRect(rect, Paint()..color = baseTint.withOpacity(baseOpacity));
     canvas.drawRect(rect, Paint()..shader = LinearGradient(
@@ -4051,6 +4106,8 @@ class _WarningEdgeGlow extends CustomPainter {
       GlassSeverity.red => (const Color(0xFFFF304B), const Color(0xFFFFEEEE), 1.0),
       // Deliberately quieter than the alert severities — this is calm chrome, not a warning.
       GlassSeverity.nav => (const Color(0xFF19C8FF), const Color(0xFFD7F3FF), .55),
+      // Muted core (not bright white, unlike the warning cards) — urgent/dark, not glossy.
+      GlassSeverity.mob => (const Color(0xFFFF4055), const Color(0xFFFF8A96), 1.0),
     };
     // Keep the continuous rim restrained so individual reflections can shine brighter.
     canvas.drawRRect(edge, Paint()
@@ -4431,32 +4488,6 @@ class _SprayPainter extends CustomPainter {
   bool shouldRepaint(covariant _SprayPainter old) => true;
 }
 
-class _MobHud extends StatelessWidget {
-  final LatLng from, to;
-  final VoidCallback onClear;
-  const _MobHud({required this.from, required this.to, required this.onClear});
-  @override
-  Widget build(BuildContext context) {
-    final d = _haversineM(from, to);
-    final b = _bearingDeg(from, to);
-    final dist = d < 370 ? '${(d * 3.28).round()} ft' : '${(d/1852).toStringAsFixed(d/1852<10?2:1)} nm';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: const Color(0xE6D93A2B), borderRadius: BorderRadius.circular(12)),
-      child: Row(children: [
-        const Icon(Icons.priority_high, color: Colors.white),
-        const SizedBox(width: 10),
-        Expanded(child: Text('MOB · $dist · ${b.round().toString().padLeft(3, "0")}° ${_dirName(b)}',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
-        Material(color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(8),
-          child: InkWell(borderRadius: BorderRadius.circular(8), onTap: onClear,
-            child: const Padding(padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              child: Text('Clear MOB', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)))),
-        ),
-      ]),
-    );
-  }
-}
 
 class _AnchorHud extends StatelessWidget {
   final LatLng from, to;
