@@ -3084,30 +3084,58 @@ class _RightRail extends StatelessWidget {
         const SizedBox(height: 8),
         _mobButton(),
       ]);
-  // PWA rail: default WHITE 44 px circle + sea icon; active flips to sea bg + white icon.
-  Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip}) => Material(
-        color: active ? const Color(0xFF2E6F9E) : Colors.white,
-        shape: const CircleBorder(),
-        elevation: 3,
-        child: Tooltip(
-          message: tip,
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onTap,
-            child: SizedBox(width: 46, height: 46, child: Icon(icon, color: active ? Colors.white : const Color(0xFF2E6F9E))),
+  // Was PWA-parity "default WHITE 44px circle" — deliberately departed from that here,
+  // same category as the 3D nav view / route-bar glass: a Flutter-side enhancement toward
+  // the reference design (.claude/skills/ayecaptain-glass-design/SKILL.md), not a PWA port.
+  // Active state keeps a filled accent disc behind the icon (the glass ring alone reads too
+  // subtly as "on" at 46px) rather than swapping the whole button to solid navy like before.
+  Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip}) {
+    return SizedBox(
+      width: 46, height: 46,
+      child: CustomPaint(
+        foregroundPainter: const _WarningEdgeGlow(severity: GlassSeverity.nav, radius: 23),
+        child: ClipOval(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+            child: CustomPaint(
+              painter: const _WarningGlassSurface(severity: GlassSeverity.nav),
+              child: Material(
+                color: active ? const Color(0xFF2E6F9E).withOpacity(.55) : Colors.transparent,
+                shape: const CircleBorder(),
+                child: Tooltip(
+                  message: tip,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onTap,
+                    child: Icon(icon, color: active ? Colors.white : const Color(0xFFB7E7FF)),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
-      );
-  Widget _mobButton() => Material(
-        color: mobOn ? const Color(0xFF8B0000) : const Color(0xFFD93A2B),
-        shape: const CircleBorder(),
-        elevation: 4,
-        child: Tooltip(
-          message: mobOn ? 'MOB active — tap to clear' : 'Man overboard',
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onMob,
-            child: const SizedBox(width: 50, height: 50, child: Icon(Icons.accessibility_new, color: Colors.white)),
+      ),
+    );
+  }
+  // Solid fill kept (not frosted glass) — an emergency control should read as maximally
+  // visible/urgent, not translucent. Adds the subtle red bloom called for in the approved
+  // design (artifacts 55091e25.../b83ec157...) via a plain BoxShadow, nothing else changed.
+  Widget _mobButton() => Container(
+        decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [
+          BoxShadow(color: (mobOn ? const Color(0xFF8B0000) : const Color(0xFFD93A2B)).withOpacity(.55),
+            blurRadius: 14, spreadRadius: 1),
+        ]),
+        child: Material(
+          color: mobOn ? const Color(0xFF8B0000) : const Color(0xFFD93A2B),
+          shape: const CircleBorder(),
+          elevation: 4,
+          child: Tooltip(
+            message: mobOn ? 'MOB active — tap to clear' : 'Man overboard',
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onMob,
+              child: const SizedBox(width: 50, height: 50, child: Icon(Icons.accessibility_new, color: Colors.white)),
+            ),
           ),
         ),
       );

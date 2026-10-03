@@ -122,5 +122,11 @@ Same pattern already established this session — don't skip steps:
 - `_MobHud` (`main.dart:4354`) only computes distance + bearing; ETA-to-MOB and live SOG
   would need adding if/when MOB becomes a bottom-sheet state instead of a top-HUD card.
 - Fuel burn-rate (GPH) and tank-remaining-% have no backing state anywhere yet.
-- `_RightRail` buttons (`main.dart:3069`) are flat Material circles, no glass — only the MOB
-  button has the subtle red glow treatment confirmed so far.
+- ~~`_RightRail` buttons are flat Material circles, no glass~~ — **done.** The 4 regular
+  buttons (`_btn`, `main.dart:3069`) now use `GlassSeverity.nav` glass (circular, via
+  `ClipOval` + the shared painters at `radius: 23`); active state is a filled accent disc
+  behind the icon rather than swapping the whole button solid, since the glass ring alone
+  reads too subtly as "on" at 46px. This is a deliberate PWA-parity departure (the old
+  comment called the white-circle look out as PWA-exact) — flagged, not silent. `_mobButton`
+  stays solid-fill (urgency, not translucency) but gained the spec'd subtle red `BoxShadow`
+  bloom.
