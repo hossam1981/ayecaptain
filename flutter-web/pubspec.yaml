@@ -45,3 +45,13 @@ flutter:
     - assets/icons/wx_rain_cloud.png
     - assets/icons/wx_moon_full.png
     - assets/icons/wx_moon_half.png
+    # Weather-metric icons (Wind/Gust/Sunset/Water/Wave/Period row) — user-supplied, verified
+    # genuinely transparent via direct alpha sampling (not preview-tool trust, which has been
+    # unreliable before in this project), auto-cropped to content bbox and pre-scaled to 128px
+    # square (same CanvasKit-downscale-quality reasoning as the boat icons above).
+    - assets/icons/wx_wind.png
+    - assets/icons/wx_gust.png
+    - assets/icons/wx_sunset.png
+    - assets/icons/wx_water.png
+    - assets/icons/wx_wave.png
+    - assets/icons/wx_period.png

@@ -36,6 +36,24 @@ const _envMapStyleUrl = String.fromEnvironment('MAPLIBRE_STYLE_URL');
 
 void main() => runApp(const BaysideApp());
 
+// Shared spacing scale for every panel built against ayecaptain-glass-design — 4/8/12/16/24
+// logical pixels, so gaps between related panels read as deliberate multiples of one unit
+// rather than each picking its own number. Apply to future panels too, not just the ones this
+// pass touched.
+class AppSpacing {
+  static const xs = 4.0;
+  static const sm = 8.0;
+  static const md = 12.0;
+  static const lg = 16.0;
+  static const xl = 24.0;
+}
+
+// Secondary/label text across the weather + tide panels used several near-identical low-
+// contrast blues (#8FB6D6, #9CC1DE, #79AEDA, #5F86A8, plus opacity-reduced variants of those)
+// picked ad hoc per call site. One shared, deliberately lighter color closes the contrast gap
+// against the dark glass background and gives every "secondary" label the same visual weight.
+const _secondaryText = Color(0xFFBBD6EC);
+
 class BaysideApp extends StatelessWidget {
   const BaysideApp({super.key});
   @override
@@ -46,9 +64,26 @@ class BaysideApp extends StatelessWidget {
           brightness: Brightness.dark,
           scaffoldBackgroundColor: const Color(0xFF0F2A44),
           colorScheme: const ColorScheme.dark(primary: Color(0xFF2E6F9E), secondary: Color(0xFFF2A93B)),
+          // Shared type roles for the weather + tide panels (ayecaptain-glass-design /
+          // "Responsive row/column layout" in CLAUDE.md) — reach for these via
+          // Theme.of(context).textTheme instead of a new ad hoc inline TextStyle. Chart
+          // annotations drawn on a Canvas (CustomPainter text has no Theme access) pull their
+          // base sizes from _ChartText below, kept in step with this scale by hand.
           textTheme: const TextTheme(
-            bodyMedium: TextStyle(color: Colors.white),
-            labelMedium: TextStyle(color: Color(0xCCFFFFFF)),
+            // Section headings ("Best time to boat", tide station name).
+            titleMedium: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15, letterSpacing: .2),
+            // Banner / selected-tab text.
+            titleSmall: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14),
+            // Metric values, primary readable numbers — 16px body per spec.
+            bodyLarge: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+            bodyMedium: TextStyle(color: Colors.white, fontWeight: FontWeight.w500, fontSize: 16),
+            // Metric labels — 14px per spec, bumped-contrast secondary color.
+            labelLarge: TextStyle(color: _secondaryText, fontWeight: FontWeight.w600, fontSize: 14, letterSpacing: .3),
+            // Day-tab unselected text, hi/lo card sub-labels.
+            labelMedium: TextStyle(color: _secondaryText, fontWeight: FontWeight.w700, fontSize: 13),
+            // Fine print (footer, coordinates) — smallest role, still ≥11px and full-opacity
+            // for contrast rather than the old 9-10px/67%-opacity combination.
+            labelSmall: TextStyle(color: _secondaryText, fontWeight: FontWeight.w600, fontSize: 11),
           ),
         ),
         home: const MapScreen(),
@@ -3676,10 +3711,10 @@ class _BottomSheetState extends State<_BottomSheet> {
       if (w != null) _weatherBlock(w),
       if (widget.window != null) ...[
         const SizedBox(height: 8),
-        _BestWindowPill(win: widget.window!),
+        BestWindowPill(win: widget.window!),
       ],
       const SizedBox(height: 10),
-      _DayTabs(daily: widget.daily, selected: _dayIdx, onSelect: (i) => setState(() => _dayIdx = i)),
+      DayTabs(daily: widget.daily, selected: _dayIdx, onSelect: (i) => setState(() => _dayIdx = i)),
       const SizedBox(height: 8),
       const Text('Best time to boat', style: TextStyle(color: Colors.white,
         fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
@@ -3711,12 +3746,29 @@ class _BottomSheetState extends State<_BottomSheet> {
   }
 
   Widget _weatherBlock(Weather w) {
+    final theme = Theme.of(context);
     final isNight = w.sunset != null && DateTime.now().isAfter(w.sunset!);
+    final tiles = <Widget>[
+      MetricTile(icon: 'assets/icons/wx_wind.png',
+        label: 'Wind', value: '${w.windKt?.round() ?? '—'} kn ${_dirName(w.windDirDeg?.toDouble() ?? 0)}'),
+      MetricTile(icon: 'assets/icons/wx_gust.png',
+        label: 'Gust', value: '${w.gustKt?.round() ?? '—'} kn'),
+      if (w.sunset != null) MetricTile(icon: 'assets/icons/wx_sunset.png',
+        label: 'Sunset', value: _fmtTime(w.sunset!)),
+      if (w.waterTempF != null) MetricTile(icon: 'assets/icons/wx_water.png',
+        label: 'Water', value: '${w.waterTempF!.round()}°F'),
+      if (w.waveFt != null) MetricTile(icon: 'assets/icons/wx_wave.png',
+        label: 'Wave', value: '${w.waveFt!.toStringAsFixed(1)} ft'),
+      if (w.wavePeriodS != null) MetricTile(icon: 'assets/icons/wx_period.png',
+        label: 'Period', value: '${w.wavePeriodS!.round()} s'),
+      if (w.precipPct != null && w.precipPct! > 0) MetricTile(icon: null,
+        label: 'Rain', value: '${w.precipPct!.round()}%'),
+    ];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // PWA: temp 42 pt weight-700 + condition small top-right (index.html #wxhead).
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _wxIconWidget(w.weatherCode, size: 42, isNight: isNight),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         Baseline(baseline: 42, baselineType: TextBaseline.alphabetic,
           child: Text('${w.tempF?.round() ?? '—'}°',
             style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800, height: 1))),
@@ -3725,28 +3777,61 @@ class _BottomSheetState extends State<_BottomSheet> {
           child: Text('F', style: TextStyle(color: Color(0xFFB7E7FF), fontSize: 15, fontWeight: FontWeight.w700))),
         const Spacer(),
         Padding(padding: const EdgeInsets.only(top: 2),
-          child: Text(_condText(w.weatherCode),
-            style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 14, fontWeight: FontWeight.w600))),
+          child: Text(_condText(w.weatherCode), style: theme.textTheme.titleSmall)),
       ]),
-      const SizedBox(height: 10),
-      // PWA grid gap 12 px.
-      Wrap(spacing: 12, runSpacing: 8, children: [
-        _wxCell('Wind', '${w.windKt?.round() ?? '—'} kn ${_dirName(w.windDirDeg?.toDouble() ?? 0)}'),
-        _wxCell('Gust', '${w.gustKt?.round() ?? '—'} kn'),
-        if (w.sunset != null) _wxCell('Sunset', _fmtTime(w.sunset!)),
-        if (w.waterTempF != null) _wxCell('Water', '${w.waterTempF!.round()}°F'),
-        if (w.waveFt != null) _wxCell('Wave', '${w.waveFt!.toStringAsFixed(1)} ft'),
-        if (w.wavePeriodS != null) _wxCell('Period', '${w.wavePeriodS!.round()} s'),
-        if (w.precipPct != null && w.precipPct! > 0) _wxCell('Rain', '${w.precipPct!.round()}%'),
-      ]),
+      const SizedBox(height: AppSpacing.md),
+      MetricsGrid(tiles: tiles),
     ]);
   }
 
-  Widget _wxCell(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-    Text(label, style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 10, letterSpacing: 0.5)),
-    Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-  ]);
+}
 
+// One label+value metric cell (Wind/Gust/Sunset/Water/Wave/Period/Rain) with its icon — the
+// reusable unit MetricsGrid below lays out responsively. Was a bare Column with no icon, a
+// 10px label and 14px value packed into a plain Wrap with no per-row alignment — crowded, and
+// "Period" fell alone onto its own trailing line whenever the row count didn't divide evenly.
+class MetricTile extends StatelessWidget {
+  final String? icon;   // asset path, or null for a plain Material-icon fallback (Rain — no
+                         // user-supplied asset for it)
+  final String label;
+  final String value;
+  const MetricTile({super.key, required this.icon, required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      icon != null
+        ? Image.asset(icon!, width: 24, height: 24, fit: BoxFit.contain)
+        : const Icon(Icons.water_drop_rounded, color: Color(0xFF6FC6FF), size: 22),
+      const SizedBox(width: AppSpacing.sm),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text(label, style: theme.textTheme.labelLarge),
+        const SizedBox(height: 2),
+        Text(value, style: theme.textTheme.bodyLarge),
+      ])),
+    ]);
+  }
+}
+
+// Measures the real available width (LayoutBuilder, not device width) and picks a column count
+// — 3 on a typical sheet width, 2 once it's genuinely narrow — rather than letting Wrap's
+// natural flow decide where each row breaks, which is what orphaned "Period" onto its own line
+// whenever the preceding count wasn't a clean multiple. Fixed per-item width inside Wrap keeps
+// items falling into true aligned rows/columns with a consistent gap, while still letting each
+// tile grow taller on its own if a label/value ever needs to wrap under text scaling.
+class MetricsGrid extends StatelessWidget {
+  final List<Widget> tiles;
+  const MetricsGrid({super.key, required this.tiles});
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final cols = c.maxWidth < 280 ? 2 : 3;
+      const gap = AppSpacing.md;
+      final itemWidth = (c.maxWidth - gap * (cols - 1)) / cols;
+      return Wrap(spacing: gap, runSpacing: gap,
+        children: [for (final t in tiles) SizedBox(width: itemWidth, child: t)]);
+    });
+  }
 }
 
 String _condText(int? code) {
@@ -3770,9 +3855,9 @@ String _fmtTime(DateTime t) {
   return '$h:$m $ampm';
 }
 
-class _BestWindowPill extends StatelessWidget {
+class BestWindowPill extends StatelessWidget {
   final BestWindow win;
-  const _BestWindowPill({required this.win});
+  const BestWindowPill({super.key, required this.win});
   @override
   Widget build(BuildContext context) {
     final color = win.level == 'g' ? const Color(0xFF1F8A5B) : const Color(0xFFF2A93B);
@@ -3780,19 +3865,26 @@ class _BestWindowPill extends StatelessWidget {
     final now = DateTime.now();
     final sameDay = win.start.year == now.year && win.start.month == now.month && win.start.day == now.day;
     final day = sameDay ? 'Today' : _weekday(win.start);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    // Was a true pill (borderRadius 999, Row mainAxisSize:min hugging its text) — fine for a
+    // short string, but "Best window: Sun 12:00 PM–8:00 PM · Fair" plus a longer day name or
+    // 150%+ text scale routinely ran past the sheet's width with nowhere to go, clipping at the
+    // right edge. A pill shape can't wrap onto a second line without looking broken (huge round
+    // caps on a multi-line block), so this is a full-width banner instead — same tint/border
+    // language, a normal card radius, and a wrapping Text that lets the row grow taller.
+    return SizedBox(width: double.infinity, child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
       decoration: BoxDecoration(color: color.withOpacity(.22),
-        border: Border.all(color: color, width: 1), borderRadius: BorderRadius.circular(999)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-        const SizedBox(width: 8),
-        Text('Best window: $day ${_fmtTime(win.start)}–${_fmtTime(win.end)} · $label',
+        border: Border.all(color: color, width: 1), borderRadius: BorderRadius.circular(14)),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.only(top: 5),
+          child: Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color))),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(child: Text('Best window: $day ${_fmtTime(win.start)}–${_fmtTime(win.end)} · $label',
           // PWA #bestWin{color:var(--ink)} (index.html:226) was dark text on a light tinted
           // pill — inverted to white now that the sheet itself is dark glass, not light paper.
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
+          style: Theme.of(context).textTheme.titleSmall)),
       ]),
-    );
+    ));
   }
 }
 
@@ -3801,11 +3893,11 @@ String _weekday(DateTime t) {
   return names[(t.toLocal().weekday - 1) % 7];
 }
 
-class _DayTabs extends StatelessWidget {
+class DayTabs extends StatelessWidget {
   final List<DailyForecast> daily;
   final int selected;
   final ValueChanged<int> onSelect;
-  const _DayTabs({required this.daily, required this.selected, required this.onSelect});
+  const DayTabs({super.key, required this.daily, required this.selected, required this.onSelect});
   @override
   Widget build(BuildContext context) {
     final labels = <String>[];
@@ -3814,27 +3906,33 @@ class _DayTabs extends StatelessWidget {
       final t = daily.length > i ? daily[i].date : DateTime.now().add(Duration(days: i));
       labels.add(_weekday(t));
     }
-    // PWA: 8 px gap between pills; inactive text at ~55% opacity.
+    final theme = Theme.of(context);
+    // Was flush against both scroll edges with only an 8px inter-pill gap and tight 12/6
+    // padding — read as "cut off" rather than "scrollable", since nothing hinted more tabs sat
+    // just past the edge. Leading/trailing AppSpacing.md gives the row visible breathing room
+    // on both ends; roomier per-pill padding + a stronger selected-state border/shadow make the
+    // current tab unambiguous at a glance.
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
       child: Row(children: List.generate(labels.length, (i) {
         final sel = i == selected;
         // PWA #days button (index.html:111-112): inactive rgba(15,42,68,.10) bg + ink text;
         // active var(--ink) bg + white text.
-        return Padding(padding: const EdgeInsets.only(right: 8),
+        return Padding(padding: const EdgeInsets.only(right: AppSpacing.sm),
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(999),
               gradient: sel ? const LinearGradient(colors: [Color(0xE65FB3E8), Color(0x8019C8FF)]) : null,
               color: sel ? null : Colors.white.withOpacity(.08),
-              border: sel ? Border.all(color: Colors.white.withOpacity(.3)) : null,
+              border: Border.all(color: sel ? Colors.white.withOpacity(.55) : Colors.white.withOpacity(.14)),
+              boxShadow: sel ? [BoxShadow(color: const Color(0xFF19C8FF).withOpacity(.35), blurRadius: 10)] : null,
             ),
             child: Material(color: Colors.transparent, borderRadius: BorderRadius.circular(999),
               child: InkWell(borderRadius: BorderRadius.circular(999), onTap: () => onSelect(i),
-                child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  child: Text(labels[i], style: TextStyle(
-                    color: sel ? Colors.white : const Color(0xFF8FB6D6),
-                    fontWeight: FontWeight.w700, fontSize: 13))))),
+                child: Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  child: Text(labels[i], style: (sel ? theme.textTheme.titleSmall : theme.textTheme.labelMedium)
+                    ?.copyWith(color: sel ? Colors.white : _secondaryText))))),
           ),
         );
       })),
@@ -4785,7 +4883,9 @@ class _TidesSheetState extends State<TidesSheet> {
           // the chart off. Restored to the real ratio — this section's own height stays this
           // real size; the space savings live in the padding/gaps/fonts around it instead.
           LayoutBuilder(builder: (context, box) => SizedBox(
-            height: (box.maxWidth * 220 / 360).clamp(165.0, 280.0).toDouble(),
+            // Clamp range bumped slightly (was 165-280) to give the now-larger chart
+            // annotations room without distorting the real 360:220 ratio above.
+            height: (box.maxWidth * 220 / 360).clamp(175.0, 300.0).toDouble(),
             child: CustomPaint(painter: _TidePainter(
               curve: windowCurve, hilo: windowHilo,
               t0: t0, t1: t1, now: now,
@@ -4793,6 +4893,10 @@ class _TidesSheetState extends State<TidesSheet> {
               sunsets: [widget.sunset, widget.tomorrowSunset].whereType<DateTime>().toList(),
               sunriseImg: _sunrise, sunsetImg: _sunset, oceanImg: _ocean,
               unit: _unit,
+              // CustomPainter text has no Theme/MediaQuery access of its own — a plain Text
+              // widget scales under system text-scaling automatically, but canvas-drawn text
+              // doesn't unless the scale factor is read here and threaded through explicitly.
+              textScale: MediaQuery.textScalerOf(context).scale(1.0),
             )),
           )),
           const SizedBox(height: 10),
@@ -4803,29 +4907,36 @@ class _TidesSheetState extends State<TidesSheet> {
   }
 
   Widget _header() {
+    final theme = Theme.of(context);
     final s = widget.station;
     final today = DateTime.now();
     final dateStr = '${_dayName(today)}, ${_monthName(today.month)} ${today.day}, ${today.year}';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Icon(Icons.location_on_rounded, color: Color(0xFF2388FF), size: 20),
-        const SizedBox(width: 6),
+        const SizedBox(width: AppSpacing.xs + 2),
         Expanded(child: Text(s?.name ?? 'Finding tide station…', maxLines: 1, overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
+          style: theme.textTheme.titleMedium)),
         _unitToggle(),
       ]),
       if (s != null) Padding(padding: const EdgeInsets.only(left: 26, top: 1),
         child: Text('${s.lat.abs().toStringAsFixed(4)}° ${s.lat >= 0 ? 'N' : 'S'}, '
           '${s.lng.abs().toStringAsFixed(4)}° ${s.lng >= 0 ? 'E' : 'W'}',
-          style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 11))),
-      Padding(padding: const EdgeInsets.only(top: 6),
-        child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          style: theme.textTheme.labelSmall)),
+      Padding(padding: const EdgeInsets.only(top: AppSpacing.xs + 2),
+        child: Container(padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
           decoration: BoxDecoration(color: const Color(0xFF0B2E4C),
             border: Border.all(color: const Color(0xFF245372)), borderRadius: BorderRadius.circular(9)),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.calendar_month_outlined, color: Color(0xFF9CC1DE), size: 14),
+          // mainAxisSize:min keeps this a compact chip rather than a full-width bar, but a
+          // plain Text sibling can't shrink below its own intrinsic width — at 320lp/150%+
+          // text scale "Sat, Oct 3, 2026" alone exceeded the sheet width with nowhere to go,
+          // overflowing horizontally (caught by the responsive test, not guessed). Flexible
+          // lets the Row still shrink-wrap when the date fits on one line (the common case)
+          // while allowing it to wrap onto a second line instead of overflowing when it won't.
+          child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.calendar_month_outlined, color: _secondaryText, size: 14),
             const SizedBox(width: 5),
-            Text(dateStr, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
+            Flexible(child: Text(dateStr, style: theme.textTheme.labelMedium?.copyWith(color: Colors.white))),
           ]))),
     ]);
   }
@@ -4852,9 +4963,9 @@ class _TidesSheetState extends State<TidesSheet> {
     Widget dot(Color c, String l) => Row(mainAxisSize: MainAxisSize.min, children: [
       Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: c)),
       const SizedBox(width: 5),
-      Text(l, style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 11)),
+      Text(l, style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 13)),
     ]);
-    return Wrap(spacing: 14, runSpacing: 4, children: [
+    return Wrap(spacing: AppSpacing.md, runSpacing: AppSpacing.xs, children: [
       dot(const Color(0xFF22C55E), 'Calm'),
       dot(const Color(0xFFF2A93B), 'Fair'),
       dot(const Color(0xFFD93A2B), 'Rough'),
@@ -4885,16 +4996,16 @@ class _TidesSheetState extends State<TidesSheet> {
           const SizedBox(width: 8),
           Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(isHigh ? 'High Tide' : 'Low Tide', maxLines: 1,
-              style: const TextStyle(color: Color(0xFF9FC1DE), fontSize: 9)),
+              style: const TextStyle(color: _secondaryText, fontSize: 11, fontWeight: FontWeight.w600)),
             Text(_fmtTime(p.t), maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13, height: 1.2)),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14, height: 1.2)),
             Text('${_fmtV(p.v)} $_unit', maxLines: 1,
-              style: const TextStyle(color: Color(0xFF8FB5D6), fontSize: 10)),
+              style: const TextStyle(color: _secondaryText, fontSize: 12)),
           ])),
         ]));
     }
-    if (pts.isEmpty) return const Padding(padding: EdgeInsets.symmetric(vertical: 6),
-      child: Text('No upcoming tide events', style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 11)));
+    if (pts.isEmpty) return Padding(padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      child: Text('No upcoming tide events', style: Theme.of(context).textTheme.labelSmall));
     final rows = <Widget>[];
     for (var i = 0; i < pts.length; i += 2) {
       if (i > 0) rows.add(const SizedBox(height: 9));
@@ -4908,14 +5019,13 @@ class _TidesSheetState extends State<TidesSheet> {
   }
 
   Widget _footer() {
+    final theme = Theme.of(context);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('⚓  Plan Better. Boat Safer.',
-        style: TextStyle(color: Color(0xFF9CC1DE), fontSize: 11, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 3),
-      Text('≈ Tide Data · ${widget.station?.name ?? "—"}',
-        style: const TextStyle(color: Color(0xAA9CC1DE), fontSize: 10)),
-      const Text('NOAA CO-OPS astronomical predictions · updates every 20 min',
-        style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 9)),
+      Text('⚓  Plan Better. Boat Safer.',
+        style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: AppSpacing.xs - 1),
+      Text('≈ Tide Data · ${widget.station?.name ?? "—"}', style: theme.textTheme.labelSmall),
+      Text('NOAA CO-OPS astronomical predictions · updates every 20 min', style: theme.textTheme.labelSmall),
     ]);
   }
 
@@ -4935,9 +5045,10 @@ class _TidePainter extends CustomPainter {
   final List<DateTime> sunrises, sunsets;
   final ui.Image? sunriseImg, sunsetImg, oceanImg;
   final String unit;
+  final double textScale;
   _TidePainter({required this.curve, required this.hilo, required this.t0, required this.t1, required this.now,
     required this.sunrises, required this.sunsets,
-    this.sunriseImg, this.sunsetImg, this.oceanImg, required this.unit});
+    this.sunriseImg, this.sunsetImg, this.oceanImg, required this.unit, required this.textScale});
 
   double _u(double v) => unit == 'm' ? v * 0.3048 : v;
   String _fv(double v) => '${_u(v).toStringAsFixed(1)} $unit';
@@ -4950,8 +5061,9 @@ class _TidePainter extends CustomPainter {
       _drawPlaceholder(canvas, size);
       return;
     }
-    // Same margin geometry as the PWA (index.html:886).
-    const mL = 30.0, mR = 10.0, mT = 42.0, mB = 26.0;
+    // Same margin geometry as the PWA (index.html:886), mT/mB bumped slightly (was 42/26) to
+    // give the now-larger grid/axis labels room without crowding the plotted curve.
+    const mL = 30.0, mR = 10.0, mT = 46.0, mB = 30.0;
     final plotW = size.width - mL - mR;
     final plotH = size.height - mT - mB;
     final compact = size.width < 330;
@@ -4982,7 +5094,7 @@ class _TidePainter extends CustomPainter {
     for (double v = vFirst; v <= vmax; v += 2) {
       final gy = y(v);
       canvas.drawLine(Offset(mL, gy), Offset(mL + plotW, gy), grid);
-      _text(canvas, v.round().toString(), Offset(mL - 6, gy), 9.5, FontWeight.w600,
+      _text(canvas, v.round().toString(), Offset(mL - 6, gy), 12, FontWeight.w600,
         const Color(0xFFE3F0FA), center: true);
     }
     // X-ticks every 12 h (12 AM, 12 PM) — draw thin vertical guide.
@@ -5068,12 +5180,19 @@ class _TidePainter extends CustomPainter {
       canvas.drawCircle(Offset(px, py), 5.5, Paint()..color = color);
       canvas.drawCircle(Offset(px, py), 5.5,
         Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.6);
-      // The four events remain visible as dots; labels only appear when they fit.
-      if (lastLx == null || (px - lastLx).abs() >= (compact ? 76 : 62)) {
-        _text(canvas, _fv(p.v), Offset(px, py - 23), compact ? 9 : 11,
+      // The four events remain visible as dots regardless; inline labels only draw when they
+      // fit without colliding — the full detail for every event (including ones skipped here)
+      // still reaches the user via the hi/lo cards row below the chart, real Flutter widgets
+      // that wrap/scale normally rather than fighting a fixed canvas size. The gap required to
+      // show a label scales with textScale too, since the label itself grows with it — at
+      // 200% scale, fewer inline labels fit and more fall through to that cards row, which is
+      // exactly the "move details to a panel when space is limited" degradation, not a bug.
+      final minGap = (compact ? 88.0 : 74.0) * textScale;
+      if (lastLx == null || (px - lastLx).abs() >= minGap) {
+        _text(canvas, _fv(p.v), Offset(px, py - 25), compact ? 11 : 13,
           FontWeight.w700, color, center: true);
-        _text(canvas, _fmtTime(p.t), Offset(px, py + 12), compact ? 8 : 10,
-          FontWeight.w600, const Color(0xFF9CC1DE), center: true);
+        _text(canvas, _fmtTime(p.t), Offset(px, py + 14), compact ? 10 : 12,
+          FontWeight.w600, const Color(0xFFBBD6EC), center: true);
         lastLx = px;
       }
     }
@@ -5100,29 +5219,42 @@ class _TidePainter extends CustomPainter {
       canvas.drawCircle(Offset(nx.toDouble(), ny), 6, Paint()..color = const Color(0xFF146DD7));
       canvas.drawCircle(Offset(nx.toDouble(), ny), 6,
         Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.6);
-      // pill above the circle
-      final tipX = nx.clamp(mL + 30, mL + plotW - 30).toDouble();
-      final tipY = math.max<double>(mT + 16, ny - 34);
+      // pill above the circle — sized to the actual measured text instead of a fixed guess
+      // (that guess was tuned for the old smaller fonts; at bigger sizes/200% text scale the
+      // value text was wider than the hardcoded 52-66px pill and drew outside it uncontained).
+      const nowSize = 10.0, valSize = 12.5;
+      final valueStr = _fv(nearest.v);
+      final nowW = _measureWidth('Now', nowSize, FontWeight.w700);
+      final valW = _measureWidth(valueStr, valSize, FontWeight.w800);
+      final pillW = math.max(nowW, valW) + 20;
+      final pillH = (nowSize + valSize) * textScale + 18;
+      final tipX = nx.clamp(mL + pillW / 2, mL + plotW - pillW / 2).toDouble();
+      // tipY is the pill's vertical CENTER; the bottom edge (tipY + pillH/2) should sit a
+      // fixed gap above the dot on the curve (ny).
+      final tipY = math.max<double>(mT + pillH / 2 + 2, ny - 8 - pillH / 2);
       final pillRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(tipX, tipY), width: compact ? 52 : 66, height: 32),
+        Rect.fromCenter(center: Offset(tipX, tipY), width: pillW, height: pillH),
         const Radius.circular(9));
       canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF1271E7));
       canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF58A7FF)
         ..style = PaintingStyle.stroke..strokeWidth = 1.2);
-      _text(canvas, 'Now', Offset(tipX, tipY - 10), 8.5, FontWeight.w700, Colors.white, center: true);
-      _text(canvas, _fv(nearest.v), Offset(tipX, tipY + 3), 11, FontWeight.w800, Colors.white, center: true);
+      _text(canvas, 'Now', Offset(tipX, tipY - pillH * .22), nowSize, FontWeight.w700, Colors.white, center: true);
+      _text(canvas, valueStr, Offset(tipX, tipY + pillH * .22), valSize, FontWeight.w800, Colors.white, center: true);
     }
 
     // 9) Y-axis label and x-tick times.
-    _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 9, FontWeight.w600, const Color(0xFFCFE3F2), center: true, rotate: -math.pi / 2);
+    _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 11, FontWeight.w600, const Color(0xFFCFE3F2), center: true, rotate: -math.pi / 2);
     var tt = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
     double? lastTickX;
+    // Spacing requirement scales with textScale for the same reason the hi/lo gap above does —
+    // a bigger label needs more room before the next one would collide with it.
+    final tickGap = 54.0 * textScale;
     while (tt.isBefore(t1)) {
       if (!tt.isBefore(t0)) {
         final gx = x(tt);
-        if (lastTickX == null || gx - lastTickX >= 48) {
+        if (lastTickX == null || gx - lastTickX >= tickGap) {
           _text(canvas, tt.hour == 0 ? '12 AM' : '${tt.hour == 12 ? 12 : tt.hour % 12} ${tt.hour < 12 ? "AM" : "PM"}',
-            Offset(gx, base + 12), 9, FontWeight.w600, const Color(0xFFA9CAE2), center: true);
+            Offset(gx, base + 14), 11.5, FontWeight.w600, const Color(0xFFBBD6EC), center: true);
           lastTickX = gx;
         }
       }
@@ -5130,10 +5262,13 @@ class _TidePainter extends CustomPainter {
     }
   }
 
+  // Every font size passed through here is a base (100%-scale) value — multiplying by
+  // textScale here, in one place, is what makes canvas-drawn chart text actually respect the
+  // system text-scale setting the way an ordinary Text widget does for free.
   void _text(Canvas canvas, String text, Offset at, double size, FontWeight w, Color c,
       {bool center = false, double rotate = 0}) {
     final tp = TextPainter(
-      text: TextSpan(text: text, style: TextStyle(color: c, fontSize: size, fontWeight: w)),
+      text: TextSpan(text: text, style: TextStyle(color: c, fontSize: size * textScale, fontWeight: w)),
       textDirection: TextDirection.ltr,
     )..layout();
     canvas.save();
@@ -5143,10 +5278,18 @@ class _TidePainter extends CustomPainter {
     canvas.restore();
   }
 
+  double _measureWidth(String text, double size, FontWeight w) {
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: TextStyle(fontSize: size * textScale, fontWeight: w)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return tp.width;
+  }
+
   void _drawPlaceholder(Canvas canvas, Size size) {
     final tp = TextPainter(
-      text: const TextSpan(text: 'Loading tide predictions…',
-        style: TextStyle(color: Color(0xAA9CC1DE), fontSize: 12)),
+      text: TextSpan(text: 'Loading tide predictions…',
+        style: TextStyle(color: const Color(0xFFBBD6EC), fontSize: 13 * textScale)),
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2));
@@ -5155,7 +5298,8 @@ class _TidePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _TidePainter old) => old.curve != curve || old.now != now
     || old.sunrises.length != sunrises.length || old.sunsets.length != sunsets.length
-    || old.unit != unit || old.sunriseImg != sunriseImg || old.sunsetImg != sunsetImg || old.oceanImg != oceanImg;
+    || old.unit != unit || old.sunriseImg != sunriseImg || old.sunsetImg != sunsetImg || old.oceanImg != oceanImg
+    || old.textScale != textScale;
 }
 
 // ==================================================================================================
