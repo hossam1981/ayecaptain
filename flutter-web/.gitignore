@@ -8,3 +8,4 @@ build/
 .metadata
 pubspec.lock
 .env
+test/goldens/

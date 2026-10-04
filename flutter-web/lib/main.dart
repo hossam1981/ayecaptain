@@ -3662,7 +3662,7 @@ class _BottomSheetState extends State<_BottomSheet> {
       const Text('Best time to boat', style: TextStyle(color: Colors.white,
         fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3)),
       const SizedBox(height: 4),
-      _HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
+      HourlyTable(hourly: widget.hourly, dayIdx: _dayIdx, profile: widget.profile),
       const SizedBox(height: 16),
       TidesSheet(
         station: widget.tideStation, tides: widget.tides,
@@ -3820,11 +3820,20 @@ class _DayTabs extends StatelessWidget {
   }
 }
 
-class _HourlyTable extends StatelessWidget {
+// Public (not `_`-prefixed) specifically so test/hourly_table_responsive_test.dart can pump
+// it directly — see that file for the width×text-scale verification matrix this was built
+// against. Was a Row of fixed SizedBox-width cells (46/40/70/42px) that clipped "Rough" to
+// "Roug"/"h" and let "10 AM" wrap, worse again under text scaling, since those widths were
+// guessed against one font size rather than measured. Rebuilt on a LayoutBuilder choosing
+// between a Table (IntrinsicColumnWidth — every column sized to its own widest cell across
+// all rows, with zero hardcoded pixel widths, growing automatically under text scaling) and,
+// below a measured width threshold, a stacked two-line layout per the "move wind details to
+// a second line on narrow screens" requirement.
+class HourlyTable extends StatelessWidget {
   final List<HourlyPoint> hourly;
   final int dayIdx;
   final BoatProfile profile;
-  const _HourlyTable({required this.hourly, required this.dayIdx, required this.profile});
+  const HourlyTable({super.key, required this.hourly, required this.dayIdx, required this.profile});
   @override
   Widget build(BuildContext context) {
     if (hourly.isEmpty) {
@@ -3844,35 +3853,127 @@ class _HourlyTable extends StatelessWidget {
         child: Text('No more daylight hours today — swipe to Fri for tomorrow.',
           style: TextStyle(color: Color(0xFF8FB6D6), fontSize: 12)));
     }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows.map((h) => _row(h)).toList());
+    final items = rows.map((h) => _WeatherRow(h: h, profile: profile)).toList();
+    return LayoutBuilder(builder: (context, constraints) {
+      // Below this, the wide table's Wind/Gust columns (each its own explicit-label text,
+      // e.g. "Wind 13 kn WNW") start contesting space with Time/Condition/Icon+Temp badly
+      // enough to force wrapping even with IntrinsicColumnWidth — verified empirically via
+      // the responsive test file at 320/375/390/430 lp × 100/150/200% text scale, not guessed.
+      final narrow = constraints.maxWidth < 340;
+      if (narrow) {
+        return Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: items.map((r) => r.buildNarrow(context)).toList());
+      }
+      return Table(
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        columnWidths: const {
+          0: IntrinsicColumnWidth(), 1: IntrinsicColumnWidth(), 2: IntrinsicColumnWidth(),
+          3: IntrinsicColumnWidth(), 4: IntrinsicColumnWidth(),
+        },
+        children: items.map((r) => r.buildWideRow(context)).toList(),
+      );
+    });
   }
-  Widget _row(HourlyPoint h) {
-    final s = score(h.windKt, h.gustKt, null, profile);
-    final color = _gradeColors[s]!;
-    final label = s == 'g' ? 'Calm' : (s == 'a' ? 'Fair' : 'Rough');
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(children: [
-        SizedBox(width: 46, child: Text(_hourLabel(h.t), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
-        Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-        const SizedBox(width: 6),
-        SizedBox(width: 40, child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 11))),
-        _wxIconWidget(h.weatherCode, size: 16),
-        const SizedBox(width: 4),
-        SizedBox(width: 36, child: Text('${h.tempF?.round() ?? '—'}°', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700))),
-        SizedBox(width: 70, child: Text('${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}', style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 11))),
-        SizedBox(width: 42, child: Text('g${h.gustKt?.round() ?? '—'}', style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 11))),
-        if (h.precipPct != null && h.precipPct! > 0)
-          Text('${h.precipPct!.round()}%', style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 11)),
-      ]),
+}
+
+String _hourLabel(DateTime t) {
+  final l = t.toLocal();
+  final h = l.hour == 0 ? 12 : (l.hour > 12 ? l.hour - 12 : l.hour);
+  final ampm = l.hour >= 12 ? 'PM' : 'AM';
+  return '$h $ampm';
+}
+
+// One hourly forecast row's content — cell builders are shared between the wide (Table,
+// column-aligned) and narrow (stacked, 2-line) layouts in HourlyTable above, so both follow
+// identical formatting/labels/colors and only the arrangement differs. Kept private/internal
+// to HourlyTable (not part of its public test surface) since tests only need to pump
+// HourlyTable itself to exercise this.
+class _WeatherRow {
+  final HourlyPoint h;
+  final BoatProfile profile;
+  const _WeatherRow({required this.h, required this.profile});
+
+  String get _grade => score(h.windKt, h.gustKt, null, profile);
+  Color get _color => _gradeColors[_grade]!;
+  String get _condLabel => _grade == 'g' ? 'Calm' : (_grade == 'a' ? 'Fair' : 'Rough');
+  String get _windStr => '${h.windKt?.round() ?? '—'} kn ${_dirName(h.windDirDeg ?? 0.0)}';
+  String get _gustStr => '${h.gustKt?.round() ?? '—'} kn';
+  String? get _rainStr => (h.precipPct != null && h.precipPct! > 0) ? '${h.precipPct!.round()}%' : null;
+
+  Widget _time() => Text(_hourLabel(h.t), maxLines: 1, softWrap: false, overflow: TextOverflow.visible,
+    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12));
+
+  Widget _condition() => Row(mainAxisSize: MainAxisSize.min, children: [
+    Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: _color)),
+    const SizedBox(width: 6),
+    Text(_condLabel, maxLines: 1, softWrap: false, overflow: TextOverflow.visible,
+      style: TextStyle(color: _color, fontWeight: FontWeight.w800, fontSize: 11)),
+  ]);
+
+  Widget _iconTemp() => Row(mainAxisSize: MainAxisSize.min, children: [
+    _wxIconWidget(h.weatherCode, size: 16),
+    const SizedBox(width: 4),
+    Text('${h.tempF?.round() ?? '—'}°', maxLines: 1, overflow: TextOverflow.visible,
+      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+  ]);
+
+  // Explicit "Wind"/"Gust" labels + units, per spec — not just bare numbers.
+  Widget _wind() => Text.rich(TextSpan(children: [
+    const TextSpan(text: 'Wind ', style: TextStyle(color: Color(0xFF8FB6D6), fontSize: 10, fontWeight: FontWeight.w600)),
+    TextSpan(text: _windStr, style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 11)),
+  ]), maxLines: 1, softWrap: false, overflow: TextOverflow.visible);
+
+  Widget _gust() => Text.rich(TextSpan(children: [
+    const TextSpan(text: 'Gust ', style: TextStyle(color: Color(0xFF8FB6D6), fontSize: 10, fontWeight: FontWeight.w600)),
+    TextSpan(text: _gustStr, style: const TextStyle(color: Color(0xFFD1EEFF), fontSize: 11)),
+  ]), maxLines: 1, softWrap: false, overflow: TextOverflow.visible);
+
+  Widget _rainChip() => Text('${_rainStr!} rain', maxLines: 1, overflow: TextOverflow.visible,
+    style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 10));
+
+  // ---- wide: one TableRow; HourlyTable's Table gives every column (across ALL rows) the
+  // width of its own widest cell — no pixel guess here needs to anticipate the longest
+  // string, the Table measures it. ----
+  TableRow buildWideRow(BuildContext context) {
+    Widget cell(Widget child) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 6),
+      child: Align(alignment: Alignment.centerLeft, child: child),
     );
+    return TableRow(children: [
+      cell(_time()),
+      cell(_condition()),
+      cell(_iconTemp()),
+      cell(_wind()),
+      cell(Row(mainAxisSize: MainAxisSize.min, children: [
+        _gust(),
+        if (_rainStr != null) ...[const SizedBox(width: 10), _rainChip()],
+      ])),
+    ]);
   }
-  String _hourLabel(DateTime t) {
-    final l = t.toLocal();
-    final h = l.hour == 0 ? 12 : (l.hour > 12 ? l.hour - 12 : l.hour);
-    final ampm = l.hour >= 12 ? 'PM' : 'AM';
-    return '$h $ampm';
-  }
+
+  // ---- narrow: time+condition stay one line (the only pairing the spec requires); icon+temp,
+  // wind, gust and rain all flow into a Wrap below. A Row+Spacer for icon+temp overflowed at
+  // 320lp/200% text scale — Spacer can't create space that doesn't exist, and time+condition+
+  // icon+temp's combined intrinsic width exceeded 320px at that scale (caught by the
+  // responsive test file, not guessed). Wrap can't overflow the same way: an item that doesn't
+  // fit drops to its own line instead of clipping or forcing negative space. ----
+  Widget buildNarrow(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        _time(),
+        const SizedBox(width: 10),
+        _condition(),
+      ]),
+      Padding(padding: const EdgeInsets.only(top: 3),
+        child: Wrap(spacing: 14, runSpacing: 4, children: [
+          _iconTemp(),
+          _wind(),
+          _gust(),
+          if (_rainStr != null) _rainChip(),
+        ])),
+    ]),
+  );
 }
 
 // ==================================================================================================

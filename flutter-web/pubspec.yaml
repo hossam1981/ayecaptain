@@ -19,6 +19,10 @@ dependencies:
   web: ^1.0.0   # beforeinstallprompt interop (dart:js_interop) — dart:html is being dropped from stable Flutter
   maplibre_gl: ^0.27.1   # real 3D camera (pitch/bearing) for the nav-only view — needs Flutter 3.29+/Dart 3.7+ (bumped above)
 
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
 flutter:
   uses-material-design: true
   assets:

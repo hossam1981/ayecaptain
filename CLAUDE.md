@@ -59,6 +59,60 @@ panel, check `.claude/skills/ayecaptain-glass-design/SKILL.md` — the neon-glow
 rather than duplicate) and the "one sheet shell, state-driven content, never stacked panels"
 architecture rule. Source reference images: `~/Downloads/ayecaptain_flutter/design_references/`.
 
+## Responsive row/column layout (Flutter)
+
+Applies to any panel laying out rows of mixed text content (hourly/forecast tables, lists with
+labels+values) — not just the one that prompted this section.
+
+- Never size a text-bearing cell with a guessed fixed-pixel `SizedBox`/`Container` width. Text
+  that's one glyph wider than the guess, or one step up in system text-scale, clips or wraps
+  mid-word. This broke `HourlyTable`'s predecessor (`SizedBox` widths of 46/40/70/42px —
+  "Rough" clipped to "Roug"/"h", "10 AM" wrapped unevenly, wind direction ran into gust).
+- For a set of rows that need **aligned columns**, use `Table` with
+  `columnWidths: {n: IntrinsicColumnWidth()}` for every column — it measures each column's
+  actual widest cell across all rows, so nothing needs to guess ahead of the content.
+  `TableRow` is not a `Widget`, so row-content logic that needs both a `TableRow` (wide) and a
+  plain `Widget` (narrow, stacked) form has to live in a small helper class instead of a
+  `StatelessWidget`.
+- Use `LayoutBuilder` + `constraints.maxWidth` to pick a breakpoint between the wide
+  (`Table`) and narrow (stacked `Column`/`Wrap`) layouts — don't assume a fixed screen width.
+- In the narrow/stacked form, only bundle the elements onto one `Row` that the spec actually
+  requires together (e.g. time + condition label). Anything else — icon+temp, wind, gust —
+  belongs in a `Wrap`, not another fixed `Row`: a `Row` with a `Spacer` still overflows if its
+  non-flexible children alone exceed the available width (caught at 320lp/200% text scale,
+  where `Row(children:[time, condition, Spacer(), iconTemp])` overflowed by up to 29px —
+  `Spacer` can't create space that doesn't exist). `Wrap` degrades by moving the overflowing
+  item to its own line instead of overflowing.
+- Never fix overflow/clipping by shrinking font size, disabling text-scaling, or clipping —
+  let the row grow taller instead (`Wrap`'s `runSpacing`, unconstrained `Column` height).
+
+**Widget-testing this**: `flutter-add-widget-test` is adopted — `flutter-web/test/` exists,
+`dev_dependencies: flutter_test` is in `pubspec.yaml`. Two non-obvious gotchas hit while
+building `test/hourly_table_responsive_test.dart`:
+1. This file imports `package:web` (for `beforeinstallprompt`), which only compiles on the
+   `chrome` test platform, not the VM default — run
+   `flutter test --platform=chrome --dart-define-from-file=.env test/...`
+   (needs `CHROME_EXECUTABLE` set to the real Chrome binary; the VM run fails with
+   `JSObject`/`.toJS`/`.jsify()` compile errors from `package:web`'s interop internals).
+2. A plain `SizedBox(width: N)` inside `pumpWidget` **cannot** simulate a narrower screen —
+   the root tree gets a *tight* constraint from the test binding's fixed default surface
+   (800×600), and `BoxConstraints.constrain()` clamps a child's requested width back to that
+   tight bound regardless of what `SizedBox` asks for. (First pass at this test silently
+   passed all 12 width×scale cases because every one of them rendered at 800×600 — confirmed
+   via byte-identical golden PNGs.) Actually resize the surface itself:
+   `tester.view.physicalSize = Size(width, height); tester.view.devicePixelRatio = 1.0;` +
+   `addTearDown(tester.view.reset)`.
+3. Capturing real screenshots from a `chrome`-platform test can't use
+   `RenderRepaintBoundary.toImage()` + `dart:io` `File.writeAsBytesSync` — the browser sandbox
+   has no real filesystem (`UnsupportedError: _Namespace`). Use
+   `await expectLater(find.byKey(k), matchesGoldenFile('goldens/name.png'))` with
+   `--update-goldens` instead; Flutter's golden-file protocol bridges the write to the host
+   process outside the browser sandbox, which works under `--platform=chrome`.
+4. Golden-captured text renders as solid placeholder blocks (Flutter's deterministic test
+   font), not real glyphs, on any platform — fine for proving layout geometry (no overflow,
+   no overlap, correct wrapping), not for eyeballing specific string legibility. For that,
+   verify live in the real browser instead.
+
 ## Dart/Flutter skills (`.agents/skills/`, from `dart-lang/skills` + `flutter/skills`)
 
 Before starting non-trivial Flutter work, scan this list for a fit — check it every time,
@@ -66,17 +120,20 @@ don't rely on memory of what's here:
 
 **Use regularly:**
 - `flutter-fix-layout-issues` — RenderFlex overflows, unbounded constraints. Matches the
-  recurring class of sizing bug this branch keeps hitting (e.g. the tide-card mess).
+  recurring class of sizing bug this branch keeps hitting (e.g. the tide-card mess, the
+  `HourlyTable` narrow-row overflow — see "Responsive row/column layout" below).
 - `flutter-build-responsive-layout` — `LayoutBuilder`/`MediaQuery` patterns; explicitly warns
   against hardcoding a fixed aspect ratio instead of sizing to actual content/available space
   — would have caught the `childAspectRatio` bug directly.
-- `dart-run-static-analysis` — no local Flutter SDK in most sessions here to run
-  `flutter analyze` (see Structure notes below), and this is exactly what would catch the two
-  recurring bugs above automatically instead of by manual review.
+- `flutter-add-widget-test` — adopted (`flutter-web/test/`); catches structural regressions
+  without a live browser. See "Responsive row/column layout" below for the platform/surface-
+  size/golden-file gotchas specific to this project.
+- `dart-run-static-analysis` — run `flutter analyze` locally when the SDK is available in the
+  current session (confirmed present and working as of 2026-10-03 — don't assume it's missing
+  without checking `which flutter` first); this is exactly what catches the two recurring bugs
+  above automatically instead of by manual review.
 
 **Adopt once it applies:**
-- `flutter-add-widget-test` — would catch structural regressions (like the tide card) without
-  needing a live browser, which is the actual bottleneck this branch keeps hitting.
 - `flutter-apply-architecture-best-practices` — relevant once `main.dart`'s planned split
   (see Structure notes) actually happens.
 - `dart-resolve-package-conflicts` — relevant now that `package:web` has been added.
