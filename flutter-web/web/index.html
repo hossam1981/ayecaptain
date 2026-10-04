@@ -29,6 +29,21 @@
       const s = document.getElementById('splash');
       if (s) s.style.display = 'none';
     });
+
+    // Capture 'beforeinstallprompt' here, before flutter_bootstrap.js even starts loading —
+    // not in Dart. Flutter's JS/engine boot (download + compile + first frame) can take
+    // several seconds, long enough for Chrome to fire this one-shot event before a Dart
+    // State's initState() gets a listener attached, silently losing it forever (this is why
+    // the "Add to home screen" button worked on early, lighter builds and stopped as the app
+    // grew heavier — not a one-off fluke). This plain inline script runs at initial HTML
+    // parse time instead, so it's always listening in time. Mirrors PWA index.html:1977's
+    // e.preventDefault() to suppress Chrome's own generic mini-infobar in favor of our button.
+    window.__baysideDeferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      window.__baysideDeferredPrompt = e;
+      window.dispatchEvent(new Event('bayside-install-available'));
+    });
   </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>

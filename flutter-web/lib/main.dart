@@ -190,7 +190,11 @@ Future<List<HourlyPoint>> fetchHourlyForecast(LatLng at) async {
     final url = Uri.parse('https://api.open-meteo.com/v1/forecast?latitude=${at.latitude}&longitude=${at.longitude}'
         '&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=auto'
         '&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code,precipitation_probability'
-        '&forecast_days=3');
+        // PWA index.html:633 fetches 7 days in its one combined call; this port's
+        // fetchDailyForecast already matches that, but this hourly call was left at 3 —
+        // meaning the 7-day tabs above HourlyTable had real data for the first 3 days and
+        // hit the "no data" fallback for the rest. Match the spec.
+        '&forecast_days=7');
     final r = await http.get(url).timeout(const Duration(seconds: 8));
     if (r.statusCode != 200) return [];
     final h = (jsonDecode(r.body) as Map<String, dynamic>)['hourly'] as Map<String, dynamic>?;
@@ -1254,17 +1258,34 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     // PWA index.html:1976-1978 — capture the browser's install prompt instead of letting it
     // show its own generic mini-infobar, then trigger it from our own button once the user
     // taps it. Chrome/Edge only; never fires on iOS Safari or once already installed.
-    // package:web + dart:js_interop (not dart:html, which stable Flutter is dropping) — the
-    // JSFunction has to be stored so the SAME instance can be passed to removeEventListener.
+    //
+    // The actual 'beforeinstallprompt' capture + preventDefault() lives in web/index.html's
+    // own early inline script now, not here — Flutter's JS/engine boot can take several
+    // seconds, long enough for Chrome to fire this one-shot event before this initState() got
+    // a listener attached, silently losing it (this is why the button worked on early, lighter
+    // builds and stopped as the app grew heavier). The HTML script runs at initial page parse,
+    // well before flutter_bootstrap.js even starts loading, and stores the event on
+    // `window.__baysideDeferredPrompt` + fires a 'bayside-install-available' DOM event. Dart
+    // just reads that global — once right here (covers the common case: already captured
+    // before Flutter finished booting) and again on the bridge event (covers the rarer case
+    // where it fires after Flutter has already booted).
+    _installPromptEvent = _readDeferredInstallPrompt();
     _installListener = ((web.Event e) {
-      e.preventDefault();
-      if (mounted) setState(() => _installPromptEvent = e);
+      if (mounted) setState(() => _installPromptEvent = _readDeferredInstallPrompt());
     }).toJS;
-    web.window.addEventListener('beforeinstallprompt', _installListener);
+    web.window.addEventListener('bayside-install-available', _installListener);
   }
 
   JSFunction? _installListener;
   web.Event? _installPromptEvent;
+  // dart:js_interop_unsafe (the supported way to reach a JS global with no static Dart type)
+  // — returns null if 'beforeinstallprompt' hasn't fired (not an install-eligible browser,
+  // already installed, or just not yet).
+  web.Event? _readDeferredInstallPrompt() {
+    final v = web.window.getProperty<JSAny?>('__baysideDeferredPrompt'.toJS);
+    if (v.isUndefinedOrNull) return null;
+    return v as web.Event;
+  }
   // PWA index.html:1978 — deferred.prompt(); await deferred.userChoice; then hide the button.
   // beforeinstallprompt's `prompt()`/`userChoice` aren't part of the standard typed web.Event,
   // so call them dynamically via dart:js_interop_unsafe (the supported way to reach vendor-
@@ -1275,6 +1296,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final e = _installPromptEvent;
     if (e == null) return;
     e.callMethod<JSAny?>('prompt'.toJS);
+    web.window.setProperty('__baysideDeferredPrompt'.toJS, null);
     setState(() => _installPromptEvent = null);
   }
 
@@ -1412,7 +1434,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _gpsSub?.cancel();
     _wxTimer?.cancel();
     _sunTimer?.cancel();
-    if (_installListener != null) web.window.removeEventListener('beforeinstallprompt', _installListener);
+    if (_installListener != null) web.window.removeEventListener('bayside-install-available', _installListener);
     WakelockPlus.disable();
     super.dispose();
   }
@@ -3849,9 +3871,12 @@ class HourlyTable extends StatelessWidget {
           && l.hour >= startHour && l.hour <= 21;
     }).toList();
     if (rows.isEmpty) {
-      return const Padding(padding: EdgeInsets.symmetric(vertical: 8),
-        child: Text('No more daylight hours today — swipe to Fri for tomorrow.',
-          style: TextStyle(color: Color(0xFF8FB6D6), fontSize: 12)));
+      // PWA index.html:728 — day-aware ("today" only when dayIdx is actually today) and
+      // points at the day tabs rather than naming a specific weekday, which stopped being
+      // true for most dayIdx values the moment this became a 7-day tab row.
+      return Padding(padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text('No daylight hours left ${dayIdx == 0 ? 'today' : 'that day'} — pick another day above.',
+          style: const TextStyle(color: Color(0xFF8FB6D6), fontSize: 12)));
     }
     final items = rows.map((h) => _WeatherRow(h: h, profile: profile)).toList();
     return LayoutBuilder(builder: (context, constraints) {
