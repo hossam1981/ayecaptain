@@ -772,9 +772,50 @@ class Dock {
   );
 }
 
+// Bundled NJ/NY marina & boat-ramp dataset (assets/docks-njny.json) — a one-time offline
+// extract from OpenStreetMap's regional data files (Geofabrik), not a live API call. Added
+// because the live Overpass API fetchDocks() used to depend on exclusively is currently
+// broken — confirmed via multiple independent tests (direct requests, a backend proxy with a
+// proper identifying header, and Overpass's own official web tool all failing the same way) —
+// and NOAA's equivalent chart-facility data has essentially zero coverage for this region
+// (checked: 0 points in a wide NJ/NY bounding box, ~1,150 nationwide total). This bundled
+// extract alone has 2,147 marina/slipway points for NJ+NY. Loads once, cached in memory for
+// the app's lifetime — instant, zero network dependency, can't show "couldn't reach data".
+List<Dock>? _bundledDocksCache;
+Future<List<Dock>> _loadBundledDocks() async {
+  if (_bundledDocksCache != null) return _bundledDocksCache!;
+  try {
+    final raw = await rootBundle.loadString('assets/docks-njny.json');
+    final list = jsonDecode(raw) as List;
+    _bundledDocksCache = list.map((e) {
+      final m = e as Map<String, dynamic>;
+      final kind = DockKind.values.firstWhere((k) => k.name == m['kind'], orElse: () => DockKind.marina);
+      final rawName = (m['name'] as String?)?.trim();
+      final name = (rawName != null && rawName.isNotEmpty) ? rawName : _defaultDockName(kind);
+      return Dock(name: name, kind: kind, ll: LatLng((m['lat'] as num).toDouble(), (m['lng'] as num).toDouble()));
+    }).toList();
+  } catch (_) {
+    _bundledDocksCache = [];
+  }
+  return _bundledDocksCache!;
+}
+
 // Returns null on a genuine fetch/parse failure (so the caller can show a retry prompt),
 // vs an empty list for a legitimate "no docks within 20 mi" result.
 Future<List<Dock>?> fetchDocks(LatLng at) async {
+  final bundled = await _loadBundledDocks();
+  final nearby = bundled.where((d) => _haversineM(at, d.ll) <= 20 * 1609.34).toList();
+  if (nearby.isNotEmpty) return nearby;
+  // Nothing in the bundled NJ/NY extract nearby — either a genuine "no docks within 20mi" in
+  // that region, or a location outside it entirely (the bundled data only covers NJ/NY). Try
+  // the original live Overpass path as a bonus for the latter case, rather than silently
+  // treating every out-of-region location as having zero docks. Currently unreliable (see
+  // above) — that's the known, pre-existing limitation this bundled data was added to avoid
+  // for the in-region case, which is now the common one for this app's users.
+  return _fetchDocksLive(at);
+}
+
+Future<List<Dock>?> _fetchDocksLive(LatLng at) async {
   // 7-day cache keyed on the rough tile (0.5°) so nearby fixes hit the same cache.
   final key = 'docks_${at.latitude.toStringAsFixed(1)}_${at.longitude.toStringAsFixed(1)}';
   try {

@@ -51,6 +51,37 @@ These have broken the build multiple times. A code-review pass must explicitly c
   automated agent — no real location. They stay unverified until manually checked on a phone.
 - End responses with a short recap of what changed and what's still open.
 
+## Regression safety — don't let one feature's work break or remove another
+
+`main.dart` is a single ~5000-line file with a lot of features sharing widgets, state, and
+helper functions. The failure mode to actively guard against: fixing/building feature A quietly
+breaks, hides, or deletes feature B because nobody checked what else touched the code being
+changed.
+
+- **Before editing a shared widget, function, or constant, grep the whole file for every call
+  site first** (`grep -n '<name>'`), not just the one you're looking at. If a change to
+  `_wxIconWidget`, `AppSpacing`, `_GlassSurface`, etc. affects more than the call site you came
+  in for, know that before you edit, not after a review catches it.
+- **Never silently remove a working button, toggle, condition branch, or UI entry point.** If
+  something looks dead or in the way, say so explicitly and ask, or leave it with a comment
+  explaining why it's unreachable for now — don't just delete it as part of an unrelated change.
+- **Run the full existing test suite, not just a new/changed one, before calling a change
+  done.** This project has already hit real regressions this way — e.g. confirming
+  `hourly_table_responsive_test.dart` still passed after changes to shared theme/spacing code in
+  the same file. Two separate test files sharing `main.dart` can silently diverge if only one
+  gets re-run.
+- **A feature that looks unrelated to your diff might not be** — if you touched a color token,
+  a spacing constant, a shared painter, or a state field used by more than one widget, explicitly
+  check (visually or via test) that the *other* consumers of that thing still look/work right,
+  not just the one you meant to change.
+- **Before commit, review the diff for anything removed that wasn't explicitly asked for** — a
+  deleted line is as much a change as an added one, and "I was just cleaning up nearby code" is
+  exactly how a working feature quietly disappears.
+- When a feature is known-incomplete or stubbed (see `TODO.md` and the "Known gaps" list in
+  `.claude/skills/ayecaptain-glass-design/SKILL.md`), say so plainly rather than letting it look
+  finished — a half-wired toggle that does nothing should read as "not implemented yet," not be
+  indistinguishable from a working one.
+
 ## Visual design system
 
 Before building or restyling any HUD badge, warning banner, rail button, or bottom-sheet-style

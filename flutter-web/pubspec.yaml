@@ -27,6 +27,15 @@ flutter:
   uses-material-design: true
   assets:
     - assets/land-njny.json   # pre-baked NOAA land polygons, shared with the PWA
+    # Pre-baked marina/slipway dock data (2,147 points for NJ+NY), extracted offline from
+    # Geofabrik's regional OSM files — not a live API call. Added because the live Overpass
+    # API fetchDocks() used to depend on exclusively is currently broken (confirmed via direct
+    # requests, a backend proxy with a proper identifying header, and Overpass's own official
+    # web tool all failing the same way), and NOAA's equivalent chart-facility data has
+    # essentially no coverage here (checked: 0 points in NJ/NY, ~1,150 nationwide total). See
+    # fetchDocks() in main.dart — this is the fast path; the original live Overpass call is
+    # kept as a fallback for locations outside NJ/NY, where this bundled data has nothing.
+    - assets/docks-njny.json
     - assets/icons/boat.png
     - assets/icons/boat-3d.png
     # Pre-scaled (LANCZOS, offline) to 3x the 31x76 display size. flutter_web's CanvasKit
