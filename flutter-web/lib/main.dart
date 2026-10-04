@@ -600,19 +600,27 @@ String _wxIcon(int? code) {
   return '⛈️';
 }
 
-// Real photo assets exist for a subset of conditions (clear/partly-cloudy/rain + night) —
-// use those where available, fall back to the emoji glyphs above for the rest (cloudy, fog,
-// snow, thunder) rather than stretching a mismatched image over a condition it doesn't depict.
+// Real icon assets cover every condition except fog and night — fog has no asset in this set
+// (falls back to the 🌫️ emoji), and night keeps its own existing moon photo rather than being
+// folded into this glossy-icon set (different style, not part of what was redesigned here).
 Widget _wxIconWidget(int? code, {required double size, bool isNight = false}) {
   String? asset;
   if (isNight) {
     asset = 'assets/icons/wx_moon_full.png';
   } else if (code == 0) {
-    asset = 'assets/icons/wx_sun.png';
+    asset = 'assets/icons/wx_clear.png';
   } else if (code != null && code <= 2) {
-    asset = 'assets/icons/wx_sun_cloud.png';
+    asset = 'assets/icons/wx_partly_cloudy.png';
+  } else if (code == 3) {
+    asset = 'assets/icons/wx_cloudy.png';
   } else if (code != null && ((code >= 51 && code <= 67) || (code >= 80 && code <= 82))) {
-    asset = 'assets/icons/wx_rain_cloud.png';
+    asset = 'assets/icons/wx_rain.png';
+  } else if (code != null && code >= 71 && code <= 77) {
+    asset = 'assets/icons/wx_snow.png';
+  } else if (code != null && code > 82) {
+    // Everything above 82 that isn't already matched above is thunder (WMO 95-99); fog
+    // (45/48) and drizzle/rain/showers (51-82) are both below this and already handled.
+    asset = 'assets/icons/wx_thunder.png';
   }
   if (asset != null) return Image.asset(asset, width: size, height: size, fit: BoxFit.contain);
   return Text(isNight ? '🌙' : _wxIcon(code), style: TextStyle(fontSize: size * .82));

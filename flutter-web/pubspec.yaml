@@ -40,9 +40,18 @@ flutter:
     - assets/icons/sunrise.png
     - assets/icons/sunset.png
     - assets/icons/ocean.png
-    - assets/icons/wx_sun.png
-    - assets/icons/wx_sun_cloud.png
-    - assets/icons/wx_rain_cloud.png
+    # Condition icon set (Clear/Partly Cloudy/Cloudy/Rain/Snow/Thunder) — generated to match a
+    # glossy-3D cloud icon style the user liked, replacing both the earlier photorealistic
+    # sun/partly-cloudy/rain assets (different style, inconsistent with the metric icons below)
+    # and the plain emoji fallbacks previously used for cloudy/snow/thunder. Verified genuinely
+    # transparent the same way as the metric icons. Fog still falls back to an emoji (🌫️) — not
+    # part of this set; night still uses the existing moon photo, untouched.
+    - assets/icons/wx_clear.png
+    - assets/icons/wx_partly_cloudy.png
+    - assets/icons/wx_cloudy.png
+    - assets/icons/wx_rain.png
+    - assets/icons/wx_snow.png
+    - assets/icons/wx_thunder.png
     - assets/icons/wx_moon_full.png
     - assets/icons/wx_moon_half.png
     # Weather-metric icons (Wind/Gust/Sunset/Water/Wave/Period row) — user-supplied, verified
