@@ -66,7 +66,7 @@ Future<void> _goldenAndCheck(WidgetTester tester, String name) async {
   await expectLater(find.byKey(const ValueKey('capture')), matchesGoldenFile('goldens/$name.png'));
 }
 
-const _widths = [320.0, 375.0, 430.0];
+const _widths = [320.0, 360.0, 375.0, 390.0, 430.0];
 const _scales = [1.0, 1.5, 2.0];
 
 void main() {
@@ -91,6 +91,31 @@ void main() {
         });
       }
     }
+
+    // takeException() alone doesn't catch this class of bug: plain text wrapping onto a
+    // second line throws nothing — it's silent, which is exactly how "6:33 PM" splitting into
+    // "6:33"/"PM" shipped past the exception-only checks above undetected. Measure the actual
+    // rendered text directly: its height must match a single line (not two), and its width
+    // must not exceed the column MetricsGrid actually gave it (not just "didn't crash").
+    for (final width in _widths) {
+      testWidgets('Sunset value ("6:35 PM") stays on one line and fits its column at ${width.toInt()}lp',
+          (tester) async {
+        await _pump(tester, buildTiles(), width: width, textScale: 1.0, height: 600);
+        final valueFinder = find.text('6:35 PM');
+        expect(valueFinder, findsOneWidget);
+        final size = tester.getSize(valueFinder);
+        // Any other single-line value in the same bodyLarge style, as a one-line reference
+        // height — if "6:35 PM" wrapped, its height would be roughly double this.
+        final oneLineHeight = tester.getSize(find.text('19 kn')).height;
+        expect(size.height, closeTo(oneLineHeight, 0.5),
+            reason: '"6:35 PM" wrapped to multiple lines at ${width.toInt()}lp (height ${size.height} vs '
+                'one-line reference ${oneLineHeight})');
+        const gap = AppSpacing.md;
+        final itemWidth = (width - gap * 2) / 3;   // 3 columns at every width tested here (all >=320, above the narrow 280 threshold)
+        expect(size.width, lessThanOrEqualTo(itemWidth),
+            reason: '"6:35 PM" (${size.width}px) overflowed its ${itemWidth}px column at ${width.toInt()}lp');
+      });
+    }
   });
 
   group('BestWindowPill', () {
@@ -110,6 +135,13 @@ void main() {
         });
       }
     }
+
+    // No "doesn't wrap prematurely at 430lp" assertion here: tried one, and it failed under
+    // this harness's placeholder test font, which renders noticeably wider per character than
+    // the real proportional font — not a real bug. (A similarly-long "Best window:" string
+    // already renders on one line at a comparable width in the live-app screenshot verified
+    // separately.) The width/scale loop above still covers the structural requirement (full
+    // width, Expanded, no RenderFlex overflow) at every tested size.
   });
 
   group('DayTabs', () {

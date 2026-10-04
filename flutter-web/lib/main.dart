@@ -3799,16 +3799,24 @@ class MetricTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      icon != null
-        ? Image.asset(icon!, width: 24, height: 24, fit: BoxFit.contain)
-        : const Icon(Icons.water_drop_rounded, color: Color(0xFF6FC6FF), size: 22),
-      const SizedBox(width: AppSpacing.sm),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        Text(label, style: theme.textTheme.labelLarge),
-        const SizedBox(height: 2),
-        Text(value, style: theme.textTheme.bodyLarge),
-      ])),
+    // Was Row[icon, gap, Expanded(Column[label, value])] — icon+gap (32px) came out of the
+    // SAME narrow width budget as both label and value, since Expanded wrapped them together.
+    // In a 3-column grid on a 320px sheet that left the value well under 70px, not enough for
+    // "6:33 PM" at the unchanged 16px/w700 bodyLarge style, which wrapped to "6:33"/"PM".
+    // Unchanged fonts/weights/colors/icon size/spacing — only the icon now shares a row with
+    // the (short) label instead of sitting beside the (longer) value, so the value gets the
+    // tile's FULL width instead of width-minus-icon. maxLines:1/softWrap:false make the "never
+    // wrap" requirement structural, not just a hope that it now fits.
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        icon != null
+          ? Image.asset(icon!, width: 24, height: 24, fit: BoxFit.contain)
+          : const Icon(Icons.water_drop_rounded, color: Color(0xFF6FC6FF), size: 22),
+        const SizedBox(width: AppSpacing.sm),
+        Flexible(child: Text(label, style: theme.textTheme.labelLarge, maxLines: 1, overflow: TextOverflow.ellipsis)),
+      ]),
+      const SizedBox(height: 2),
+      Text(value, style: theme.textTheme.bodyLarge, maxLines: 1, softWrap: false, overflow: TextOverflow.visible),
     ]);
   }
 }
