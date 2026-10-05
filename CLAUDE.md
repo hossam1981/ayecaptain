@@ -29,15 +29,26 @@ a PWA feature to `flutter-web/lib/main.dart`:
   CSS `filter: drop-shadow()` shape-following blur), say so and propose the closest Flutter
   technique rather than silently inventing different-looking behavior.
 
-## Two recurring Dart bugs — check for both before every commit
+## Three recurring Dart bugs — check for all three before every commit
 
-These have broken the build multiple times. A code-review pass must explicitly check for them:
+These have broken the build (or silently crashed at runtime) multiple times. A code-review pass
+must explicitly check for all three:
 
 1. **Bare `Path()`** resolves ambiguously — this file imports both `dart:ui` and `latlong2`,
    and `latlong2` also exports a `Path<LatLng>`. Always write `ui.Path()`, never bare `Path()`.
 2. **`.clamp(a, b)` returns `num`, not `double`** — even when called on a `double` receiver.
    Any `.clamp(...)` result feeding a strict `double`-typed parameter (`Colors.withOpacity()`,
    `Transform.scale(scale:)`, etc.) needs `.toDouble()` appended, or it won't compile.
+3. **`ui.Gradient.linear`/`.radial` with 3+ colors needs an explicit, equal-length
+   `colorStops` list** — passing just the colors list compiles fine (the parameter is
+   optional/nullable) but throws `ArgumentError: "colors" must have length 2 if "colorStops"
+   is omitted` the moment it actually paints. `flutter analyze` cannot catch this — it's a
+   runtime error, not a compile error — and `--platform=chrome` static analysis won't exercise
+   the paint call either, so it can sit latent for an entire session (confirmed: found in
+   `_OpticalButtonGlassPainter`'s upper-reflection gradient from the *first* optical-glass pass,
+   undetected until a widget test actually rendered the button — live browser verification never
+   got far enough to paint it). Any new `CustomPainter` work with 3+ color stops needs either a
+   widget test that actually calls `paint()`, or a careful manual count of colors vs stops.
 
 ## Workflow
 

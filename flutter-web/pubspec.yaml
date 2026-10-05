@@ -73,3 +73,8 @@ flutter:
     - assets/icons/wx_water.png
     - assets/icons/wx_wave.png
     - assets/icons/wx_period.png
+    # Dock-popup icons (same glossy icy-cyan style, user-supplied, verified genuinely
+    # transparent) — used in _openDockCallout's icon tile. No matching marina icon yet; that
+    # kind still falls back to a plain Icons.anchor glyph.
+    - assets/icons/dock_ramp.png
+    - assets/icons/dock_fuel.png

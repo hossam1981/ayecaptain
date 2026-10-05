@@ -1263,6 +1263,30 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   List<Dock> _docks = [];
   List<NavAid> _navAids = [];
   TidalCurrent? _tidalCurrent;
+
+  // The one currently-open dock callout (map-anchored popup, not a bottom sheet — see
+  // _DockPin/_DockCallout). _dockPopupAbove/_dockPopupDx are computed once at open time from
+  // the tapped pin's actual screen position, so the callout flips below and/or nudges
+  // horizontally to stay on screen instead of running off the edge.
+  LatLng? _openDock;
+  bool _dockPopupAbove = true;
+  double _dockPopupDx = 0;
+  void _openDockPopup(LatLng at, Offset anchorTopLeft, Size anchorSize) {
+    final screen = MediaQuery.sizeOf(context);
+    final anchorCenterX = anchorTopLeft.dx + anchorSize.width / 2;
+    final above = anchorTopLeft.dy - _dockPopupGap - _dockPopupEstH >= _dockPopupMargin;
+    final left = anchorCenterX - _dockPopupW / 2;
+    final right = anchorCenterX + _dockPopupW / 2;
+    double dx = 0;
+    if (left < _dockPopupMargin) {
+      dx = _dockPopupMargin - left;
+    } else if (right > screen.width - _dockPopupMargin) {
+      dx = (screen.width - _dockPopupMargin) - right;
+    }
+    setState(() { _openDock = at; _dockPopupAbove = above; _dockPopupDx = dx; });
+  }
+
+  void _closeDockPopup() { if (_openDock != null) setState(() => _openDock = null); }
   // Loading/error feedback — matches the PWA's "Loading nearby docks…" /
   // "Couldn't reach dock data — tap to retry" (index.html:1662, 1683).
   bool _docksLoading = false, _docksError = false;
@@ -1743,8 +1767,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   void _handleMapPoint(LatLng ll) {
     if (!_picking) {
       // PWA: any interaction with the map area closes the expanded sheet
-      // (index.html:1413 clears on picking mode, :1606 clears on route drop).
+      // (index.html:1413 clears on picking mode, :1606 clears on route drop). A tap elsewhere
+      // on the map should likewise dismiss an open dock callout.
       if (_sheetExpanded) setState(() => _sheetExpanded = false);
+      _closeDockPopup();
       return;
     }
     setState(() { _waypoints.add(ll); _sheetExpanded = false; });
@@ -1997,7 +2023,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     Marker(
                       point: d.ll,
                       width: 28, height: 28,
-                      child: _DockPin(kind: d.kind, name: d.name, onRouteHere: () => _routeToPoint(d.ll)),
+                      child: _DockPin(
+                        kind: d.kind, name: d.name,
+                        isOpen: _openDock == d.ll, above: _dockPopupAbove, dx: _dockPopupDx,
+                        onRouteHere: () { _closeDockPopup(); _routeToPoint(d.ll); },
+                        onOpen: (topLeft, size) => _openDockPopup(d.ll, topLeft, size),
+                        onClose: _closeDockPopup,
+                      ),
                     ),
                   if (_navAidsOn) for (final a in _navAids)
                     Marker(
@@ -2915,21 +2947,60 @@ class _TeardropPinPainter extends CustomPainter {
 }
 
 // Batch B.5 — chart overlay markers
+// A map-anchored callout (NOT a bottom sheet): tapping a dock pin opens a small, compact
+// (fixed ~240lp wide, content-driven height) glass card positioned immediately above the pin,
+// with a matching glass pointer tail. _MapScreenState computes, once per open, whether there's
+// room above (else flips below) and how far to nudge horizontally to stay clear of the screen
+// edges — see _openDockPopup. The tail always stays centered on the pin itself (not re-centered
+// under a shifted card), so it keeps pointing at the true marker per spec. Rendered via a plain
+// Stack with clipBehavior: Clip.none inside the Marker's own small box — flutter_map's
+// MarkerLayer/MobileLayerTransformer don't clip marker children (confirmed in package source),
+// so this paints outside the 28x28 marker box without needing an Overlay/OverflowBox.
+// Dock callout layout constants — fixed card width (never stretches edge-to-edge on a wide
+// viewport), an estimated height used only for the above/below flip decision at open time
+// (see _MapScreenState._openDockPopup), and the on-screen margin/gap kept around it.
+const double _dockPopupW = 240, _dockPopupEstH = 150, _dockPopupMargin = 10, _dockPopupGap = 9;
+
+// Test-only entry points — _DockCallout/_GlassTail are private (same single-file-by-design
+// pattern as the rest of main.dart), so a widget test in test/ can't reach them directly.
+// These just expose the same widgets for a golden-image test; no behavior added.
+@visibleForTesting
+Widget debugDockCallout({required DockKind kind, required String name, VoidCallback? onRouteHere}) =>
+    _DockCallout(kind: kind, name: name, onRouteHere: onRouteHere ?? () {});
+@visibleForTesting
+Widget debugGlassTail({required bool pointingUp}) => _GlassTail(pointingUp: pointingUp);
+
 class _DockPin extends StatelessWidget {
   final DockKind kind;
   final String name;
+  final bool isOpen;
+  final bool above;   // true = callout sits above the pin (tail points down); false = below (tail points up)
+  final double dx;    // horizontal nudge applied to the card only, to keep it on screen
   final VoidCallback onRouteHere;
-  const _DockPin({required this.kind, required this.name, required this.onRouteHere});
+  final void Function(Offset anchorTopLeft, Size anchorSize) onOpen;
+  final VoidCallback onClose;
+  const _DockPin({
+    required this.kind, required this.name, required this.isOpen, required this.above, required this.dx,
+    required this.onRouteHere, required this.onOpen, required this.onClose,
+  });
   @override
   Widget build(BuildContext context) {
     final color = kind == DockKind.fuel ? const Color(0xFF1F8A5B)
         : (kind == DockKind.slipway ? const Color(0xFF2E6F9E) : const Color(0xFF6B4FC6));
     final icon = kind == DockKind.fuel ? Icons.local_gas_station
         : (kind == DockKind.slipway ? Icons.directions_boat : Icons.anchor);
-    return Tooltip(
+    final pin = Tooltip(
       message: name,
       child: InkWell(
-        onTap: () => _openDockCallout(context, name, kind, onRouteHere),
+        onTap: () {
+          if (isOpen) { onClose(); return; }
+          final box = context.findRenderObject();
+          if (box is RenderBox && box.attached && box.hasSize) {
+            onOpen(box.localToGlobal(Offset.zero), box.size);
+          } else {
+            onOpen(Offset.zero, const Size(28, 28));
+          }
+        },
         borderRadius: BorderRadius.circular(12),
         child: Container(
           decoration: BoxDecoration(
@@ -2942,26 +3013,416 @@ class _DockPin extends StatelessWidget {
         ),
       ),
     );
+    if (!isOpen) return pin;
+
+    const tailW = 18.0, tailH = 9.0, cardW = _dockPopupW;
+    return Stack(clipBehavior: Clip.none, children: [
+      pin,
+      // Pointer tail — always centered on the pin itself, regardless of the card's own dx nudge.
+      Positioned(
+        left: 14 - tailW / 2, width: tailW, height: tailH,
+        bottom: above ? 28 : null, top: above ? null : 28,
+        child: _GlassTail(pointingUp: !above),
+      ),
+      Positioned(
+        left: 14 - cardW / 2 + dx, width: cardW,
+        bottom: above ? 28 + tailH : null, top: above ? null : 28 + tailH,
+        child: _DockCallout(kind: kind, name: name, onRouteHere: onRouteHere),
+      ),
+    ]);
   }
-  static void _openDockCallout(BuildContext c, String name, DockKind kind, VoidCallback onRouteHere) {
-    showModalBottomSheet<void>(context: c, backgroundColor: Colors.transparent,
-      builder: (bc) => SafeArea(child: Container(
-        margin: const EdgeInsets.all(12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14)),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name, style: const TextStyle(color: Color(0xFF0F2A44), fontWeight: FontWeight.w800, fontSize: 17)),
-          const SizedBox(height: 4),
-          Text(kind == DockKind.fuel ? 'Fuel dock' : (kind == DockKind.slipway ? 'Boat ramp / slipway' : 'Marina'),
-            style: const TextStyle(color: Color(0xFF708597), fontSize: 12)),
-          const SizedBox(height: 12),
-          Material(color: const Color(0xFF1F8A5B), borderRadius: BorderRadius.circular(10),
-            child: InkWell(borderRadius: BorderRadius.circular(10), onTap: () { Navigator.of(bc).pop(); onRouteHere(); },
-              child: const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: Text('Route here', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800))))),
+}
+
+// The callout's content: icon + name + subtitle + Route-here button, wrapped in the optical
+// glass card. Fixed width (never stretches edge-to-edge on a wide viewport), content-driven
+// height.
+class _DockCallout extends StatelessWidget {
+  final DockKind kind;
+  final String name;
+  final VoidCallback onRouteHere;
+  const _DockCallout({required this.kind, required this.name, required this.onRouteHere});
+  @override
+  Widget build(BuildContext context) {
+    final iconWidget = kind == DockKind.fuel
+        ? Image.asset('assets/icons/dock_fuel.png', width: 24, height: 24, fit: BoxFit.contain)
+        : (kind == DockKind.slipway
+            ? Image.asset('assets/icons/dock_ramp.png', width: 24, height: 24, fit: BoxFit.contain)
+            : const Icon(Icons.anchor, color: Colors.white, size: 20));
+    final subtitle = kind == DockKind.fuel ? 'Fuel dock' : (kind == DockKind.slipway ? 'Boat ramp / slipway' : 'Marina');
+    return _OpticalGlassCard(
+      borderRadius: const BorderRadius.all(Radius.circular(16)),
+      child: Padding(padding: const EdgeInsets.fromLTRB(11, 11, 11, 11), child: Column(
+        mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          _OpticalIconTile(child: iconWidget),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16,
+                shadows: [Shadow(color: Color(0x5561A6E3), blurRadius: 10)])),
+            Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Color(0xFFA7C2DA), fontWeight: FontWeight.w600, fontSize: 11.5)),
+          ])),
         ]),
-      )));
+        const SizedBox(height: 10),
+        _OpticalGlassButton(
+          onTap: onRouteHere,
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Row(children: [
+              const Icon(Icons.navigation_rounded, color: Colors.white, size: 15),
+              const SizedBox(width: 7),
+              Container(width: 1, height: 14, color: Colors.white.withOpacity(.3)),
+              const SizedBox(width: 7),
+              const Expanded(child: Text('Route here',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13))),
+              Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(.85), size: 17),
+            ]),
+          ),
+        ),
+      ]),
+    ));
   }
+}
+
+// ==================================================================================================
+// Optical glass — the dock-popup callout's material/lighting recipe. A distinct, more detailed
+// technique than the ayecaptain-glass-design SKILL.md recipe used elsewhere (_GlassSurface):
+// real backdrop blur of whatever is behind the card (the map), a noticeably transparent 3-stop
+// gradient body (not a flat opaque tint), and a CustomPainter for the parts a plain
+// Border/BoxShadow can't reproduce — edge brightness that varies by position (a sweep-gradient
+// stroke), a second inner rim confined to the top+left edges only, a broad soft diagonal
+// reflection confined to the upper-left, and two specular blooms of deliberately unequal
+// strength. The pointer tail (_GlassTail) reuses the same blur+gradient+edge-light recipe,
+// clipped to a triangle, so the card and tail read as one continuous piece of glass. Built to
+// an exact color/opacity spec (not the general glass tokens), so don't fold this into
+// _GlassSurface — it's intentionally a different, more detailed surface.
+// ==================================================================================================
+
+class _OpticalGlassCard extends StatelessWidget {
+  final Widget child;
+  final BorderRadius borderRadius;
+  const _OpticalGlassCard({required this.child, required this.borderRadius});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(.22), blurRadius: 18, offset: const Offset(0, 7)),
+          const BoxShadow(color: Color(0x1416CFFF), blurRadius: 12),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        // Visual order per spec: map -> background blur -> transparent dark glass ->
+        // internal reflection -> content -> thin refractive edge -> specular highlights. Split
+        // across two painters (below/above) bracketing `child` in the Stack, so the edge
+        // lighting and specular blooms genuinely paint on top of the text/icon content instead
+        // of being covered by it.
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: Stack(children: [
+            // Dark translucent glass body — noticeably transparent (down from the previous
+            // ~78-80% alpha to ~50-56%) so the blurred map stays subtly visible through it,
+            // not a flat opaque tint.
+            const Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft, end: Alignment.bottomRight,
+                colors: [Color(0x8F123E56), Color(0x80072638), Color(0x8F041F30)],
+                stops: [0, .55, 1],
+              ),
+            ))),
+            Positioned.fill(child: IgnorePointer(
+              child: CustomPaint(painter: _OpticalGlassBelowPainter(borderRadius: borderRadius, isCard: true)))),
+            child,
+            Positioned.fill(child: IgnorePointer(
+              child: CustomPaint(painter: _OpticalGlassAbovePainter(borderRadius: borderRadius, isCard: true)))),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// The icon tile — a smaller version of the same optical glass (own gradient body + the same
+// painter for its rim/reflection), not a scaled-down copy of the card widget above (no
+// backdrop blur needed at this size — nothing meaningful shows through a 38px tile).
+class _OpticalIconTile extends StatelessWidget {
+  final Widget child;
+  const _OpticalIconTile({required this.child});
+  @override
+  Widget build(BuildContext context) {
+    const radius = BorderRadius.all(Radius.circular(11));
+    return Container(
+      width: 38, height: 38,
+      decoration: BoxDecoration(borderRadius: radius,
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(.28), blurRadius: 6, offset: const Offset(0, 2))]),
+      child: ClipRRect(borderRadius: radius, child: Stack(children: [
+        const Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
+          gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+            colors: [Color(0xD91C66B7), Color(0xD9103C70)]),
+        ))),
+        Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _OpticalGlassBelowPainter(borderRadius: radius, isCard: false)))),
+        Center(child: child),
+        Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _OpticalGlassAbovePainter(borderRadius: radius, isCard: false)))),
+      ])),
+    );
+  }
+}
+
+// Pre-content layers: faint internal illumination, the broad diagonal reflection, and the
+// second top+left inner rim. Painted BEHIND the card/tile's content.
+class _OpticalGlassBelowPainter extends CustomPainter {
+  final BorderRadius borderRadius;
+  final bool isCard;
+  const _OpticalGlassBelowPainter({required this.borderRadius, required this.isCard});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = borderRadius.toRRect(rect);
+
+    canvas.save();
+    canvas.clipRRect(rrect);
+
+    // Faint internal illumination — low cyan glow behind the content, kept subtle so it
+    // doesn't fight the card's overall transparency.
+    canvas.drawRect(rect, Paint()..shader = ui.Gradient.radial(
+      Offset(size.width * .5, size.height * .95), size.width * .8,
+      const [Color(0x1416CFFF), Color(0x0016CFFF)],
+    ));
+
+    // Broad, soft diagonal mirror reflection confined to the upper-left quadrant — reflected
+    // light on curved glass, not a stripe: white at ~12-14% opacity fading through pale cyan
+    // to fully transparent, heavily blurred.
+    canvas.save();
+    canvas.translate(size.width * .04, -size.height * .08);
+    canvas.rotate(-0.55);
+    final reflectRect = Rect.fromLTWH(-size.width * .15, 0, size.width * .72, size.height * .62);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(reflectRect, const Radius.circular(60)),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          reflectRect.topLeft, reflectRect.bottomRight,
+          const [Color(0x22FFFFFF), Color(0x0C67E8FF), Color(0x0067E8FF)], const [0, .6, 1],
+        )
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, isCard ? 15 : 6),
+    );
+    canvas.restore();
+
+    // Second, thin rim reflection along only the top and left edges (an inner accent distinct
+    // from the perimeter edge-lighting stroke) — brightest at the top-left corner, fading to
+    // nothing along both edges, so the border doesn't read as equal brightness.
+    final inset = isCard ? 2.5 : 1.5;
+    final rimPath = ui.Path()
+      ..moveTo(rect.left + inset, rect.top + size.height * .55)
+      ..lineTo(rect.left + inset, rect.top + inset + (isCard ? 6 : 3))
+      ..arcToPoint(Offset(rect.left + inset + (isCard ? 6 : 3), rect.top + inset),
+          radius: Radius.circular(isCard ? 6 : 3))
+      ..lineTo(rect.left + size.width * .5, rect.top + inset);
+    canvas.drawPath(rimPath, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = isCard ? 1.2 : 0.8
+      ..strokeCap = StrokeCap.round
+      ..shader = ui.Gradient.linear(
+        Offset(rect.left, rect.top + size.height * .5), Offset(rect.left + size.width * .5, rect.top),
+        const [Color(0x00E9FBFF), Color(0xB3E9FBFF), Color(0x1A67E8FF)], const [0, .35, 1],
+      )
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, isCard ? 1 : .6));
+    canvas.restore();   // end clip
+  }
+
+  @override
+  bool shouldRepaint(covariant _OpticalGlassBelowPainter old) => old.borderRadius != borderRadius || old.isCard != isCard;
+}
+
+// Post-content layers: the perimeter edge-lighting stroke and the two specular blooms.
+// Painted ON TOP of the card/tile's content, per spec ("...content -> thin refractive edge ->
+// tiny specular highlights").
+class _OpticalGlassAbovePainter extends CustomPainter {
+  final BorderRadius borderRadius;
+  final bool isCard;
+  const _OpticalGlassAbovePainter({required this.borderRadius, required this.isCard});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = borderRadius.toRRect(rect);
+
+    // Glass edge — a very thin (~1px) border whose brightness varies by position (a sweep
+    // gradient stroke, not a flat color): bright white/cyan top-left, faint along the right,
+    // a brighter cyan pass along part of the bottom.
+    canvas.drawRRect(rrect.deflate(.5), Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = isCard ? .9 : .7
+      ..shader = ui.Gradient.sweep(
+        rect.center,
+        const [
+          Color(0xE6E9FBFF), Color(0xCC67E8FF), Color(0x5A268CFF),
+          Color(0x5A16CFFF), Color(0x40268CFF), Color(0xE6E9FBFF),
+        ],
+        const [0, .18, .40, .62, .85, 1],
+        ui.TileMode.clamp, -math.pi * .72, math.pi * 1.28,
+      ));
+
+    // Specular highlights — one tiny bright point near the top-left edge/corner, and one
+    // extremely subtle highlight near the opposite (bottom-right) edge. Not symmetric: the
+    // second is far more restrained than the first.
+    void bloom(Offset at, double r, Color core, double strength) {
+      canvas.drawCircle(at, r * 2.2, Paint()..color = core.withOpacity(.07 * strength)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
+      canvas.drawCircle(at, r * 1.2, Paint()..color = core.withOpacity(.28 * strength)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
+      canvas.drawCircle(at, r * .35, Paint()..color = Colors.white.withOpacity(.85 * strength)..maskFilter = const MaskFilter.blur(BlurStyle.normal, .8));
+    }
+    bloom(Offset(rect.left + (isCard ? 12 : 7), rect.top + (isCard ? 8 : 5)), isCard ? 2.0 : 1.2, const Color(0xFF67E8FF), 1);
+    bloom(Offset(rect.right - (isCard ? 14 : 8), rect.bottom - (isCard ? 9 : 6)), isCard ? 1.6 : 1.0, const Color(0xFF16CFFF), .35);
+  }
+
+  @override
+  bool shouldRepaint(covariant _OpticalGlassAbovePainter old) => old.borderRadius != borderRadius || old.isCard != isCard;
+}
+
+// The pointer tail — built from the SAME backdrop blur + gradient body + edge lighting as the
+// card (a smaller instance of the same painter/material, clipped to a triangle), so the card
+// and its tail read as one continuous piece of glass rather than two different surfaces.
+class _GlassTail extends StatelessWidget {
+  final bool pointingUp;   // true: callout is below the pin, tail points up into it
+  const _GlassTail({required this.pointingUp});
+  @override
+  Widget build(BuildContext context) {
+    return ClipPath(
+      clipper: _TailClipper(pointingUp: pointingUp),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Stack(children: [
+          const Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
+            gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+              colors: [Color(0x8F123E56), Color(0x8F041F30)]),
+          ))),
+          Positioned.fill(child: CustomPaint(painter: _TailEdgePainter(pointingUp: pointingUp))),
+        ]),
+      ),
+    );
+  }
+}
+
+class _TailClipper extends CustomClipper<ui.Path> {
+  final bool pointingUp;
+  const _TailClipper({required this.pointingUp});
+  @override
+  ui.Path getClip(Size size) {
+    final p = ui.Path();
+    if (pointingUp) {
+      p.moveTo(size.width / 2, 0);
+      p.lineTo(size.width, size.height);
+      p.lineTo(0, size.height);
+    } else {
+      p.moveTo(0, 0);
+      p.lineTo(size.width, 0);
+      p.lineTo(size.width / 2, size.height);
+    }
+    p.close();
+    return p;
+  }
+
+  @override
+  bool shouldReclip(covariant _TailClipper old) => old.pointingUp != pointingUp;
+}
+
+// Thin cyan/white edge light along the tail's two slanted sides, matching the card's rim.
+class _TailEdgePainter extends CustomPainter {
+  final bool pointingUp;
+  const _TailEdgePainter({required this.pointingUp});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = ui.Path();
+    if (pointingUp) {
+      path.moveTo(0, size.height);
+      path.lineTo(size.width / 2, 0);
+      path.lineTo(size.width, size.height);
+    } else {
+      path.moveTo(0, 0);
+      path.lineTo(size.width / 2, size.height);
+      path.lineTo(size.width, 0);
+    }
+    canvas.drawPath(path, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = .8
+      ..strokeJoin = StrokeJoin.round
+      ..shader = ui.Gradient.linear(
+        Offset(size.width * .5, pointingUp ? size.height : 0), Offset(size.width * .5, pointingUp ? 0 : size.height),
+        const [Color(0x40E9FBFF), Color(0xB3E9FBFF)],
+      ));
+  }
+  @override
+  bool shouldRepaint(covariant _TailEdgePainter old) => old.pointingUp != pointingUp;
+}
+
+// Route-here button — "emerald glass" per spec: translucent (not opaque) teal/emerald body,
+// its own light backdrop blur, a brighter glass top edge, subtle internal reflection, a thin
+// mint rim, and a restrained (not a big) green bloom.
+class _OpticalGlassButton extends StatelessWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  const _OpticalGlassButton({required this.child, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    const radius = BorderRadius.all(Radius.circular(12));
+    return Container(
+      decoration: BoxDecoration(borderRadius: radius,
+        boxShadow: const [BoxShadow(color: Color(0x2620A875), blurRadius: 9)]),
+      child: ClipRRect(borderRadius: radius, child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(onTap: onTap, child: Stack(children: [
+            const Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(
+              gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [Color(0xCC20A875), Color(0xCC087B69)]),
+            ))),
+            Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _OpticalButtonGlassPainter(borderRadius: radius)))),
+            child,
+          ])),
+        ),
+      )),
+    );
+  }
+}
+
+class _OpticalButtonGlassPainter extends CustomPainter {
+  final BorderRadius borderRadius;
+  const _OpticalButtonGlassPainter({required this.borderRadius});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = borderRadius.toRRect(rect);
+    canvas.save();
+    canvas.clipRRect(rrect);
+
+    // Brighter glass top edge / subtle internal reflection across the upper portion only —
+    // the upper edge catches light like polished glass; the lower portion stays unlit.
+    final upper = Rect.fromLTWH(0, 0, size.width, size.height * .5);
+    canvas.drawRect(upper, Paint()..shader = ui.Gradient.linear(
+      upper.topLeft, upper.bottomLeft,
+      const [Color(0x52FFFFFF), Color(0x0EFFFFFF), Color(0x00FFFFFF)], const [0, .5, 1],
+    ));
+    // Dark lower internal shading.
+    final lower = Rect.fromLTWH(0, size.height * .55, size.width, size.height * .45);
+    canvas.drawRect(lower, Paint()..shader = ui.Gradient.linear(
+      lower.topLeft, lower.bottomLeft, const [Color(0x00000000), Color(0x2E000000)],
+    ));
+    canvas.restore();
+
+    // ~1px mint/cyan rim.
+    canvas.drawRRect(rrect.deflate(.5), Paint()
+      ..style = PaintingStyle.stroke..strokeWidth = 1..color = const Color(0x8C9DF2D8));
+
+    // One small, restrained specular highlight near the upper-right edge.
+    final at = Offset(size.width * .86, size.height * .18);
+    canvas.drawCircle(at, 4, Paint()..color = const Color(0xFF67E8FF).withOpacity(.1)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    canvas.drawCircle(at, 1.8, Paint()..color = Colors.white.withOpacity(.75)..maskFilter = const MaskFilter.blur(BlurStyle.normal, .8));
+  }
+  @override
+  bool shouldRepaint(covariant _OpticalButtonGlassPainter old) => false;
 }
 
 class _NavAidPin extends StatelessWidget {
