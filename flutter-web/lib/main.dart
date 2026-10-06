@@ -1264,15 +1264,21 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   List<NavAid> _navAids = [];
   TidalCurrent? _tidalCurrent;
 
-  // The one currently-open dock callout (map-anchored popup, not a bottom sheet — see
-  // _DockPin/_DockCallout). _dockPopupAbove/_dockPopupDx are computed once at open time from
-  // the tapped pin's actual screen position, so the callout flips below and/or nudges
-  // horizontally to stay on screen instead of running off the edge.
+  // The one currently-open dock callout. Shown via Overlay.insert(), NOT nested inside the
+  // tapped pin's own small Marker box — Flutter gates hit-testing to a widget's OWN declared
+  // size before it ever recurses into children (RenderBox.hitTest()'s `size.contains(position)`
+  // check), so content painted outside a parent's bounds via Stack(clipBehavior: Clip.none) is
+  // visible but NOT tappable. That was the bug in the first version of this: the card rendered
+  // fine, but "Route here" never responded because it painted outside the pin's 28x28 marker
+  // box. An Overlay entry has no such box — it's positioned directly in screen coordinates, so
+  // taps land correctly everywhere the card actually paints.
   LatLng? _openDock;
-  bool _dockPopupAbove = true;
-  double _dockPopupDx = 0;
-  void _openDockPopup(LatLng at, Offset anchorTopLeft, Size anchorSize) {
-    final screen = MediaQuery.sizeOf(context);
+  OverlayEntry? _dockOverlayEntry;
+
+  void _openDockPopup(Dock d, Offset anchorTopLeft, Size anchorSize) {
+    _removeDockOverlay();
+    final screenH = MediaQuery.sizeOf(context).height;
+    final screenW = MediaQuery.sizeOf(context).width;
     final anchorCenterX = anchorTopLeft.dx + anchorSize.width / 2;
     final above = anchorTopLeft.dy - _dockPopupGap - _dockPopupEstH >= _dockPopupMargin;
     final left = anchorCenterX - _dockPopupW / 2;
@@ -1280,13 +1286,43 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     double dx = 0;
     if (left < _dockPopupMargin) {
       dx = _dockPopupMargin - left;
-    } else if (right > screen.width - _dockPopupMargin) {
-      dx = (screen.width - _dockPopupMargin) - right;
+    } else if (right > screenW - _dockPopupMargin) {
+      dx = (screenW - _dockPopupMargin) - right;
     }
-    setState(() { _openDock = at; _dockPopupAbove = above; _dockPopupDx = dx; });
+    const tailW = 18.0, tailH = 9.0;
+    setState(() => _openDock = d.ll);
+    _dockOverlayEntry = OverlayEntry(builder: (overlayContext) {
+      return Stack(children: [
+        // A full-screen, invisible tap-catcher BEHIND the card/tail so tapping anywhere else
+        // on the map closes the callout — mirrors _handleMapPoint's "tap elsewhere" dismissal,
+        // needed here too since the overlay now sits above the FlutterMap's own tap handling.
+        Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _closeDockPopup)),
+        // Pointer tail — centered on the pin itself, not shifted by the card's own dx nudge.
+        Positioned(
+          left: anchorCenterX - tailW / 2, width: tailW, height: tailH,
+          bottom: above ? screenH - anchorTopLeft.dy : null,
+          top: above ? null : anchorTopLeft.dy + anchorSize.height,
+          child: _GlassTail(pointingUp: !above),
+        ),
+        Positioned(
+          left: anchorCenterX - _dockPopupW / 2 + dx, width: _dockPopupW,
+          bottom: above ? screenH - anchorTopLeft.dy + tailH : null,
+          top: above ? null : anchorTopLeft.dy + anchorSize.height + tailH,
+          child: _DockCallout(kind: d.kind, name: d.name,
+            onRouteHere: () { _closeDockPopup(); _routeToPoint(d.ll); }),
+        ),
+      ]);
+    });
+    Overlay.of(context).insert(_dockOverlayEntry!);
   }
 
-  void _closeDockPopup() { if (_openDock != null) setState(() => _openDock = null); }
+  void _removeDockOverlay() { _dockOverlayEntry?.remove(); _dockOverlayEntry = null; }
+
+  void _closeDockPopup() {
+    if (_openDock == null) return;
+    setState(() => _openDock = null);
+    _removeDockOverlay();
+  }
   // Loading/error feedback — matches the PWA's "Loading nearby docks…" /
   // "Couldn't reach dock data — tap to retry" (index.html:1662, 1683).
   bool _docksLoading = false, _docksError = false;
@@ -2025,9 +2061,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       width: 28, height: 28,
                       child: _DockPin(
                         kind: d.kind, name: d.name,
-                        isOpen: _openDock == d.ll, above: _dockPopupAbove, dx: _dockPopupDx,
-                        onRouteHere: () { _closeDockPopup(); _routeToPoint(d.ll); },
-                        onOpen: (topLeft, size) => _openDockPopup(d.ll, topLeft, size),
+                        isOpen: _openDock == d.ll,
+                        onOpen: (topLeft, size) => _openDockPopup(d, topLeft, size),
                         onClose: _closeDockPopup,
                       ),
                     ),
@@ -2970,18 +3005,22 @@ Widget debugDockCallout({required DockKind kind, required String name, VoidCallb
 @visibleForTesting
 Widget debugGlassTail({required bool pointingUp}) => _GlassTail(pointingUp: pointingUp);
 
+// Just the tappable pin icon — the callout itself is shown via Overlay (see
+// _MapScreenState._openDockPopup), not rendered inline here. It used to be: the pin's own
+// 28x28 Marker box painted the card via Stack(clipBehavior: Clip.none) so it could visually
+// overflow that tiny box, which worked for painting but NOT for hit-testing — Flutter checks
+// `size.contains(position)` on the ANCESTOR box (flutter_map's own Positioned(28,28) around
+// this widget) before it ever recurses into children, so anything painted outside that 28x28
+// box was visible but untappable. Moving the callout to a proper Overlay entry (positioned in
+// real screen coordinates, with no such box) fixed "Route here" not responding to taps.
 class _DockPin extends StatelessWidget {
   final DockKind kind;
   final String name;
   final bool isOpen;
-  final bool above;   // true = callout sits above the pin (tail points down); false = below (tail points up)
-  final double dx;    // horizontal nudge applied to the card only, to keep it on screen
-  final VoidCallback onRouteHere;
   final void Function(Offset anchorTopLeft, Size anchorSize) onOpen;
   final VoidCallback onClose;
   const _DockPin({
-    required this.kind, required this.name, required this.isOpen, required this.above, required this.dx,
-    required this.onRouteHere, required this.onOpen, required this.onClose,
+    required this.kind, required this.name, required this.isOpen, required this.onOpen, required this.onClose,
   });
   @override
   Widget build(BuildContext context) {
@@ -2989,7 +3028,7 @@ class _DockPin extends StatelessWidget {
         : (kind == DockKind.slipway ? const Color(0xFF2E6F9E) : const Color(0xFF6B4FC6));
     final icon = kind == DockKind.fuel ? Icons.local_gas_station
         : (kind == DockKind.slipway ? Icons.directions_boat : Icons.anchor);
-    final pin = Tooltip(
+    return Tooltip(
       message: name,
       child: InkWell(
         onTap: () {
@@ -3013,23 +3052,6 @@ class _DockPin extends StatelessWidget {
         ),
       ),
     );
-    if (!isOpen) return pin;
-
-    const tailW = 18.0, tailH = 9.0, cardW = _dockPopupW;
-    return Stack(clipBehavior: Clip.none, children: [
-      pin,
-      // Pointer tail — always centered on the pin itself, regardless of the card's own dx nudge.
-      Positioned(
-        left: 14 - tailW / 2, width: tailW, height: tailH,
-        bottom: above ? 28 : null, top: above ? null : 28,
-        child: _GlassTail(pointingUp: !above),
-      ),
-      Positioned(
-        left: 14 - cardW / 2 + dx, width: cardW,
-        bottom: above ? 28 + tailH : null, top: above ? null : 28 + tailH,
-        child: _DockCallout(kind: kind, name: name, onRouteHere: onRouteHere),
-      ),
-    ]);
   }
 }
 
