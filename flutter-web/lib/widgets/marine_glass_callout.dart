@@ -132,6 +132,7 @@ class MarineGlassCallout extends StatelessWidget {
                                 fontSize: 22,
                                 height: 1.1,
                                 fontWeight: FontWeight.w700,
+                                decoration: TextDecoration.none,
                                 shadows: [
                                   Shadow(color: Color(0x6625B7FF), blurRadius: 8),
                                 ],
@@ -146,6 +147,7 @@ class MarineGlassCallout extends StatelessWidget {
                                 color: Color(0xFFB4C8DA),
                                 fontSize: 13.5,
                                 height: 1.1,
+                                decoration: TextDecoration.none,
                               ),
                             ),
                           ],
@@ -502,13 +504,15 @@ class _RouteHereButton extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 17),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.navigation_rounded,
                           color: Colors.white, size: 24),
                       const SizedBox(width: 12),
                       Container(width: 1, height: 25, color: const Color(0x6696FFE5)),
                       const SizedBox(width: 13),
-                      const Expanded(
+                      const Flexible(
                         child: Text(
                           'Route here',
                           maxLines: 1,
@@ -517,9 +521,11 @@ class _RouteHereButton extends StatelessWidget {
                             color: Color(0xFFFFFFFF),
                             fontSize: 18,
                             fontWeight: FontWeight.w700,
+                            decoration: TextDecoration.none,
                           ),
                         ),
                       ),
+                      const SizedBox(width: 10),
                       const Icon(Icons.chevron_right_rounded,
                           color: Color(0xFFBCFFF0), size: 26),
                     ],
