@@ -1,19 +1,17 @@
-// Golden capture of the map-anchored dock callout (_DockCallout/_GlassTail in main.dart,
-// exposed for testing via debugDockCallout/debugGlassTail — see main.dart). The live browser
-// automation in this environment was unreliable for interactive verification this session
-// (taps not registering despite a healthy render loop), so this test exists to visually confirm
-// the optical-glass material — transparency, backdrop blur of a fake "map" behind it, the
-// sweep-gradient border, diagonal reflection, and specular highlights — without depending on
-// browser input simulation at all.
+// Golden capture of MarineGlassCallout (lib/widgets/marine_glass_callout.dart), the dock-popup
+// card. Live browser automation was unreliable for interactive verification this session, so
+// this test renders the widget directly and captures real screenshots — this is also what
+// caught two of the three ui.Gradient.linear calls in that file missing colorStops (compiles
+// fine, throws ArgumentError on first paint — see CLAUDE.md's third recurring Dart bug class).
 //
 // Run: flutter test --platform=chrome --update-goldens test/dock_callout_golden_test.dart
 // PNGs land in test/goldens/ — inspect them directly; Flutter's deterministic test font means
-// "Boat ramp" renders as placeholder glyph blocks, not real text, but every other layer here
-// (gradients, blur, CustomPainter strokes) is real rendering, not text.
+// title/subtitle/button text render as placeholder glyph blocks, not real text, but every
+// other layer here (gradients, blur, CustomPainter strokes) is real rendering, not text.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:bayside_flutter/main.dart';
+import 'package:bayside_flutter/widgets/marine_glass_callout.dart';
 
 // A busy, colorful stand-in for the map tiles behind the card — if the backdrop blur +
 // transparency are working, this should be visible-but-blurred through the card body.
@@ -42,21 +40,16 @@ class _CheckerPainter extends CustomPainter {
   bool shouldRepaint(covariant _CheckerPainter old) => false;
 }
 
-Future<void> _pump(WidgetTester tester, Widget child, {double width = 320, double height = 260}) async {
+Future<void> _pump(WidgetTester tester, Widget child, {double width = 340, double height = 260}) async {
   // devicePixelRatio 1.0 so width/height are logical pixels directly (matches the project's
-  // established test pattern in hourly_table_responsive_test.dart) — at 2.0 a physicalSize of
-  // 320 renders as only 160 logical px, silently squeezing the fixed-240lp card narrower than
-  // its real-app width and invalidating the test (caught via a spurious internal wrap/overflow
-  // in the Route-here button at 200% text scale that only reproduced at the wrong width).
+  // established test pattern in hourly_table_responsive_test.dart).
   tester.view.physicalSize = Size(width, height);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(Directionality(
     textDirection: TextDirection.ltr,
     // The RepaintBoundary wraps the fake map AND the card together, not just the card alone —
-    // BackdropFilter only blurs what's painted earlier within the SAME captured layer subtree,
-    // so the map has to be inside this boundary for the capture to show the blur-through effect
-    // (confirmed: wrapping only the card captured it against a flat, unblurred background).
+    // BackdropFilter only blurs what's painted earlier within the SAME captured layer subtree.
     child: RepaintBoundary(
       key: const ValueKey('capture'),
       child: Stack(children: [
@@ -73,60 +66,54 @@ Future<void> _screenshot(WidgetTester tester, String name) async {
 }
 
 void main() {
-  // The real app always wraps _DockCallout in Positioned(width: _dockPopupW) inside _DockPin's
-  // Stack — the card itself doesn't self-impose a width (that's how it stays "fixed ~240lp,
-  // content-driven height" rather than hardcoding its own size). debugDockCallout() returns
-  // the bare widget, so every test here replicates that same width wrapper with a SizedBox —
-  // omitting it collapses the Row's Expanded title/subtitle column to an unbounded-width
-  // layout error, not a real app bug (caught and fixed while writing this test).
-  testWidgets('boat-ramp callout renders without overflow, fixed width', (tester) async {
-    await _pump(tester, SizedBox(width: 240, child: debugDockCallout(kind: DockKind.slipway, name: 'Boat ramp')));
+  testWidgets('boat-ramp callout renders without overflow, default width', (tester) async {
+    await _pump(tester, MarineGlassCallout(title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}));
     expect(tester.takeException(), isNull);
-    await _screenshot(tester, 'dock_callout_slipway');
+    await _screenshot(tester, 'marine_callout_default');
   });
 
-  testWidgets('fuel-dock callout with a long name stays fixed-width, ellipsizes', (tester) async {
-    await _pump(tester, SizedBox(width: 240,
-        child: debugDockCallout(kind: DockKind.fuel, name: 'Sunoco Marina Fuel Dock & Supply')));
+  testWidgets('long name ellipsizes instead of overflowing', (tester) async {
+    await _pump(tester, MarineGlassCallout(
+      title: 'Sunoco Marina Fuel Dock & Supply', subtitle: 'Fuel dock', onRoute: () {}));
     expect(tester.takeException(), isNull);
-    await _screenshot(tester, 'dock_callout_fuel_long_name');
+    await _screenshot(tester, 'marine_callout_long_name');
   });
 
-  testWidgets('marina callout (icon fallback) renders without overflow', (tester) async {
-    await _pump(tester, SizedBox(width: 240, child: debugDockCallout(kind: DockKind.marina, name: 'Keansburg Marina')));
+  testWidgets('tipFraction near 0 (card clamped to the right of the pin)', (tester) async {
+    await _pump(tester, MarineGlassCallout(
+      title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}, tipFraction: 0.05));
     expect(tester.takeException(), isNull);
-    await _screenshot(tester, 'dock_callout_marina');
+    await _screenshot(tester, 'marine_callout_tip_left');
   });
 
-  testWidgets('callout at 200% text scale still fits the fixed width, no overflow', (tester) async {
+  testWidgets('tipFraction near 1 (card clamped to the left of the pin)', (tester) async {
+    await _pump(tester, MarineGlassCallout(
+      title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}, tipFraction: 0.95));
+    expect(tester.takeException(), isNull);
+    await _screenshot(tester, 'marine_callout_tip_right');
+  });
+
+  testWidgets('narrow screen (320lp) still fits via the widget\'s own width clamp', (tester) async {
+    await _pump(
+      tester,
+      MarineGlassCallout(title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}),
+      width: 320,
+    );
+    expect(tester.takeException(), isNull);
+    await _screenshot(tester, 'marine_callout_320w');
+  });
+
+  testWidgets('200% text scale still fits, no overflow', (tester) async {
     await _pump(
       tester,
       MediaQuery(
         data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
-        child: SizedBox(width: 240, child: debugDockCallout(kind: DockKind.slipway, name: 'Boat ramp')),
+        child: MarineGlassCallout(title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}),
       ),
-      // In the real app the card's Positioned() sets width only, no height — content grows
-      // freely vertically (that's the "content-driven height" part of the spec). A short,
-      // fixed test-surface height here would clip it artificially where the live app never
-      // would, so this leaves generous room rather than reproducing a height bound that
-      // doesn't actually exist in production.
-      height: 1000,
+      width: 340,
+      height: 320,
     );
     expect(tester.takeException(), isNull);
-    await _screenshot(tester, 'dock_callout_200pct_scale');
-  });
-
-  testWidgets('glass tail, pointing down (card above pin)', (tester) async {
-    await _pump(tester, SizedBox(width: 18, height: 9, child: debugGlassTail(pointingUp: false)),
-        width: 60, height: 40);
-    expect(tester.takeException(), isNull);
-    await _screenshot(tester, 'dock_tail_down');
-  });
-
-  testWidgets('glass tail, pointing up (card below pin)', (tester) async {
-    await _pump(tester, SizedBox(width: 18, height: 9, child: debugGlassTail(pointingUp: true)),
-        width: 60, height: 40);
-    expect(tester.takeException(), isNull);
-    await _screenshot(tester, 'dock_tail_up');
+    await _screenshot(tester, 'marine_callout_200pct_scale');
   });
 }
