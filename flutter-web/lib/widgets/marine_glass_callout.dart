@@ -58,20 +58,23 @@ class MarineGlassCallout extends StatelessWidget {
               child: ClipPath(
                 clipper: _CalloutClipper(tipFraction),
                 child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                  // Bumped from 14 to compensate — a more see-through body needs a bit more
+                  // blur behind it to still read as glass rather than just faint.
+                  filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Real, translucent smoked-glass material.
+                      // Real, translucent smoked-glass material — dropped from ~78-81% alpha
+                      // to ~50-55% per request ("make the card more transparent").
                       const DecoratedBox(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                             colors: [
-                              Color(0xCB16486B),
-                              Color(0xC70A2038),
-                              Color(0xCF07192F),
+                              Color(0x8816486B),
+                              Color(0x800A2038),
+                              Color(0x8C07192F),
                             ],
                             stops: [0, 0.45, 1],
                           ),
@@ -517,6 +520,7 @@ class _RouteHereButton extends StatelessWidget {
                           'Route here',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
                           style: TextStyle(
                             color: Color(0xFFFFFFFF),
                             fontSize: 18,
