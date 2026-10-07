@@ -1277,11 +1277,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   OverlayEntry? _dockOverlayEntry;
 
   // MarineGlassCallout (lib/widgets/marine_glass_callout.dart) bakes its pointer tip into its
-  // own clipped shape, always at the bottom of its box, and exposes `tipFraction` so the tip
-  // can be shifted to still point at the true anchor x even when the card itself had to shift
-  // to stay on screen — so, unlike the old hand-built card, there's no separate tail widget to
-  // position here. It has no upward-pointing variant, so (same as the design it replaced) this
-  // always places the card above the pin rather than flipping below.
+  // own clipped shape and exposes `tipFraction` so the tip can be shifted to still point at the
+  // true anchor x even when the card itself had to shift to stay on screen — so, unlike the old
+  // hand-built card, there's no separate tail widget to position here. It also takes
+  // `pointingUp` to flip the tip to the top when the card has to go below its pin instead of
+  // above (not enough room above — e.g. a pin near the top of the screen).
   void _openDockPopup(Dock d, Offset anchorTopLeft, Size anchorSize) {
     _removeDockOverlay();
     final screenSize = MediaQuery.sizeOf(context);
@@ -1297,6 +1297,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     left = left.clamp(_dockPopupMargin, maxLeft > _dockPopupMargin ? maxLeft : _dockPopupMargin);
     final tipFraction = ((anchorCenterX - left) / cardWidth).clamp(0.0, 1.0);
 
+    final above = anchorTopLeft.dy - _dockPopupGap - MarineGlassCallout.totalHeight >= _dockPopupMargin;
+
     final subtitle = d.kind == DockKind.fuel ? 'Fuel dock'
         : (d.kind == DockKind.slipway ? 'Boat ramp / slipway' : 'Marina');
 
@@ -1309,9 +1311,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _closeDockPopup)),
         Positioned(
           left: left,
-          bottom: screenSize.height - anchorTopLeft.dy + _dockPopupGap,
+          bottom: above ? screenSize.height - anchorTopLeft.dy + _dockPopupGap : null,
+          top: above ? null : anchorTopLeft.dy + anchorSize.height + _dockPopupGap,
           child: MarineGlassCallout(
             title: d.name, subtitle: subtitle, width: requestedWidth, tipFraction: tipFraction,
+            pointingUp: !above,
             onRoute: () { _closeDockPopup(); _routeToPoint(d.ll); },
           ),
         ),

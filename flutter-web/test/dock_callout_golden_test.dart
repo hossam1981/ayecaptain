@@ -116,4 +116,18 @@ void main() {
     expect(tester.takeException(), isNull);
     await _screenshot(tester, 'marine_callout_200pct_scale');
   });
+
+  testWidgets('pointingUp: tip at top, body below (flip-below case)', (tester) async {
+    await _pump(tester, MarineGlassCallout(
+      title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}, pointingUp: true));
+    expect(tester.takeException(), isNull);
+    await _screenshot(tester, 'marine_callout_pointing_up');
+  });
+
+  testWidgets('Route-here button content is centered as a block', (tester) async {
+    await _pump(tester, MarineGlassCallout(title: 'Boat ramp', subtitle: 'Boat ramp / slipway', onRoute: () {}),
+        width: 400);
+    expect(tester.takeException(), isNull);
+    await _screenshot(tester, 'marine_callout_wide_400');
+  });
 }

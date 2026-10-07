@@ -16,6 +16,7 @@ class MarineGlassCallout extends StatelessWidget {
     this.subtitle = 'Boat ramp / slipway',
     this.width = 286,
     this.tipFraction = 0.5,
+    this.pointingUp = false,
   });
 
   final VoidCallback onRoute;
@@ -26,6 +27,11 @@ class MarineGlassCallout extends StatelessWidget {
   /// Horizontal position of the little pointer (0 = left, 1 = right).
   /// Useful when the popup is clamped near the screen's edge.
   final double tipFraction;
+
+  /// false (default): pointer at the bottom, card sits above its anchor.
+  /// true: pointer at the top, card sits below its anchor — for when there
+  /// isn't room above (e.g. a pin near the top of the screen).
+  final bool pointingUp;
 
   static const double bodyHeight = 185;
   static const double tipHeight = 21;
@@ -49,6 +55,7 @@ class MarineGlassCallout extends StatelessWidget {
                 child: CustomPaint(
                   painter: _CalloutRimPainter(
                     tipFraction: tipFraction,
+                    pointingUp: pointingUp,
                     glowOnly: true,
                   ),
                 ),
@@ -56,7 +63,7 @@ class MarineGlassCallout extends StatelessWidget {
             ),
             Positioned.fill(
               child: ClipPath(
-                clipper: _CalloutClipper(tipFraction),
+                clipper: _CalloutClipper(tipFraction, pointingUp),
                 child: BackdropFilter(
                   // Bumped from 14 to compensate — a more see-through body needs a bit more
                   // blur behind it to still read as glass rather than just faint.
@@ -106,15 +113,15 @@ class MarineGlassCallout extends StatelessWidget {
             Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(
-                  painter: _CalloutRimPainter(tipFraction: tipFraction),
+                  painter: _CalloutRimPainter(tipFraction: tipFraction, pointingUp: pointingUp),
                 ),
               ),
             ),
             Positioned(
-              top: 19,
+              top: pointingUp ? tipHeight + 16 : 19,
               left: 18,
               right: 18,
-              bottom: tipHeight + 16,
+              bottom: pointingUp ? 19 : tipHeight + 16,
               child: Column(
                 children: [
                   Row(
@@ -170,15 +177,36 @@ class MarineGlassCallout extends StatelessWidget {
   }
 }
 
-Path _calloutPath(Size size, double tipFraction) {
+// pointingUp=false (default): rounded body on top, pointer notch at the bottom (card sits
+// above its anchor). pointingUp=true: the same shape mirrored vertically — pointer notch at
+// the top, rounded body below (card sits below its anchor, for when there isn't room above).
+Path _calloutPath(Size size, double tipFraction, bool pointingUp) {
   const radius = 23.0;
   const inset = 2.0;
   const tipHeight = MarineGlassCallout.tipHeight;
-  final w = size.width;
-  final bodyBottom = size.height - tipHeight;
-  final cx = (w * tipFraction).clamp(radius + 19, w - radius - 19).toDouble();
   const halfTip = 17.0;
+  final w = size.width;
+  final cx = (w * tipFraction).clamp(radius + 19, w - radius - 19).toDouble();
 
+  if (pointingUp) {
+    final bodyTop = tipHeight;
+    return Path()
+      ..moveTo(cx - halfTip, bodyTop + inset)
+      ..lineTo(cx, inset)
+      ..lineTo(cx + halfTip, bodyTop + inset)
+      ..lineTo(w - radius - inset, bodyTop + inset)
+      ..quadraticBezierTo(w - inset, bodyTop + inset, w - inset, bodyTop + radius)
+      ..lineTo(w - inset, size.height - radius - inset)
+      ..quadraticBezierTo(w - inset, size.height - inset,
+          w - radius - inset, size.height - inset)
+      ..lineTo(radius + inset, size.height - inset)
+      ..quadraticBezierTo(inset, size.height - inset, inset, size.height - radius - inset)
+      ..lineTo(inset, bodyTop + radius)
+      ..quadraticBezierTo(inset, bodyTop + inset, radius + inset, bodyTop + inset)
+      ..close();
+  }
+
+  final bodyBottom = size.height - tipHeight;
   return Path()
     ..moveTo(radius + inset, inset)
     ..lineTo(w - radius - inset, inset)
@@ -197,29 +225,36 @@ Path _calloutPath(Size size, double tipFraction) {
 }
 
 class _CalloutClipper extends CustomClipper<Path> {
-  const _CalloutClipper(this.tipFraction);
+  const _CalloutClipper(this.tipFraction, this.pointingUp);
   final double tipFraction;
+  final bool pointingUp;
 
   @override
-  Path getClip(Size size) => _calloutPath(size, tipFraction);
+  Path getClip(Size size) => _calloutPath(size, tipFraction, pointingUp);
 
   @override
   bool shouldReclip(_CalloutClipper oldClipper) =>
-      oldClipper.tipFraction != tipFraction;
+      oldClipper.tipFraction != tipFraction || oldClipper.pointingUp != pointingUp;
 }
 
 class _CalloutRimPainter extends CustomPainter {
   const _CalloutRimPainter({
     required this.tipFraction,
+    required this.pointingUp,
     this.glowOnly = false,
   });
 
   final double tipFraction;
+  final bool pointingUp;
   final bool glowOnly;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = _calloutPath(size, tipFraction);
+    final path = _calloutPath(size, tipFraction, pointingUp);
+    // The decorative top-left glints below are positioned relative to where the rounded
+    // body's own top-left corner actually is, which moves when the pointer flips to the top.
+    final bodyTopY = pointingUp ? MarineGlassCallout.tipHeight : 0.0;
+    final bodyBottomY = pointingUp ? size.height : size.height - MarineGlassCallout.tipHeight;
 
     if (glowOnly) {
       canvas.drawShadow(
@@ -269,27 +304,27 @@ class _CalloutRimPainter extends CustomPainter {
 
     // A second, almost-white rim highlight at the top-left only.
     final topGlint = Path()
-      ..moveTo(23, 3.3)
-      ..quadraticBezierTo(24, 2.1, 40, 2.1)
-      ..lineTo(size.width * 0.65, 2.1);
+      ..moveTo(23, bodyTopY + 3.3)
+      ..quadraticBezierTo(24, bodyTopY + 2.1, 40, bodyTopY + 2.1)
+      ..lineTo(size.width * 0.65, bodyTopY + 2.1);
     canvas.drawPath(
       topGlint,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.15
         ..shader = ui.Gradient.linear(
-          const Offset(20, 0),
-          Offset(size.width * 0.65, 0),
+          Offset(20, bodyTopY),
+          Offset(size.width * 0.65, bodyTopY),
           const [Color(0xFFFFFFFF), Color(0xBB8FEAFF), Color(0x008FEAFF)],
           const [0, 0.5, 1],
         ),
     );
 
     // Small optical hotspots, not stars or decorative sparkle sprites.
-    _glint(canvas, const Offset(30, 2), 2.2, const Color(0xFFCCFAFF));
+    _glint(canvas, Offset(30, bodyTopY + 2), 2.2, const Color(0xFFCCFAFF));
     _glint(
       canvas,
-      Offset(size.width * 0.83, MarineGlassCallout.bodyHeight - 2),
+      Offset(size.width * 0.83, bodyBottomY - 2),
       1.5,
       const Color(0xFF79EFFF),
     );
@@ -308,7 +343,8 @@ class _CalloutRimPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CalloutRimPainter oldDelegate) =>
-      oldDelegate.tipFraction != tipFraction || oldDelegate.glowOnly != glowOnly;
+      oldDelegate.tipFraction != tipFraction || oldDelegate.glowOnly != glowOnly ||
+      oldDelegate.pointingUp != pointingUp;
 }
 
 class _MirrorReflectionPainter extends CustomPainter {
@@ -504,35 +540,41 @@ class _RouteHereButton extends StatelessWidget {
                     child: CustomPaint(painter: _ButtonGlossPainter()),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 17),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.navigation_rounded,
-                          color: Colors.white, size: 24),
-                      const SizedBox(width: 12),
-                      Container(width: 1, height: 25, color: const Color(0x6696FFE5)),
-                      const SizedBox(width: 13),
-                      const Flexible(
-                        child: Text(
-                          'Route here',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Color(0xFFFFFFFF),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            decoration: TextDecoration.none,
+                // Center is the fix here, not the Row's own mainAxisAlignment: this Padding
+                // is a plain (non-Positioned) child of the Stack above, and Stack aligns
+                // non-positioned children to its own `alignment` (defaults to top-start) —
+                // so a min-sized, internally-centered Row still only gets positioned at the
+                // Stack's top-left. Centering has to happen at this level, around the whole
+                // button width, not inside the already content-sized Row.
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 17),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.navigation_rounded,
+                            color: Colors.white, size: 24),
+                        const SizedBox(width: 12),
+                        Container(width: 1, height: 25, color: const Color(0x6696FFE5)),
+                        const SizedBox(width: 13),
+                        const Flexible(
+                          child: Text(
+                            'Route here',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Color(0xFFFFFFFF),
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              decoration: TextDecoration.none,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      const Icon(Icons.chevron_right_rounded,
-                          color: Color(0xFFBCFFF0), size: 26),
-                    ],
+                        const SizedBox(width: 10),
+                        const Icon(Icons.chevron_right_rounded,
+                            color: Color(0xFFBCFFF0), size: 26),
+                      ],
+                    ),
                   ),
                 ),
               ],
