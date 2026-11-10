@@ -12,23 +12,55 @@
   <link rel="manifest" href="manifest.json">
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #0F2A44; color: #fff; font-family: -apple-system, system-ui, sans-serif; }
-    #splash { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10; background: #0F2A44; }
-    #splash .tag { opacity: .8; margin-top: 8px; font-size: 14px; }
+    /* "Sail with AyeCaptain" loading screen. Two image layers: splash/still.webp is the badge,
+       boat and sky (with a soft hole where the water is); splash/water.webp is just the ring of
+       water, rotated forever underneath it. Sizes are % of .stage so it scales with the phone. */
+    #splash { position: fixed; inset: 0; z-index: 10; overflow: hidden; cursor: pointer;
+      background: linear-gradient(#5188c3, #1f79c5); transition: opacity .6s ease; }
+    #splash.fade { opacity: 0; pointer-events: none; }
+    #splash .stage { position: absolute; left: 50%; top: 50%; width: min(100vw, 62vh);
+      aspect-ratio: 1221 / 3049; transform: translate(-50%, -50%); }
+    #splash .water { position: absolute; left: 4.3407%; top: 34.7655%; width: 87.1417%; aspect-ratio: 1;
+      background: url(splash/water.webp) center / 100% 100%; will-change: transform;
+      animation: aye-spin 46s linear infinite; }
+    #splash .water.b { opacity: .45; animation-duration: 74s; animation-delay: -21s; }
+    #splash .still { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    @keyframes aye-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #splash .water { animation: none; } }
   </style>
+  <link rel="preload" as="image" href="splash/still.webp">
+  <link rel="preload" as="image" href="splash/water.webp">
 </head>
 <body>
-  <div id="splash">
-    <div style="text-align:center">
-      <div style="font-size:28px;font-weight:700">Bayside</div>
-      <div class="tag">Flutter Web preview — loading…</div>
-    </div>
-  </div>
+  <div id="splash"><div class="stage">
+    <div class="water"></div><div class="water b"></div>
+    <img class="still" alt="Sail with AyeCaptain" src="splash/still.webp">
+  </div></div>
   <script>
-    // hide the splash once Flutter has rendered its first frame
-    window.addEventListener('flutter-first-frame', () => {
+    // Loading screen behaviour: show at least MIN_MS so it never just flashes, then fade out
+    // as soon as Flutter has rendered its first frame. No upper limit on purpose — a slow load
+    // keeps the splash up instead of showing a blank screen. Tapping anywhere skips the minimum
+    // wait, but only once the app is actually ready. FAILSAFE_MS stops it ever getting stuck.
+    (function () {
+      const MIN_MS = 2000, FAILSAFE_MS = 30000, FADE_MS = 600;
+      const t0 = Date.now();
+      let ready = false, closed = false;
       const s = document.getElementById('splash');
-      if (s) s.style.display = 'none';
-    });
+      function close() {
+        if (closed || !s) return;
+        closed = true;
+        s.classList.add('fade');
+        setTimeout(() => { s.style.display = 'none'; }, FADE_MS + 50);
+      }
+      function maybeClose() {
+        if (!ready) return;
+        const wait = MIN_MS - (Date.now() - t0);
+        if (wait <= 0) close(); else setTimeout(close, wait);
+      }
+      window.addEventListener('flutter-first-frame', () => { ready = true; maybeClose(); });
+      if (s) s.addEventListener('click', () => { if (ready) close(); });
+      setTimeout(close, FAILSAFE_MS);
+    })();
 
     // Capture 'beforeinstallprompt' here, before flutter_bootstrap.js even starts loading —
     // not in Dart. Flutter's JS/engine boot (download + compile + first frame) can take
