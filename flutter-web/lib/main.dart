@@ -2111,11 +2111,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     // (mobSmoke 905 < mobBuoy/mobMarker ~900-903 is actually the other way in
                     // the PWA; visually the buoy stays legible either way since smoke is
                     // translucent).
+                    // 360x360 like the PWA's canvas; rotate: true keeps it upright on screen when the
+                    // map is turned (course-up), and _MobSmoke converts the compass wind to match.
                     Marker(
                       point: _mobPoint!,
-                      width: 80, height: 80,
-                      child: _MobSmoke(windKt: _weather?.windKt ?? 4,
-                        windDirDeg: (_weather?.windDirDeg ?? 0).toDouble()),
+                      width: _MobSmoke.canvas, height: _MobSmoke.canvas,
+                      rotate: true,
+                      child: _MobSmoke(windKt: _weather?.windKt,
+                        windDirDeg: _weather?.windDirDeg?.toDouble()),
                     ),
                     if (_me != null)
                       Marker(
@@ -4720,11 +4723,22 @@ class _MobArrowPainter extends CustomPainter {
   bool shouldRepaint(covariant _MobArrowPainter old) => false;
 }
 
-// Hand-drawn particle smoke drifting with live wind — orange puffs rising from the buoy.
-// Approximates index.html mobsmoke2 canvas (index.html:206-211, startMobSmokeLoop).
+// MOB smoke signal — hand-drawn particle smoke, ported from the PWA's startMobSmokeLoop
+// (index.html:1715-1763) with its real numbers (px and ms): a puff every 80 ms, 2.4-3.6 s life,
+// buoyancy rise 0.042-0.051 px/ms, wind drift speed clamp(kt/180, .025, .1) x (0.4 + 0.9t), sideways
+// wobble, radius 6-9.5 growing +28, alpha (1-t)*0.6 with an 8% fade-in, max 160 puffs, 360x360 canvas.
+//
+// Wind direction (dynamic): Open-Meteo's wind_direction_10m is where the wind blows FROM, so smoke is
+// pushed TOWARD windDir+180 (compass, clockwise from north). The map can be rotated (course-up
+// navigation turns it so the boat's heading is up) and the Marker (rotate: true) keeps this canvas
+// upright on screen, so the compass bearing is turned into a SCREEN angle by adding the map's current
+// rotation. The PWA only drifted left/right; here the part of the wind along the screen's up/down
+// axis also leans the plume, at half strength so buoyancy still carries it up. windKt/windDirDeg are
+// re-read every frame, so the plume follows the live wind (and map rotation) as they change.
 class _MobSmoke extends StatefulWidget {
-  final double windKt, windDirDeg;
-  const _MobSmoke({required this.windKt, required this.windDirDeg});
+  final double? windKt, windDirDeg;   // knots / compass degrees (blowing FROM); null until weather loads
+  const _MobSmoke({this.windKt, this.windDirDeg});
+  static const double canvas = 360;
   @override
   State<_MobSmoke> createState() => _MobSmokeState();
 }
@@ -4732,53 +4746,84 @@ class _MobSmokeState extends State<_MobSmoke> with SingleTickerProviderStateMixi
   late final _tick = createTicker(_step);
   final math.Random _rng = math.Random();
   final List<_SmokePuff> _puffs = [];
-  int _lastMs = 0;
+  double? _lastMs;
+  double _spawnAcc = 0;
+  double _mapRotDeg = 0;   // map camera rotation, refreshed in build()
   @override
   void initState() { super.initState(); _tick.start(); }
   @override
   void dispose() { _tick.dispose(); super.dispose(); }
   void _step(Duration elapsed) {
-    final now = elapsed.inMilliseconds;
-    final dt = _lastMs == 0 ? 0.016 : math.min(0.05, (now - _lastMs) / 1000);
-    _lastMs = now;
-    if (_puffs.length < 14 && _rng.nextDouble() < 0.12) {
-      _puffs.add(_SmokePuff(x: (_rng.nextDouble() - 0.5) * 6, y: 0, age: 0, life: 1.8 + _rng.nextDouble()));
+    final nowMs = elapsed.inMicroseconds / 1000.0;
+    // clamped to 0..48 ms like the PWA: an odd/backwards timestamp must never drive age negative
+    final dt = _lastMs == null ? 16.0 : math.min(48.0, math.max(0.0, nowMs - _lastMs!));
+    _lastMs = nowMs;
+    final kt = widget.windKt ?? 6.0;
+    double dx = 0, dy = 0;
+    final dir = widget.windDirDeg;
+    if (dir != null) {
+      final phi = (dir + 180 + _mapRotDeg) * math.pi / 180;   // screen angle, clockwise from "up"
+      dx = math.sin(phi);
+      dy = -math.cos(phi) * 0.5;                               // screen y grows downward; half strength
     }
-    final rad = (widget.windDirDeg + 180) * math.pi / 180;
-    final vx = math.sin(rad) * (widget.windKt * 0.6);
+    final driftSpeed = math.min(0.1, math.max(0.025, kt / 180));
+    _spawnAcc += dt;
+    while (_spawnAcc > 80) {
+      _spawnAcc -= 80;
+      _puffs.add(_SmokePuff(
+        x: (_rng.nextDouble() - 0.5) * 6, y: 0, age: 0,
+        life: 2400 + _rng.nextDouble() * 1200,
+        size: 6 + _rng.nextDouble() * 3.5,
+        wob: _rng.nextDouble() * math.pi * 2));
+    }
+    if (_puffs.length > 160) _puffs.removeRange(0, _puffs.length - 160);
     for (final p in _puffs) {
       p.age += dt;
-      p.y -= (14 + widget.windKt) * dt;
-      p.x += vx * dt;
+      final t = math.max(0.0, p.age / p.life);
+      p.y -= (0.042 + 0.009 * (1 - t)) * dt;
+      final k = driftSpeed * dt * (0.4 + t * 0.9);
+      p.x += dx * k;
+      p.y += dy * k;
+      p.wob += dt * 0.004;
+      p.x += math.sin(p.wob) * 0.25 * (dt / 16.0);   // PWA adds 0.25/frame; scaled by dt so it is the same on 60 and 120 Hz
     }
     _puffs.removeWhere((p) => p.age >= p.life);
     setState(() {});
   }
   @override
-  Widget build(BuildContext context) => CustomPaint(
-    size: const Size(80, 80),
-    painter: _SmokePainter(puffs: _puffs),
-  );
+  Widget build(BuildContext context) {
+    _mapRotDeg = MapCamera.maybeOf(context)?.rotation ?? 0.0;
+    return IgnorePointer(child: CustomPaint(
+      size: const Size(_MobSmoke.canvas, _MobSmoke.canvas),
+      painter: _SmokePainter(puffs: _puffs)));
+  }
 }
 class _SmokePuff {
-  double x, y, age, life;
-  _SmokePuff({required this.x, required this.y, required this.age, required this.life});
+  double x, y, age, life, size, wob;   // x/y are offsets from the buoy (canvas centre)
+  _SmokePuff({required this.x, required this.y, required this.age, required this.life,
+    required this.size, required this.wob});
 }
 class _SmokePainter extends CustomPainter {
   final List<_SmokePuff> puffs;
   const _SmokePainter({required this.puffs});
   @override
   void paint(Canvas canvas, Size size) {
-    final c = Offset(size.width / 2, size.height / 2 + 8);
+    final c = Offset(size.width / 2, size.height / 2);
     for (final p in puffs) {
-      final t = p.age / p.life;
-      final alpha = (1 - t).clamp(0, 1).toDouble() * 0.5;
-      final r = 6 + 14 * t;
+      final t = (p.age / p.life).clamp(0.0, 1.0).toDouble();
+      final r = math.max(0.5, p.size + t * 28);   // gradient radius must never reach zero
+      final alpha = (1 - t) * 0.6 * (t < 0.08 ? t / 0.08 : 1.0);
       final center = c + Offset(p.x, p.y);
+      // 3 colours => explicit, equal-length stops (a missing stops list only throws at paint time)
       canvas.drawCircle(center, r, Paint()
-        ..shader = RadialGradient(colors: [
-          Color.fromRGBO(255, 140, 40, alpha), Color.fromRGBO(255, 140, 40, 0),
-        ]).createShader(Rect.fromCircle(center: center, radius: r)));
+        ..shader = RadialGradient(
+          colors: [
+            Color.fromRGBO(255, 140, 50, alpha),
+            Color.fromRGBO(240, 90, 30, alpha * 0.7),
+            const Color.fromRGBO(220, 60, 20, 0),
+          ],
+          stops: const [0.0, 0.6, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: r)));
     }
   }
   @override
