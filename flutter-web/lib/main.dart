@@ -59,7 +59,7 @@ class BaysideApp extends StatelessWidget {
   const BaysideApp({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Bayside — Flutter preview',
+        title: 'AyeCaptain',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           brightness: Brightness.dark,
@@ -3414,7 +3414,7 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           decoration: BoxDecoration(color: const Color(0x470F2A44), borderRadius: BorderRadius.circular(2)))),
         const Text('Your boat', style: TextStyle(color: Color(0xFF0F2A44), fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
-        Text('Bayside grades forecasts against these limits and computes fuel from tank & burn rate.',
+        Text('AyeCaptain grades forecasts against these limits and computes fuel from tank & burn rate.',
             style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12)),
         const SizedBox(height: 16),
         TextField(
@@ -3466,7 +3466,7 @@ class _BoatProfileSheetState extends State<BoatProfileSheet> {
           ),
         ),
         const SizedBox(height: 20),
-        Text('Comfort limits — Bayside warns when forecasts exceed these',
+        Text('Comfort limits — AyeCaptain warns when forecasts exceed these',
             style: TextStyle(color: const Color(0xFF0F2A44).withOpacity(.75), fontSize: 12, fontWeight: FontWeight.w700)),
         const SizedBox(height: 10),
         Row(children: [
@@ -3866,7 +3866,7 @@ class _BottomSheetState extends State<_BottomSheet> {
           color: const Color(0xFF0F2A44), borderRadius: BorderRadius.circular(12),
           child: InkWell(borderRadius: BorderRadius.circular(12), onTap: widget.onInstall,
             child: const Padding(padding: EdgeInsets.symmetric(vertical: 12),
-              child: Center(child: Text('Add Bayside to home screen',
+              child: Center(child: Text('Add AyeCaptain to home screen',
                 style: TextStyle(color: Color(0xFFF4F8FA), fontWeight: FontWeight.w700, fontSize: 16))),
             ),
           ),
