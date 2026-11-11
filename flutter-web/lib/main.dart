@@ -3651,7 +3651,10 @@ class _NavShell extends StatelessWidget {
     final d = _haversineM(from, to);
     final b = _bearingDeg(from, to);
     final dist = d < 370 ? '${(d * 3.28).round()} ft' : '${(d / 1852).toStringAsFixed(d / 1852 < 10 ? 2 : 1)} nm';
-    final etaStr = speedKt > 0 ? '${math.max(1, (d / 1852 / speedKt * 60).round())} min' : '—';
+    // ETA = distance / current speed, in minutes (a man overboard is never hours away). Under 1.5 kn
+    // GPS speed is mostly noise (0.1 kn at a standstill gave "409 min"), and an assumed cruise speed
+    // would be a made-up number in an emergency, so show "—" instead of a misleading time.
+    final etaStr = speedKt > 1.5 ? '${math.max(1, (d / 1852 / speedKt * 60).round())} min' : '—';
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Text('🛟', style: TextStyle(fontSize: 16)),
