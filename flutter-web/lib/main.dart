@@ -1222,6 +1222,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   LatLng? _me;
   double _heading = 0;
   double _speedKt = 0;
+  // Demo switch for the weather effects: open the app with ?fx=rain (snow, thunder, wind, clear) and
+  // FxCanvas gets that preset instead of the live weather. Only FxCanvas is affected.
+  late final List<double>? _fxDemo = _fxDemoPresets[_fxDemoName()];
   double? _accuracyM;
   bool _follow = true;
   bool _picking = false;
@@ -2172,12 +2175,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               // Sits above the map inside the same tilt Transform so it feels like weather over
               // the water rather than the screen.
               Positioned.fill(child: IgnorePointer(child: FxCanvas(
-                windKt: _weather?.windKt ?? 0,
-                gustKt: _weather?.gustKt ?? 0,
-                windDirDeg: (_weather?.windDirDeg ?? 0).toDouble(),
-                precipPct: _weather?.precipPct ?? 0,
+                // ?fx=rain|snow|thunder|wind|clear in the address forces that effect (demo only —
+                // see _fxDemoPresets); with no ?fx= these are the live weather values, as before.
+                windKt: _fxDemo?[0] ?? _weather?.windKt ?? 0,
+                gustKt: _fxDemo?[1] ?? _weather?.gustKt ?? 0,
+                windDirDeg: _fxDemo?[2] ?? (_weather?.windDirDeg ?? 0).toDouble(),
+                precipPct: _fxDemo?[3] ?? _weather?.precipPct ?? 0,
                 boatSpeedKt: _speedKt,
-                weatherCode: _weather?.weatherCode ?? 0,
+                weatherCode: _fxDemo != null ? _fxDemo![4].round() : (_weather?.weatherCode ?? 0),
                 lightBasemap: _base == Basemap.map || _base == Basemap.chart,
               ))),
             ]),
@@ -2315,6 +2320,19 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 // unlike the PWA's tilted map, so "where rain lands" has no single waterline here); snow
 // and lightning are net-new (the PWA's own "thunder" was a flat screen flash with no bolt
 // and no sound — index.html:1098,1109). Wake spray is a separate widget (_WakeSpray, above).
+// Presets for the ?fx= demo switch: [windKt, gustKt, windDirDeg (blowing FROM), precipPct, WMO code].
+// Snow uses precipPct 0 on purpose: any precipPct > 0 also turns rain on (see _raining).
+const Map<String, List<double>> _fxDemoPresets = {
+  'rain':    [12, 18, 225, 80, 63],
+  'snow':    [8, 12, 300, 0, 73],
+  'thunder': [18, 30, 225, 90, 95],
+  'wind':    [22, 34, 225, 0, 0],
+  'clear':   [0, 0, 0, 0, 0],
+};
+String _fxDemoName() {
+  try { return (Uri.base.queryParameters['fx'] ?? '').toLowerCase(); } catch (_) { return ''; }
+}
+
 class FxCanvas extends StatefulWidget {
   final double windKt, gustKt, windDirDeg, precipPct, boatSpeedKt;
   final int weatherCode;   // Open-Meteo WMO code — drives snow/thunder gating
