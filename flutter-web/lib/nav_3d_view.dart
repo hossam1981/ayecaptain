@@ -13,11 +13,14 @@
 // unfamiliar interop. Code-reviewed against the live docs a second time; nothing flagged.
 
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
+
+import 'widgets/wind_layer.dart';
 
 LatLng _toMlLatLng(ll.LatLng p) => LatLng(p.latitude, p.longitude);
 
@@ -37,6 +40,11 @@ class Nav3DView extends StatefulWidget {
   final bool follow;
   final List<Nav3DRouteSegment> routeSegments;
   final List<ll.LatLng> waypoints;
+  // Wind & Gusts colour map (same data and colours as WindFieldLayer on the 2D map). Here it
+  // is one pre-rendered image with the land already cut out, added to the map as an image
+  // layer under the route. No value tags in this view.
+  final bool windOn, windGusts;
+  final List<List<ll.LatLng>>? Function()? landWays;
   const Nav3DView({
     super.key,
     required this.styleUrl,
@@ -47,6 +55,9 @@ class Nav3DView extends StatefulWidget {
     required this.follow,
     required this.routeSegments,
     required this.waypoints,
+    this.windOn = false,
+    this.windGusts = true,
+    this.landWays,
   });
 
   @override
@@ -63,6 +74,14 @@ class _Nav3DViewState extends State<Nav3DView> {
   bool _ready = false;
   bool _syncing = false;
   bool _needsSync = false;
+
+  // wind overlay state
+  WindGrid? _windGrid;
+  bool _windBusy = false;
+  DateTime? _windRetryAfter;
+  String _windShown = ''; // what is on the map now: grid time | wind-or-gust | land loaded
+  int _windSeq = 0;
+  String? _windLayerId, _windSourceId;
 
   // MapLibre takes a complete style, not a flutter_map TileLayer. The selected
   // basemap needs a matching raster style while the navigation view is mounted.
@@ -126,6 +145,10 @@ class _Nav3DViewState extends State<Nav3DView> {
     _boatSymbol = null;
     _routeAnnotations.clear();
     _waypointCircles.clear();
+    // a new style has none of the old layers
+    _windLayerId = null;
+    _windSourceId = null;
+    _windShown = '';
     _ready = true;
     await _syncMap();
   }
@@ -146,9 +169,113 @@ class _Nav3DViewState extends State<Nav3DView> {
     }
   }
 
+  Future<void> _removeWind(MapLibreMapController controller) async {
+    final l = _windLayerId, s = _windSourceId;
+    _windLayerId = null;
+    _windSourceId = null;
+    if (l != null) {
+      try {
+        await controller.removeLayer(l);
+      } catch (_) {}
+    }
+    if (s != null) {
+      try {
+        await controller.removeSource(s);
+      } catch (_) {}
+    }
+  }
+
+  // Keeps the wind image in step with the switch, the Wind/Gusts choice and what is on screen.
+  // Called often (every map sync and when the camera stops); does nothing unless something
+  // changed. New data is fetched when the view leaves the fetched box, zooms in a lot, or the
+  // data is 20 min old — same rules as the 2D layer.
+  Future<void> _syncWind() async {
+    final controller = _controller;
+    if (controller == null || !_ready || !mounted || _windBusy) return;
+    _windBusy = true;
+    try {
+      if (!widget.windOn) {
+        if (_windLayerId != null) await _removeWind(controller);
+        _windShown = '';
+        return;
+      }
+      final now = DateTime.now();
+      final vr = await controller.getVisibleRegion();
+      final cLon = (vr.southwest.longitude + vr.northeast.longitude) / 2;
+      final cLat = (vr.southwest.latitude + vr.northeast.latitude) / 2;
+      // a tilted view can "see" to the horizon — cap what counts as on screen
+      final vhw = math.min((vr.northeast.longitude - vr.southwest.longitude) / 2, 0.45);
+      final vhh = math.min((vr.northeast.latitude - vr.southwest.latitude) / 2, 0.34);
+      var g = _windGrid;
+      var need = g == null;
+      if (g != null) {
+        final inside = cLon - vhw >= g.west && cLon + vhw <= g.east && cLat - vhh >= g.south && cLat + vhh <= g.north;
+        final gridW = g.east - g.west;
+        final zoomedIn = vhw * 2 < gridW * 0.28 && gridW > 0.08;
+        final stale = now.difference(g.fetchedAt).inMinutes >= 20;
+        need = !inside || zoomedIn || stale;
+      }
+      final retry = _windRetryAfter;
+      if (need && vhw > 1e-6 && vhh > 1e-6 && (retry == null || now.isAfter(retry))) {
+        final ng = await fetchWindGrid(
+          west: math.max(-180.0, cLon - vhw * 1.35),
+          south: math.max(-80.0, cLat - vhh * 1.35),
+          east: math.min(180.0, cLon + vhw * 1.35),
+          north: math.min(80.0, cLat + vhh * 1.35),
+        );
+        if (ng == null) {
+          _windRetryAfter = DateTime.now().add(const Duration(seconds: 30));
+        } else {
+          _windRetryAfter = null;
+          _windGrid = ng;
+          g = ng;
+        }
+      }
+      if (g == null || !mounted) return;
+      final ways = widget.landWays?.call();
+      final key = '${g.fetchedAt.microsecondsSinceEpoch}|${widget.windGusts}|${ways != null}';
+      if (key == _windShown) return;
+      final png = await renderWindOverlayPng(g, gusts: widget.windGusts, landWays: ways);
+      if (png == null || !mounted) return;
+      await _removeWind(controller);
+      final n = ++_windSeq;
+      final src = 'aye-wind-src-$n', layer = 'aye-wind-layer-$n';
+      await controller.addSource(
+        src,
+        ImageSourceProperties(
+          url: 'data:image/png;base64,${base64Encode(png)}',
+          // corners: top-left, top-right, bottom-right, bottom-left as [lon, lat]
+          coordinates: <List<double>>[
+            [g.west, g.north],
+            [g.east, g.north],
+            [g.east, g.south],
+            [g.west, g.south],
+          ],
+        ),
+      );
+      // under the route line / waypoints / boat (the line layers are the lowest of those)
+      final lineIds = controller.lineManager?.layerIds;
+      final below = (lineIds != null && lineIds.isNotEmpty) ? lineIds.first : null;
+      await controller.addRasterLayer(
+        src,
+        layer,
+        const RasterLayerProperties(rasterOpacity: 0.6, rasterFadeDuration: 0),
+        belowLayerId: below,
+      );
+      _windSourceId = src;
+      _windLayerId = layer;
+      _windShown = key;
+    } catch (_) {
+      _windRetryAfter = DateTime.now().add(const Duration(seconds: 30));
+    } finally {
+      _windBusy = false;
+    }
+  }
+
   Future<void> _applyMapState() async {
     final controller = _controller;
     if (controller == null || !_ready || !mounted) return;
+    _syncWind(); // not awaited: a slow wind fetch must never hold up the boat/route updates
 
     // Boat marker.
     final boatOptions = SymbolOptions(
@@ -254,6 +381,7 @@ class _Nav3DViewState extends State<Nav3DView> {
       ),
       onMapCreated: _onMapCreated,
       onStyleLoadedCallback: _onStyleLoaded,
+      onCameraIdle: _syncWind,
       onMapClick: (_, point) =>
           widget.onMapTap(ll.LatLng(point.latitude, point.longitude)),
     );

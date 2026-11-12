@@ -78,6 +78,9 @@ forecast wind/gust colour map from an Open-Meteo 6x7 point grid, erased over lan
 
 - [x] Gust/wind value tags on the map (up to 5 spots on water, strongest gust first).
 - [ ] Gale Warning / too-rough banner styling pass.
+- [x] Colour map in the 3D navigation view too (pre-rendered image layer; no value tags there yet).
+- [ ] While navigating, the nav panel + Wind & Gusts card stack up and cover the bottom of the right rail
+      (the MOB button ends up underneath) — the rail's fixed `bottom` offset needs to follow the panels' real height.
 - [ ] Animated wind streaks inside the colour map (and masking FxCanvas's wind/gust streaks to water —
       rain and snow stay full screen, per the user).
 - [ ] Optional: NOAA station "measured" wind labels (e.g. Sandy Hook) next to the forecast.

@@ -322,6 +322,108 @@ class WindScaleBar extends StatelessWidget {
   }
 }
 
+// The land shapes in local units, built once per land list and shared by the map layer and the
+// image renderer below.
+class _LandShapes {
+  _LandShapes(this.source, this.polys, this.blocks, this.ways, this.boxes);
+  final List<List<LatLng>> source; // the list this was built from (identity = cache key)
+  final ui.Path polys; // the charted land polygons
+  final ui.Path blocks; // the no-data inland blocks (see _inlandRows)
+  final List<List<LatLng>> ways; // polygons + inland blocks, for point tests
+  final List<List<double>> boxes; // [west, south, east, north] per entry of ways
+}
+
+_LandShapes? _landCache;
+_LandShapes? _landShapes(List<List<LatLng>>? ways) {
+  if (ways == null || ways.isEmpty) return null;
+  final cached = _landCache;
+  if (cached != null && identical(cached.source, ways)) return cached;
+  final p = ui.Path();
+  final boxes = <List<double>>[];
+  final all = List<List<LatLng>>.of(ways); // copy: the inland blocks are added to it below
+  for (final way in ways) {
+    var w = 180.0, s = 90.0, e = -180.0, n = -90.0;
+    for (final pt in way) {
+      if (pt.longitude < w) w = pt.longitude;
+      if (pt.longitude > e) e = pt.longitude;
+      if (pt.latitude < s) s = pt.latitude;
+      if (pt.latitude > n) n = pt.latitude;
+    }
+    boxes.add([w, s, e, n]);
+    if (way.length < 3) continue;
+    p.moveTo(_localX(way[0].longitude), _localY(way[0].latitude));
+    for (var i = 1; i < way.length; i++) {
+      p.lineTo(_localX(way[i].longitude), _localY(way[i].latitude));
+    }
+    p.close();
+  }
+  // inland blocks with no chart data (see _inlandRows). Grown by a hair so no thin line of
+  // colour is left where a block meets the charted land next to it.
+  // They go in their own path: in one shared path, a block overlapping a polygon wound the
+  // other way would cancel out and leave an unfilled sliver.
+  final blocks = ui.Path();
+  const grow = 0.0004;
+  for (var r = 0; r < _inlandRows.length; r++) {
+    final row = _inlandRows[r];
+    for (var c = 0; c < row.length; c++) {
+      if (row.codeUnitAt(c) != 0x31) continue; // '1'
+      final w = (_tileIx0 + c) * _tileDeg - grow, e = (_tileIx0 + c + 1) * _tileDeg + grow;
+      final s = (_tileIyTop - r) * _tileDeg - grow, n = (_tileIyTop - r + 1) * _tileDeg + grow;
+      blocks.addRect(Rect.fromLTRB(_localX(w), _localY(n), _localX(e), _localY(s)));
+      all.add([LatLng(n, w), LatLng(n, e), LatLng(s, e), LatLng(s, w)]);
+      boxes.add([w, s, e, n]);
+    }
+  }
+  final made = _LandShapes(ways, p, blocks, all, boxes);
+  _landCache = made;
+  return made;
+}
+
+/// Draws one grid as a PNG with the land already cut out — for maps that cannot use
+/// [WindFieldLayer] (the 3D navigation view). The image covers exactly the grid's box
+/// (west..east, north..south). Null if it could not be made.
+Future<Uint8List?> renderWindOverlayPng(
+  WindGrid g, {
+  required bool gusts,
+  List<List<LatLng>>? landWays,
+  int width = 1400,
+}) async {
+  try {
+    final field = await _fieldImage(g, gusts ? g.gust : g.wind);
+    final x0 = _localX(g.west), x1 = _localX(g.east), y0 = _localY(g.north), y1 = _localY(g.south);
+    if (x1 - x0 <= 0 || y1 - y0 <= 0) return null;
+    final w = width, h = math.max(1, (width * (y1 - y0) / (x1 - x0)).round());
+    final rec = ui.PictureRecorder();
+    final canvas = Canvas(rec, Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()));
+    canvas.scale(w / (x1 - x0), h / (y1 - y0));
+    canvas.translate(-x0, -y0);
+    final hx = (x1 - x0) / (field.width - 1) / 2.0, hy = (y1 - y0) / (field.height - 1) / 2.0;
+    canvas.drawImageRect(
+      field,
+      Rect.fromLTWH(0, 0, field.width.toDouble(), field.height.toDouble()),
+      Rect.fromLTRB(x0 - hx, y0 - hy, x1 + hx, y1 + hy),
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+    final shapes = _landShapes(landWays);
+    if (shapes != null) {
+      final erase = Paint()
+        ..blendMode = BlendMode.dstOut
+        ..color = const Color(0xFF000000);
+      canvas.drawPath(shapes.polys, erase);
+      canvas.drawPath(shapes.blocks, erase);
+    }
+    final pic = rec.endRecording();
+    final img = await pic.toImage(w, h);
+    final data = await img.toByteData(format: ui.ImageByteFormat.png);
+    field.dispose();
+    img.dispose();
+    pic.dispose();
+    return data?.buffer.asUint8List();
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Map layer: put it in FlutterMap's `children`. Keep it in the list all the time and switch it
 /// with [enabled] (so toggling never shifts the layers after it).
 class WindFieldLayer extends StatefulWidget {
@@ -369,48 +471,13 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
   }
 
   ui.Path? _buildLand(List<List<LatLng>>? ways) {
-    if (ways == null || ways.isEmpty) return null;
-    final p = ui.Path();
-    final boxes = <List<double>>[];
-    final all = List<List<LatLng>>.of(ways); // copy: the inland blocks are added to it below
-    for (final way in ways) {
-      var w = 180.0, s = 90.0, e = -180.0, n = -90.0;
-      for (final pt in way) {
-        if (pt.longitude < w) w = pt.longitude;
-        if (pt.longitude > e) e = pt.longitude;
-        if (pt.latitude < s) s = pt.latitude;
-        if (pt.latitude > n) n = pt.latitude;
-      }
-      boxes.add([w, s, e, n]);
-      if (way.length < 3) continue;
-      p.moveTo(_localX(way[0].longitude), _localY(way[0].latitude));
-      for (var i = 1; i < way.length; i++) {
-        p.lineTo(_localX(way[i].longitude), _localY(way[i].latitude));
-      }
-      p.close();
-    }
-    // inland blocks with no chart data (see _inlandRows). Grown by a hair so no thin line of
-    // colour is left where a block meets the charted land next to it.
-    // They go in their own path: in one shared path, a block overlapping a polygon wound the
-    // other way would cancel out and leave an unfilled sliver.
-    final blocks = ui.Path();
-    const grow = 0.0004;
-    for (var r = 0; r < _inlandRows.length; r++) {
-      final row = _inlandRows[r];
-      for (var c = 0; c < row.length; c++) {
-        if (row.codeUnitAt(c) != 0x31) continue; // '1'
-        final w = (_tileIx0 + c) * _tileDeg - grow, e = (_tileIx0 + c + 1) * _tileDeg + grow;
-        final s = (_tileIyTop - r) * _tileDeg - grow, n = (_tileIyTop - r + 1) * _tileDeg + grow;
-        blocks.addRect(Rect.fromLTRB(_localX(w), _localY(n), _localX(e), _localY(s)));
-        all.add([LatLng(n, w), LatLng(n, e), LatLng(s, e), LatLng(s, w)]);
-        boxes.add([w, s, e, n]);
-      }
-    }
-    _inlandPath = blocks;
-    _landWays = all;
-    _landBoxes = boxes;
+    final sh = _landShapes(ways);
+    if (sh == null) return null;
+    _inlandPath = sh.blocks;
+    _landWays = sh.ways;
+    _landBoxes = sh.boxes;
     _labels = null; // re-pick now that land is known, so no tag sits on land
-    return p;
+    return sh.polys;
   }
 
   // Picks up to 5 spots on the water for value tags: the strongest gust first, then spots as
