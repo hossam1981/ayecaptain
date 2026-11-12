@@ -8,8 +8,8 @@
 // The grid is refetched when the map moves outside it, zooms in a lot, or the data is 20 min old.
 //
 // WATER ONLY: the bundled NJ/NY land polygons (assets/land-njny.json, the same data Smart routes
-// uses) are erased from the colour map. Outside that file's area there is no land data, so the
-// colours cover land too.
+// uses) are erased from the colour map, plus the inland blocks that file has no data for (see
+// _inlandRows). Outside that file's area there is no land data, so the colours cover land too.
 //
 // This is net-new on the flutter branch — the PWA on `main` has no equivalent, so there is no
 // index.html spec to match here.
@@ -218,6 +218,48 @@ bool _onLand(double lat, double lon, List<List<LatLng>> ways, List<List<double>>
   return false;
 }
 
+// INLAND FILL. The land file comes from NOAA harbour charts, which only cover a strip near the
+// coast — further inland there are no land shapes at all, so the colours used to show there.
+// This table marks the 0.075-degree blocks of the file's area (lon -75..-73.5, lat 38.85..40.95)
+// that have no chart data and are land. Each row is one block-row from north to south, each
+// character one block from west to east, '1' = inland land. It was worked out offline from
+// assets/land-njny.json (a block with no data takes the land/water state of the charted edge
+// next to it) — see tool/inland_tiles_proto.py. Regenerate it if the land file is rebuilt.
+// Outside the file's area nothing is known, so the colours still cover land there.
+const double _tileDeg = 0.075;
+const int _tileIx0 = -1000; // west edge = _tileIx0 * _tileDeg = -75.0
+const int _tileIyTop = 545; // first row covers lat 40.875..40.95
+const List<String> _inlandRows = [
+  '00000000000000000000',
+  '11111111111000000000',
+  '11111111111000000011',
+  '11111111110000001100',
+  '11111111110000000000',
+  '11111111000000000000',
+  '11111111000000000000',
+  '11111111111100000000',
+  '11111111111100000000',
+  '11001111111100000000',
+  '11001111111100000000',
+  '00001111111000000000',
+  '00111111111000000000',
+  '11111111110000000000',
+  '11111111110000000000',
+  '11111111110000000000',
+  '11111111110000000000',
+  '11111111100000000000',
+  '11111100000000000000',
+  '11111110000000000000',
+  '11101100000000000000',
+  '11100000000000000000',
+  '11100000000000000000',
+  '11100000000000000000',
+  '11000000000000000000',
+  '10000000000000000000',
+  '00000000000000000000',
+  '00000000000000000000',
+];
+
 // One value tag on the map: position in local units + the forecast wind and gust there.
 class _WindLabel {
   const _WindLabel(this.x, this.y, this.wind, this.gust);
@@ -308,6 +350,7 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
   WindGrid? _grid;
   ui.Image? _windImg, _gustImg;
   ui.Path? _landPath;
+  ui.Path? _inlandPath; // the no-data inland blocks, kept apart from the polygons (see _buildLand)
   List<List<LatLng>>? _landWays;
   List<List<double>>? _landBoxes;
   List<_WindLabel>? _labels; // picked once per grid (and again when the land data arrives)
@@ -329,6 +372,7 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
     if (ways == null || ways.isEmpty) return null;
     final p = ui.Path();
     final boxes = <List<double>>[];
+    final all = List<List<LatLng>>.of(ways); // copy: the inland blocks are added to it below
     for (final way in ways) {
       var w = 180.0, s = 90.0, e = -180.0, n = -90.0;
       for (final pt in way) {
@@ -345,7 +389,25 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
       }
       p.close();
     }
-    _landWays = ways;
+    // inland blocks with no chart data (see _inlandRows). Grown by a hair so no thin line of
+    // colour is left where a block meets the charted land next to it.
+    // They go in their own path: in one shared path, a block overlapping a polygon wound the
+    // other way would cancel out and leave an unfilled sliver.
+    final blocks = ui.Path();
+    const grow = 0.0004;
+    for (var r = 0; r < _inlandRows.length; r++) {
+      final row = _inlandRows[r];
+      for (var c = 0; c < row.length; c++) {
+        if (row.codeUnitAt(c) != 0x31) continue; // '1'
+        final w = (_tileIx0 + c) * _tileDeg - grow, e = (_tileIx0 + c + 1) * _tileDeg + grow;
+        final s = (_tileIyTop - r) * _tileDeg - grow, n = (_tileIyTop - r + 1) * _tileDeg + grow;
+        blocks.addRect(Rect.fromLTRB(_localX(w), _localY(n), _localX(e), _localY(s)));
+        all.add([LatLng(n, w), LatLng(n, e), LatLng(s, e), LatLng(s, w)]);
+        boxes.add([w, s, e, n]);
+      }
+    }
+    _inlandPath = blocks;
+    _landWays = all;
     _landBoxes = boxes;
     _labels = null; // re-pick now that land is known, so no tag sits on land
     return p;
@@ -359,11 +421,14 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
     final ways = _landWays, boxes = _landBoxes;
     final myN = _mercY(g.north), myS = _mercY(g.south);
     final cand = <List<double>>[]; // [s, t, lat, lon, wind, gust]
+    // 0.30..0.70 of the fetched box is the middle of the screen (the box is 1.7x the screen, and
+    // a rotated map makes it bigger still); the first version used 0.22..0.78 and most tags
+    // landed at the screen edges or under the HUD, so only one showed.
     for (var j = 0; j < 9; j++) {
-      final t = 0.22 + 0.56 * j / 8;
+      final t = 0.30 + 0.34 * j / 8;
       final lat = _latFromMercY(myN + (myS - myN) * t);
       for (var i = 0; i < 7; i++) {
-        final s = 0.22 + 0.56 * i / 6;
+        final s = 0.30 + 0.40 * i / 6;
         final lon = g.west + (g.east - g.west) * s;
         if (ways != null && boxes != null && _onLand(lat, lon, ways, boxes)) continue;
         cand.add([s, t, lat, lon, _sample(g, g.wind, s, t), _sample(g, g.gust, s, t)]);
@@ -389,7 +454,7 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
           far = c;
         }
       }
-      if (far == null || farD < 0.17) break;
+      if (far == null || farD < 0.13) break;
       picked.add(far);
     }
     return [for (final p in picked) _WindLabel(_localX(p[3]), _localY(p[2]), p[4], p[5])];
@@ -544,7 +609,8 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
         child: Stack(fit: StackFit.expand, children: [
           RepaintBoundary(
             child: CustomPaint(
-              painter: _WindFieldPainter(image: img, dst: dst, land: _landPath, m: m, opacity: widget.opacity),
+              painter: _WindFieldPainter(
+                  image: img, dst: dst, land: _landPath, inland: _inlandPath, m: m, opacity: widget.opacity),
             ),
           ),
           ...tags,
@@ -555,10 +621,17 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
 }
 
 class _WindFieldPainter extends CustomPainter {
-  _WindFieldPainter({required this.image, required this.dst, required this.land, required this.m, required this.opacity});
+  _WindFieldPainter({
+    required this.image,
+    required this.dst,
+    required this.land,
+    required this.inland,
+    required this.m,
+    required this.opacity,
+  });
   final ui.Image image;
   final Rect dst;
-  final ui.Path? land;
+  final ui.Path? land, inland;
   final Float64List m;
   final double opacity;
 
@@ -574,21 +647,18 @@ class _WindFieldPainter extends CustomPainter {
       dst,
       Paint()..filterQuality = FilterQuality.medium,
     );
-    final l = land;
-    if (l != null) {
-      canvas.drawPath(
-        l,
-        Paint()
-          ..blendMode = BlendMode.dstOut
-          ..color = const Color(0xFF000000),
-      );
-    }
+    final erase = Paint()
+      ..blendMode = BlendMode.dstOut
+      ..color = const Color(0xFF000000);
+    final l = land, b = inland;
+    if (l != null) canvas.drawPath(l, erase);
+    if (b != null) canvas.drawPath(b, erase);
     canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _WindFieldPainter old) {
-    if (old.image != image || old.land != land || old.dst != dst || old.opacity != opacity) return true;
+    if (old.image != image || old.land != land || old.inland != inland || old.dst != dst || old.opacity != opacity) return true;
     for (var i = 0; i < 16; i++) {
       if (old.m[i] != m[i]) return true;
     }
