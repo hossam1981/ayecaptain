@@ -1231,6 +1231,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   // cover its lowest button (MOB). Their real height is measured after layout; while the sheet
   // is expanded the last collapsed height is kept, so the rail stays put behind the open sheet
   // (as before) instead of being pushed off the top of the screen.
+  // Which way north is on screen, for the rail's follow arrow (it doubles as a compass). This is
+  // the 2D map's rotation in degrees; the map reports it through _onMapPosition. A notifier (not
+  // setState) so only the arrow rebuilds, and it is set in a microtask because the map can
+  // report a position while widgets are still being built.
+  final ValueNotifier<double> _mapRotDeg = ValueNotifier<double>(0);
+  void _onMapPosition(MapCamera camera, bool hasGesture) {
+    final r = camera.rotation;
+    if ((r - _mapRotDeg.value).abs() < 0.5) return;
+    scheduleMicrotask(() { if (mounted) _mapRotDeg.value = r; });
+  }
   final GlobalKey _bottomPanelsKey = GlobalKey();
   double _bottomPanelsH = 0;
   void _measureBottomPanels() {
@@ -1605,6 +1615,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _mapRotDeg.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _gpsSub?.cancel();
     _wxTimer?.cancel();
@@ -2022,6 +2033,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 minZoom: 3,
                 maxZoom: 19,
                 onTap: _handleMapTap,
+                onPositionChanged: _onMapPosition,
                 interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
               ),
               children: [
@@ -2280,9 +2292,15 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             mobOn: _mobPoint != null,
             windOn: _windLayerOn,
             onWind: () => setState(() => _windLayerOn = !_windLayerOn),
+            // The follow arrow is also the compass: it points to north on screen. In the 3D trip
+            // view the map is always heading-up, so north is simply minus the heading there.
+            north: _mapRotDeg, northOverride: useNav3D ? -_heading : null,
             onFollow: () => setState(() {
               _follow = !_follow;
               if (_follow && _me != null && !useNav3D) _controller.move(_me!, math.max(_controller.camera.zoom, 14));
+              // Turning follow on also turns the map back to north-up — but not during a trip,
+              // where the map is deliberately kept heading-up.
+              if (_follow && !_navigating && !useNav3D) _controller.rotate(0);
             }),
             // PWA index.html:1413 — turning picking on closes the sheet so the map is unobstructed.
             onGoto: () => setState(() { _picking = !_picking; if (_picking) _sheetExpanded = false; }),
@@ -3293,8 +3311,12 @@ class _BaseSwitcher extends StatelessWidget {
 class _RightRail extends StatelessWidget {
   final bool follow, picking, gpsOn, mobOn, windOn;
   final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools, onBoatProfile, onWind;
+  // Compass for the follow arrow: degrees clockwise from "up" that north points on screen.
+  // [northOverride] wins when set (3D trip view); otherwise [north] is listened to.
+  final ValueListenable<double> north;
+  final double? northOverride;
   const _RightRail({required this.follow, required this.picking, required this.gpsOn, required this.mobOn,
-    required this.windOn,
+    required this.windOn, required this.north, this.northOverride,
     required this.onFollow, required this.onGoto, required this.onLocate, required this.onMob,
     required this.onMoreTools, required this.onBoatProfile, required this.onWind});
   @override
@@ -3306,7 +3328,8 @@ class _RightRail extends StatelessWidget {
         _btn(icon: Icons.sailing, active: false, onTap: onBoatProfile, tip: 'Boat profile',
           accentColor: const Color(0xFF6FE8BC)),
         const SizedBox(height: 8),
-        _btn(icon: Icons.navigation, active: follow, onTap: onFollow, tip: 'Follow my boat'),
+        _btn(icon: Icons.navigation, active: follow, onTap: onFollow, tip: 'Follow my boat (arrow points north)',
+          wrapIcon: _northArrow),
         const SizedBox(height: 8),
         _btn(icon: Icons.add_location_alt, active: picking, onTap: onGoto, tip: 'Go to a point'),
         const SizedBox(height: 8),
@@ -3324,8 +3347,20 @@ class _RightRail extends StatelessWidget {
   // the reference design (.claude/skills/ayecaptain-glass-design/SKILL.md), not a PWA port.
   // Active state keeps a filled accent disc behind the icon (the glass ring alone reads too
   // subtly as "on" at 46px) rather than swapping the whole button to solid navy like before.
+  // Turns the follow arrow so it points to north on screen.
+  Widget _northArrow(Widget arrow) {
+    final fixed = northOverride;
+    if (fixed != null) return Transform.rotate(angle: fixed * math.pi / 180, child: arrow);
+    return ValueListenableBuilder<double>(
+      valueListenable: north,
+      child: arrow,
+      builder: (context, deg, child) => Transform.rotate(angle: deg * math.pi / 180, child: child),
+    );
+  }
+
   Widget _btn({required IconData icon, required bool active, required VoidCallback onTap, required String tip,
-      Color? accentColor}) {
+      Color? accentColor, Widget Function(Widget icon)? wrapIcon}) {
+    final iconW = Icon(icon, color: active ? Colors.white : (accentColor ?? const Color(0xFFB7E7FF)));
     return SizedBox(
       width: 46, height: 46,
       child: _GlassSurface(
@@ -3338,7 +3373,7 @@ class _RightRail extends StatelessWidget {
             child: InkWell(
               customBorder: const CircleBorder(),
               onTap: onTap,
-              child: Icon(icon, color: active ? Colors.white : (accentColor ?? const Color(0xFFB7E7FF))),
+              child: wrapIcon == null ? iconW : wrapIcon(iconW),
             ),
           ),
         ),
