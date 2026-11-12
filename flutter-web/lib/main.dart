@@ -1227,6 +1227,21 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   // the colours show gust speed (default) or sustained wind speed.
   bool _windLayerOn = false;
   bool _windLayerGusts = true;
+  // The right rail sits just above the bottom panels (route panel + sheet), so they can never
+  // cover its lowest button (MOB). Their real height is measured after layout; while the sheet
+  // is expanded the last collapsed height is kept, so the rail stays put behind the open sheet
+  // (as before) instead of being pushed off the top of the screen.
+  final GlobalKey _bottomPanelsKey = GlobalKey();
+  double _bottomPanelsH = 0;
+  void _measureBottomPanels() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _sheetExpanded) return;
+      final box = _bottomPanelsKey.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) return;
+      final h = box.size.height;
+      if ((h - _bottomPanelsH).abs() > 0.5) setState(() => _bottomPanelsH = h);
+    });
+  }
   // Demo switch for the weather effects: open the app with ?fx=rain (snow, thunder, wind, clear) and
   // FxCanvas gets that preset instead of the live weather. Only FxCanvas is affected.
   late final List<double>? _fxDemo = _fxDemoPresets[_fxDemoName()];
@@ -1949,6 +1964,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     // and never while MOB/anchor-watch is active — those safety overlays aren't ported to
     // Nav3DView in this pass, so stay on the regular (working) view rather than hide them.
     final useNav3D = _navigating && _mapStyleUrl.isNotEmpty && _mobPoint == null && _anchorPoint == null;
+    _measureBottomPanels();
+    // Rail position: 12 px above the measured panels, never lower than the old fixed 140, and
+    // never so high that its top would run into the top HUD (rail ~374 px tall + ~96 px HUD).
+    // On wide screens the panels are a 390 px column on the left and never reach the rail.
+    final screenSize = MediaQuery.sizeOf(context);
+    final railBottom = screenSize.width >= 820
+        ? 140.0
+        : math.min(math.max(140.0, _bottomPanelsH + 24.0), math.max(140.0, screenSize.height - 470.0));
     final route3DSegments = <Nav3DRouteSegment>[];
     if (useNav3D && routeLine.length >= 2) {
       final graded = _gradedRouteSegments(routeLine);
@@ -2251,9 +2274,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           if (_sheetExpanded && !_picking)
             Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => _sheetExpanded = false))),
-          // +76 while the collapsed sheet shows the (taller) Wind & Gusts card, so the card does
-          // not cover the bottom of the rail (the MOB button is the lowest one).
-          Positioned(right: 12, bottom: 140 + ((_windLayerOn && !_sheetExpanded) ? 76.0 : 0.0), child: _RightRail(
+          Positioned(right: 12, bottom: railBottom, child: _RightRail(
             follow: _follow, picking: _picking, gpsOn: _gpsSub != null,
             mobOn: _mobPoint != null,
             windOn: _windLayerOn,
@@ -2277,7 +2298,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           Positioned(left: 12, bottom: 12,
             right: MediaQuery.sizeOf(context).width >= 820 ? null : 12,
             width: MediaQuery.sizeOf(context).width >= 820 ? 390 : null,
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            child: NotificationListener<SizeChangedLayoutNotification>(
+              onNotification: (_) { _measureBottomPanels(); return false; },
+              child: SizeChangedLayoutNotifier(
+            child: Column(key: _bottomPanelsKey, mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               _NavShell(
                 // MOB takes priority over navigating, which takes priority over plain
                 // planning. Deliberately NOT gated on _me != null — _startRide()/_toggleMob()
@@ -2315,8 +2339,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 onInstall: _installApp,
                 windLayerOn: _windLayerOn, windGusts: _windLayerGusts,
                 onWindGustsChanged: (v) => setState(() => _windLayerGusts = v),
+                // one slim line instead of the full card while a route / nav / MOB panel is open
+                windCompact: _mobPoint != null || _picking || _waypoints.isNotEmpty,
               ),
             ]),
+              ),
+            ),
           ),
         ]),
       ),
@@ -3774,13 +3802,17 @@ class _BottomSheet extends StatefulWidget {
   // instead of the boat summary line (same sheet, different content — never a second panel).
   final bool windLayerOn, windGusts;
   final ValueChanged<bool> onWindGustsChanged;
+  // true while a route / navigation / MOB panel is showing above the sheet: the Wind & Gusts
+  // card shrinks to one line so the two panels together leave more of the map visible.
+  final bool windCompact;
   const _BottomSheet({required this.weather,
     required this.window, required this.hourly, required this.daily,
     required this.tideStation, required this.tides, required this.tideUnit,
     required this.onTideUnitChanged,
     required this.profile, required this.expanded, required this.onExpandedChanged,
     required this.showInstallPrompt, required this.onInstall,
-    required this.windLayerOn, required this.windGusts, required this.onWindGustsChanged});
+    required this.windLayerOn, required this.windGusts, required this.onWindGustsChanged,
+    this.windCompact = false});
   @override
   State<_BottomSheet> createState() => _BottomSheetState();
 }
@@ -3834,15 +3866,7 @@ class _BottomSheetState extends State<_BottomSheet> {
     final dirDeg = w?.windDirDeg;
     final gustOver = gustKt != null && gustKt > widget.profile.gust;
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Center(child: InkWell(
-        onTap: () => _setExpanded(true),
-        borderRadius: BorderRadius.circular(3),
-        child: SizedBox(width: 60, height: 24, child: Center(
-          child: Container(width: 40, height: 5,
-            decoration: BoxDecoration(color: Colors.white.withOpacity(.30),
-              borderRadius: BorderRadius.circular(3))),
-        )),
-      )),
+      _windHandle(),
       Row(children: [
         const Icon(Icons.air, color: Color(0xFF7FDBFF), size: 20),
         const SizedBox(width: 8),
@@ -3867,6 +3891,51 @@ class _BottomSheetState extends State<_BottomSheet> {
       ]),
       const SizedBox(height: 10),
       const WindScaleBar(),
+    ]);
+  }
+
+  // Grab handle for the two wind layouts — same look as the one in _fixedChrome; opens the sheet.
+  Widget _windHandle() => Center(child: InkWell(
+    onTap: () => _setExpanded(true),
+    borderRadius: BorderRadius.circular(3),
+    child: SizedBox(width: 60, height: 24, child: Center(
+      child: Container(width: 40, height: 5,
+        decoration: BoxDecoration(color: Colors.white.withOpacity(.30),
+          borderRadius: BorderRadius.circular(3))),
+    )),
+  ));
+
+  // One-line Wind & Gusts summary, used while a route / nav / MOB panel is open above the sheet.
+  // No scale or Wind/Gusts switch here — they come back when that panel closes.
+  Widget _windChromeSlim() {
+    final w = widget.weather;
+    final windKt = w?.windKt, gustKt = w?.gustKt;
+    final dirDeg = w?.windDirDeg;
+    final gustOver = gustKt != null && gustKt > widget.profile.gust;
+    final windTxt = windKt == null ? '—' : windKt.round().toString();
+    final gustTxt = gustKt == null ? '—' : gustKt.round().toString();
+    final dirTxt = dirDeg == null ? '' : ' ${_dirName(dirDeg.toDouble())}';
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _windHandle(),
+      InkWell(
+        onTap: () => _setExpanded(true),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(children: [
+            const Icon(Icons.air, color: Color(0xFF7FDBFF), size: 20),
+            const SizedBox(width: 8),
+            Expanded(child: Text.rich(TextSpan(
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15),
+              children: [
+                TextSpan(text: 'Wind $windTxt kn$dirTxt  ·  '),
+                TextSpan(text: 'Gust $gustTxt kn',
+                  style: TextStyle(color: gustOver ? const Color(0xFFFF5A6A) : Colors.white)),
+              ],
+            ))),
+            const Icon(Icons.keyboard_arrow_up, color: Color(0xFFB7E7FF), size: 20),
+          ]),
+        ),
+      ),
     ]);
   }
 
@@ -3938,7 +4007,9 @@ class _BottomSheetState extends State<_BottomSheet> {
                     ]),
                   ),
                 )
-              : (widget.windLayerOn ? _windChrome() : _fixedChrome()),
+              : (widget.windLayerOn
+                  ? (widget.windCompact ? _windChromeSlim() : _windChrome())
+                  : _fixedChrome()),
           ),
         ),
       ),
