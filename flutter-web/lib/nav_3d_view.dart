@@ -149,6 +149,12 @@ class _Nav3DViewState extends State<Nav3DView> {
             'type': 'raster',
             'tiles': [urls[i]],
             'tileSize': 256,
+            // Highest zoom the tile server really has. Past it MapLibre stretches the last
+            // real tiles instead of asking for ones that do not exist. Esri's dark-gray maps
+            // stop at 16 and answer "Map data not yet available" pictures above that — which
+            // is what the close, tilted trip view was showing. The others go to 19 (the same
+            // top zoom the 2D map uses them at).
+            'maxzoom': widget.basemap == 'dark' ? 16 : 19,
           },
       },
       'layers': [
