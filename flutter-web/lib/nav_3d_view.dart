@@ -47,9 +47,6 @@ class Nav3DView extends StatefulWidget {
   // layer under the route. No value tags in this view.
   final bool windOn, windGusts;
   final List<List<ll.LatLng>>? Function()? landWays;
-  // Height (px) of the app's bottom panels. The map's credit "i" button is lifted by this much
-  // so it sits just above the panels instead of on top of them.
-  final double bottomInset;
   const Nav3DView({
     super.key,
     required this.styleUrl,
@@ -63,7 +60,6 @@ class Nav3DView extends StatefulWidget {
     this.windOn = false,
     this.windGusts = true,
     this.landWays,
-    this.bottomInset = 0,
   });
 
   @override
@@ -91,7 +87,7 @@ class _Nav3DViewState extends State<Nav3DView> {
 
   // The map's own on-page controls. maplibre_gl's web build cannot set the credit button's
   // margins ("setAttributionButtonMargins not available in web" in its source), so the corner
-  // box that holds it is nudged up directly, and the credit text — which MapLibre opens by
+  // box that holds it is styled directly, and the credit text — which MapLibre opens by
   // default on a narrow screen — is closed once so only the "i" shows. Tapping the "i" still
   // opens it. The credit itself must stay: it is the map data's licence condition.
   bool _creditClosed = false;
@@ -101,7 +97,9 @@ class _Nav3DViewState extends State<Nav3DView> {
       final corners = web.window.document.querySelectorAll('.maplibregl-ctrl-bottom-left');
       for (var i = 0; i < corners.length; i++) {
         final el = corners.item(i) as web.Element?;
-        el?.setAttribute('style', 'margin-bottom: ${widget.bottomInset.round()}px');
+        // tucked into the very bottom-left corner of the screen, small and faded (user request:
+        // it was distracting above the panels). Still there and still tappable.
+        el?.setAttribute('style', 'margin: 0 0 -6px -6px; opacity: 0.4; transform: scale(0.8); transform-origin: bottom left;');
       }
       if (_creditClosed) return;
       final credits = web.window.document.querySelectorAll('.maplibregl-ctrl-attrib');
@@ -163,7 +161,7 @@ class _Nav3DViewState extends State<Nav3DView> {
   @override
   void didUpdateWidget(covariant Nav3DView old) {
     super.didUpdateWidget(old);
-    if (old.bottomInset != widget.bottomInset || !_creditClosed) _tidyMapControls();
+    if (!_creditClosed) _tidyMapControls();
     if (_ready) _syncMap();
   }
 
@@ -426,7 +424,7 @@ class _Nav3DViewState extends State<Nav3DView> {
       // No compass box: this view always turns the map to the boat's heading, so the button did
       // nothing useful and sat on top of the Map/Chart/Sat/Dark switcher.
       compassEnabled: false,
-      // Credit "i" bottom-left, lifted above the app's panels by _tidyMapControls().
+      // Credit "i" in the bottom-left corner, made small and faded by _tidyMapControls().
       attributionButtonPosition: AttributionButtonPosition.bottomLeft,
       onMapCreated: _onMapCreated,
       onStyleLoadedCallback: _onStyleLoaded,

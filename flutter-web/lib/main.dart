@@ -2033,7 +2033,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               waypoints: _waypoints,
               windOn: _windLayerOn, windGusts: _windLayerGusts,
               landWays: () => _land?.ways,
-              bottomInset: _bottomPanelsH + 16,
             )
           else
           // The map itself, wrapped in a Transform that tilts to ~45° during active nav (matches the
@@ -2306,9 +2305,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           if (_navigating && _mobPoint == null && !_sheetExpanded)
             Builder(builder: (context) {
               final rp = _routeProgress();
-              // In the 3D trip view the map's credit "i" sits in this corner, just above the
-              // panels — the bar starts 44 px higher there so the two never overlap.
-              final barBottom = math.max(140.0, _bottomPanelsH + 24.0) + (useNav3D ? 44.0 : 0.0);
+              final barBottom = math.max(140.0, _bottomPanelsH + 24.0);
               final barH = math.min(260.0, screenSize.height - barBottom - 230.0);
               if (rp == null || barH < 120) return const SizedBox.shrink();
               return Positioned(left: 14, bottom: barBottom,
