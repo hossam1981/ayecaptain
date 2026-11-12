@@ -76,7 +76,8 @@ already has its own widget, and the install prompt already works.
 Step 1 is in (`lib/widgets/wind_layer.dart` + rail button + Wind & Gusts card in the collapsed sheet):
 forecast wind/gust colour map from an Open-Meteo 6x7 point grid, erased over land (NJ/NY land file).
 
-- [ ] **Step 2:** gust value labels on the map at grid points; Gale Warning / too-rough banner styling pass.
+- [x] Gust/wind value tags on the map (up to 5 spots on water, strongest gust first).
+- [ ] Gale Warning / too-rough banner styling pass.
 - [ ] Animated wind streaks inside the colour map (and masking FxCanvas's wind/gust streaks to water —
       rain and snow stay full screen, per the user).
 - [ ] Optional: NOAA station "measured" wind labels (e.g. Sandy Hook) next to the forecast.

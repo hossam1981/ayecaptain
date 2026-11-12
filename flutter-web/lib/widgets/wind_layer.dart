@@ -49,6 +49,13 @@ final List<Color> windScaleColors = [
 ];
 final List<double> windScaleStops = [for (final s in _ramp) s[0] / windScaleMaxKt];
 
+/// The scale colour for a speed in knots (used by the map labels).
+Color windScaleColor(double kt) {
+  final px = Uint8List(4);
+  _rampInto(kt, 1.0, px, 0);
+  return Color.fromARGB(255, px[0], px[1], px[2]);
+}
+
 // Writes the colour for [kt] into [px] at offset [o] as premultiplied RGBA.
 void _rampInto(double kt, double alpha, Uint8List px, int o) {
   final v = kt.isFinite ? math.min(windScaleMaxKt, math.max(0.0, kt)) : 0.0;
@@ -181,6 +188,42 @@ Future<WindGrid?> fetchWindGrid({
   }
 }
 
+// Value at a fractional position in the grid: s = 0..1 west->east, t = 0..1 north->south.
+double _sample(WindGrid g, List<double> v, double s, double t) {
+  final gx = s * (g.cols - 1), gy = t * (g.rows - 1);
+  final c0 = math.max(0, math.min(gx.floor(), g.cols - 2));
+  final r0 = math.max(0, math.min(gy.floor(), g.rows - 2));
+  final fx = gx - c0, fy = gy - r0;
+  final a = v[r0 * g.cols + c0], b = v[r0 * g.cols + c0 + 1];
+  final c = v[(r0 + 1) * g.cols + c0], d = v[(r0 + 1) * g.cols + c0 + 1];
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+}
+
+// Is this point inside any land polygon? [boxes] are [west, south, east, north] per polygon.
+bool _onLand(double lat, double lon, List<List<LatLng>> ways, List<List<double>> boxes) {
+  for (var k = 0; k < ways.length; k++) {
+    final bb = boxes[k];
+    if (lon < bb[0] || lon > bb[2] || lat < bb[1] || lat > bb[3]) continue;
+    final ring = ways[k];
+    var inside = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      final yi = ring[i].latitude, yj = ring[j].latitude;
+      if ((yi > lat) != (yj > lat)) {
+        final xi = ring[i].longitude, xj = ring[j].longitude;
+        if (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+      }
+    }
+    if (inside) return true;
+  }
+  return false;
+}
+
+// One value tag on the map: position in local units + the forecast wind and gust there.
+class _WindLabel {
+  const _WindLabel(this.x, this.y, this.wind, this.gust);
+  final double x, y, wind, gust;
+}
+
 const int _upsample = 16; // image pixels per grid cell
 
 // Turns one grid of knots into a small colour image (values blended between grid points,
@@ -265,6 +308,9 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
   WindGrid? _grid;
   ui.Image? _windImg, _gustImg;
   ui.Path? _landPath;
+  List<List<LatLng>>? _landWays;
+  List<List<double>>? _landBoxes;
+  List<_WindLabel>? _labels; // picked once per grid (and again when the land data arrives)
   Timer? _debounce;
   LatLngBounds? _pending;
   String _pendingKey = '';
@@ -282,7 +328,16 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
   ui.Path? _buildLand(List<List<LatLng>>? ways) {
     if (ways == null || ways.isEmpty) return null;
     final p = ui.Path();
+    final boxes = <List<double>>[];
     for (final way in ways) {
+      var w = 180.0, s = 90.0, e = -180.0, n = -90.0;
+      for (final pt in way) {
+        if (pt.longitude < w) w = pt.longitude;
+        if (pt.longitude > e) e = pt.longitude;
+        if (pt.latitude < s) s = pt.latitude;
+        if (pt.latitude > n) n = pt.latitude;
+      }
+      boxes.add([w, s, e, n]);
       if (way.length < 3) continue;
       p.moveTo(_localX(way[0].longitude), _localY(way[0].latitude));
       for (var i = 1; i < way.length; i++) {
@@ -290,7 +345,90 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
       }
       p.close();
     }
+    _landWays = ways;
+    _landBoxes = boxes;
+    _labels = null; // re-pick now that land is known, so no tag sits on land
     return p;
+  }
+
+  // Picks up to 5 spots on the water for value tags: the strongest gust first, then spots as
+  // far apart from each other as possible. The values are the same forecast grid the colours
+  // use, blended to that spot. Outside the land file's area nothing is known to be land, so a
+  // tag can end up over land there.
+  List<_WindLabel> _pickLabels(WindGrid g) {
+    final ways = _landWays, boxes = _landBoxes;
+    final myN = _mercY(g.north), myS = _mercY(g.south);
+    final cand = <List<double>>[]; // [s, t, lat, lon, wind, gust]
+    for (var j = 0; j < 9; j++) {
+      final t = 0.22 + 0.56 * j / 8;
+      final lat = _latFromMercY(myN + (myS - myN) * t);
+      for (var i = 0; i < 7; i++) {
+        final s = 0.22 + 0.56 * i / 6;
+        final lon = g.west + (g.east - g.west) * s;
+        if (ways != null && boxes != null && _onLand(lat, lon, ways, boxes)) continue;
+        cand.add([s, t, lat, lon, _sample(g, g.wind, s, t), _sample(g, g.gust, s, t)]);
+      }
+    }
+    if (cand.isEmpty) return const <_WindLabel>[];
+    var best = cand[0];
+    for (final c in cand) {
+      if (c[5] > best[5]) best = c;
+    }
+    final picked = <List<double>>[best];
+    while (picked.length < 5) {
+      List<double>? far;
+      var farD = 0.0;
+      for (final c in cand) {
+        var d = double.infinity;
+        for (final p in picked) {
+          final dd = math.sqrt((c[0] - p[0]) * (c[0] - p[0]) + (c[1] - p[1]) * (c[1] - p[1]));
+          if (dd < d) d = dd;
+        }
+        if (d > farD) {
+          farD = d;
+          far = c;
+        }
+      }
+      if (far == null || farD < 0.17) break;
+      picked.add(far);
+    }
+    return [for (final p in picked) _WindLabel(_localX(p[3]), _localY(p[2]), p[4], p[5])];
+  }
+
+  // A value tag: dark chip with the scale colour as its rim, a short stem and a dot on the spot.
+  Widget _labelWidget(_WindLabel l, double sx, double sy) {
+    final kt = widget.gusts ? l.gust : l.wind;
+    final c = windScaleColor(kt);
+    return Positioned(
+      left: sx,
+      top: sy,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -1.0),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xE6071B2E),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: c, width: 1.4),
+              boxShadow: [BoxShadow(color: c.withOpacity(.45), blurRadius: 10)],
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(widget.gusts ? 'Gust' : 'Wind',
+                  style: const TextStyle(color: Color(0xFFBBD6EC), fontSize: 11, fontWeight: FontWeight.w600, height: 1.1)),
+              Text('${kt.round()} kn',
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800, height: 1.15)),
+            ]),
+          ),
+          Container(width: 1.5, height: 7, color: c),
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: c, border: Border.all(color: Colors.white, width: 1.5)),
+          ),
+        ]),
+      ),
+    );
   }
 
   // Decides whether new data is needed for what is on screen, and if so fetches it shortly
@@ -343,6 +481,7 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
       final oldW = _windImg, oldG = _gustImg;
       setState(() {
         _grid = g;
+        _labels = null; // new data => pick the tags again
         _windImg = wi;
         _gustImg = gi;
         _retryAfter = null;
@@ -389,13 +528,27 @@ class _WindFieldLayerState extends State<WindFieldLayer> {
     final hx = (x1 - x0) / (img.width - 1) / 2.0, hy = (y1 - y0) / (img.height - 1) / 2.0;
     final dst = Rect.fromLTRB(x0 - hx, y0 - hy, x1 + hx, y1 + hy);
 
+    // value tags: local units -> screen with the same matrix; only the ones on screen are built
+    final labels = _labels ??= _pickLabels(g);
+    final sw = camera.nonRotatedSize.x, sh = camera.nonRotatedSize.y;
+    final tags = <Widget>[];
+    for (final l in labels) {
+      final sx = m[0] * l.x + m[4] * l.y + m[12];
+      final sy = m[1] * l.x + m[5] * l.y + m[13];
+      if (sx < 30 || sx > sw - 30 || sy < 60 || sy > sh - 10) continue;
+      tags.add(_labelWidget(l, sx, sy));
+    }
+
     return IgnorePointer(
-      child: RepaintBoundary(
-        child: SizedBox.expand(
-          child: CustomPaint(
-            painter: _WindFieldPainter(image: img, dst: dst, land: _landPath, m: m, opacity: widget.opacity),
+      child: SizedBox.expand(
+        child: Stack(fit: StackFit.expand, children: [
+          RepaintBoundary(
+            child: CustomPaint(
+              painter: _WindFieldPainter(image: img, dst: dst, land: _landPath, m: m, opacity: widget.opacity),
+            ),
           ),
-        ),
+          ...tags,
+        ]),
       ),
     );
   }
