@@ -98,13 +98,13 @@ class _Nav3DViewState extends State<Nav3DView> {
   Timer? _tidyTimer;
   void _tidyMapControls() {
     try {
-      final corners = web.document.querySelectorAll('.maplibregl-ctrl-bottom-left');
+      final corners = web.window.document.querySelectorAll('.maplibregl-ctrl-bottom-left');
       for (var i = 0; i < corners.length; i++) {
         final el = corners.item(i) as web.Element?;
         el?.setAttribute('style', 'margin-bottom: ${widget.bottomInset.round()}px');
       }
       if (_creditClosed) return;
-      final credits = web.document.querySelectorAll('.maplibregl-ctrl-attrib');
+      final credits = web.window.document.querySelectorAll('.maplibregl-ctrl-attrib');
       for (var i = 0; i < credits.length; i++) {
         final el = credits.item(i) as web.Element?;
         final cls = el?.getAttribute('class') ?? '';

@@ -3313,7 +3313,7 @@ class _RightRail extends StatelessWidget {
   final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools, onBoatProfile, onWind;
   // Compass for the follow arrow: degrees clockwise from "up" that north points on screen.
   // [northOverride] wins when set (3D trip view); otherwise [north] is listened to.
-  final ValueListenable<double> north;
+  final ValueNotifier<double> north;   // ValueNotifier, not ValueListenable: material.dart does not export the latter
   final double? northOverride;
   const _RightRail({required this.follow, required this.picking, required this.gpsOn, required this.mobOn,
     required this.windOn, required this.north, this.northOverride,
