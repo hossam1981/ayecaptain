@@ -30,6 +30,7 @@ import 'package:web/web.dart' as web;
 
 import 'nav_3d_view.dart';
 import 'widgets/marine_glass_callout.dart';
+import 'widgets/wind_layer.dart';
 
 // From flutter-web/.env via --dart-define-from-file=.env. Not typed in the boat profile.
 const _envCartoKey = String.fromEnvironment('CARTO_KEY');
@@ -1222,6 +1223,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   LatLng? _me;
   double _heading = 0;
   double _speedKt = 0;
+  // Wind & Gusts map layer (widgets/wind_layer.dart): on/off from the rail button, and whether
+  // the colours show gust speed (default) or sustained wind speed.
+  bool _windLayerOn = false;
+  bool _windLayerGusts = true;
   // Demo switch for the weather effects: open the app with ?fx=rain (snow, thunder, wind, clear) and
   // FxCanvas gets that preset instead of the live weather. Only FxCanvas is affected.
   late final List<double>? _fxDemo = _fxDemoPresets[_fxDemoName()];
@@ -2014,6 +2019,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   TileLayer(urlTemplate: _noaaChartUrl, userAgentPackageName: 'net.bayside.flutter',
                     zoomOffset: -2, minZoom: 2, maxNativeZoom: 18, maxZoom: 19,
                     tileDisplay: const TileDisplay.instantaneous(opacity: 1.0)),
+                // Wind & Gusts colour map — forecast wind/gust speed over water only. Always in
+                // the list (switched by `enabled`) so toggling it never shifts the layers below.
+                WindFieldLayer(enabled: _windLayerOn, gusts: _windLayerGusts,
+                  landWays: () => _land?.ways),
                 if (_trail.length > 1)
                   PolylineLayer(polylines: [
                     Polyline(points: _trail.map((t) => t.p).toList(), color: const Color(0xAAFFFFFF), strokeWidth: 4),
@@ -2240,9 +2249,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           if (_sheetExpanded && !_picking)
             Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => _sheetExpanded = false))),
-          Positioned(right: 12, bottom: 140, child: _RightRail(
+          // +76 while the collapsed sheet shows the (taller) Wind & Gusts card, so the card does
+          // not cover the bottom of the rail (the MOB button is the lowest one).
+          Positioned(right: 12, bottom: 140 + ((_windLayerOn && !_sheetExpanded) ? 76.0 : 0.0), child: _RightRail(
             follow: _follow, picking: _picking, gpsOn: _gpsSub != null,
             mobOn: _mobPoint != null,
+            windOn: _windLayerOn,
+            onWind: () => setState(() => _windLayerOn = !_windLayerOn),
             onFollow: () => setState(() {
               _follow = !_follow;
               if (_follow && _me != null && !useNav3D) _controller.move(_me!, math.max(_controller.camera.zoom, 14));
@@ -2298,6 +2311,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 onExpandedChanged: (v) => setState(() => _sheetExpanded = v),
                 showInstallPrompt: _installPromptEvent != null,
                 onInstall: _installApp,
+                windLayerOn: _windLayerOn, windGusts: _windLayerGusts,
+                onWindGustsChanged: (v) => setState(() => _windLayerGusts = v),
               ),
             ]),
           ),
@@ -3245,11 +3260,12 @@ class _BaseSwitcher extends StatelessWidget {
 // Batch A.5: right rail now matches the PWA — Follow / Go-to / Locate / ⋯ More-tools / MOB.
 // The four ad-hoc singleton buttons for fuel/anchor/forecast/smart moved into `_MoreToolsSheet`.
 class _RightRail extends StatelessWidget {
-  final bool follow, picking, gpsOn, mobOn;
-  final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools, onBoatProfile;
+  final bool follow, picking, gpsOn, mobOn, windOn;
+  final VoidCallback onFollow, onGoto, onLocate, onMob, onMoreTools, onBoatProfile, onWind;
   const _RightRail({required this.follow, required this.picking, required this.gpsOn, required this.mobOn,
+    required this.windOn,
     required this.onFollow, required this.onGoto, required this.onLocate, required this.onMob,
-    required this.onMoreTools, required this.onBoatProfile});
+    required this.onMoreTools, required this.onBoatProfile, required this.onWind});
   @override
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
         // Was the "Edit" text link inside the weather sheet header — moved here (its own
@@ -3264,6 +3280,9 @@ class _RightRail extends StatelessWidget {
         _btn(icon: Icons.add_location_alt, active: picking, onTap: onGoto, tip: 'Go to a point'),
         const SizedBox(height: 8),
         _btn(icon: gpsOn ? Icons.my_location : Icons.location_searching, active: gpsOn, onTap: onLocate, tip: 'Track my location'),
+        const SizedBox(height: 8),
+        // Wind & Gusts map layer on/off (widgets/wind_layer.dart).
+        _btn(icon: Icons.air, active: windOn, onTap: onWind, tip: 'Wind & gusts layer'),
         const SizedBox(height: 8),
         _btn(icon: Icons.more_horiz, active: false, onTap: onMoreTools, tip: 'More tools'),
         const SizedBox(height: 8),
@@ -3749,12 +3768,17 @@ class _BottomSheet extends StatefulWidget {
   final ValueChanged<bool> onExpandedChanged;
   final bool showInstallPrompt;
   final VoidCallback onInstall;
+  // Wind & Gusts layer state: while it is on, the collapsed sheet shows the Wind & Gusts card
+  // instead of the boat summary line (same sheet, different content — never a second panel).
+  final bool windLayerOn, windGusts;
+  final ValueChanged<bool> onWindGustsChanged;
   const _BottomSheet({required this.weather,
     required this.window, required this.hourly, required this.daily,
     required this.tideStation, required this.tides, required this.tideUnit,
     required this.onTideUnitChanged,
     required this.profile, required this.expanded, required this.onExpandedChanged,
-    required this.showInstallPrompt, required this.onInstall});
+    required this.showInstallPrompt, required this.onInstall,
+    required this.windLayerOn, required this.windGusts, required this.onWindGustsChanged});
   @override
   State<_BottomSheet> createState() => _BottomSheetState();
 }
@@ -3797,6 +3821,77 @@ class _BottomSheetState extends State<_BottomSheet> {
     // (_MapScreenState.build(), above the rail). PWA only shows it once too (index.html:327,
     // inside #sheet) but the user explicitly wants the HUD copy kept and this one dropped.
   ]);
+
+  // Collapsed-sheet content while the Wind & Gusts map layer is on: live wind + gust at your
+  // location (the same Open-Meteo values as the weather panel), a Wind / Gusts switch for what
+  // the map colours show, and the colour scale. The grab handle and the up-arrow still open the
+  // full weather sheet. Gust turns red when it is over the boat profile's gust limit.
+  Widget _windChrome() {
+    final w = widget.weather;
+    final windKt = w?.windKt, gustKt = w?.gustKt;
+    final dirDeg = w?.windDirDeg;
+    final gustOver = gustKt != null && gustKt > widget.profile.gust;
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Center(child: InkWell(
+        onTap: () => _setExpanded(true),
+        borderRadius: BorderRadius.circular(3),
+        child: SizedBox(width: 60, height: 24, child: Center(
+          child: Container(width: 40, height: 5,
+            decoration: BoxDecoration(color: Colors.white.withOpacity(.30),
+              borderRadius: BorderRadius.circular(3))),
+        )),
+      )),
+      Row(children: [
+        const Icon(Icons.air, color: Color(0xFF7FDBFF), size: 20),
+        const SizedBox(width: 8),
+        const Expanded(child: Text('Wind & Gusts', maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15))),
+        _windSeg('Wind', !widget.windGusts, () => widget.onWindGustsChanged(false)),
+        const SizedBox(width: 6),
+        _windSeg('Gusts', widget.windGusts, () => widget.onWindGustsChanged(true)),
+        const SizedBox(width: 4),
+        InkWell(
+          onTap: () => _setExpanded(true),
+          borderRadius: BorderRadius.circular(12),
+          child: const Padding(padding: EdgeInsets.all(2),
+            child: Icon(Icons.keyboard_arrow_up, color: Color(0xFFB7E7FF), size: 22)),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: _windStat(windKt, dirDeg == null ? 'Wind' : 'Wind (${_dirName(dirDeg.toDouble())})', Colors.white)),
+        Container(width: 1, height: 34, color: Colors.white.withOpacity(.14)),
+        Expanded(child: _windStat(gustKt, 'Gust', gustOver ? const Color(0xFFFF5A6A) : Colors.white)),
+      ]),
+      const SizedBox(height: 10),
+      const WindScaleBar(),
+    ]);
+  }
+
+  Widget _windStat(double? kt, String label, Color color) => Column(mainAxisSize: MainAxisSize.min, children: [
+    Text.rich(TextSpan(children: [
+      TextSpan(text: kt == null ? '—' : kt.round().toString(),
+        style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w800)),
+      TextSpan(text: ' kn', style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w700)),
+    ]), textAlign: TextAlign.center),
+    Text(label, textAlign: TextAlign.center,
+      style: const TextStyle(color: _secondaryText, fontSize: 12, fontWeight: FontWeight.w600)),
+  ]);
+
+  Widget _windSeg(String label, bool on, VoidCallback onTap) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(10),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: on ? const Color(0xFF2E6F9E).withOpacity(.75) : Colors.white.withOpacity(.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: on ? const Color(0xFF7FDBFF) : Colors.white.withOpacity(.18), width: 1),
+      ),
+      child: Text(label, style: TextStyle(color: on ? Colors.white : const Color(0xFFB7E7FF),
+        fontSize: 12, fontWeight: FontWeight.w700)),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -3841,7 +3936,7 @@ class _BottomSheetState extends State<_BottomSheet> {
                     ]),
                   ),
                 )
-              : _fixedChrome(),
+              : (widget.windLayerOn ? _windChrome() : _fixedChrome()),
           ),
         ),
       ),

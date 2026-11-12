@@ -70,3 +70,15 @@ already has its own widget, and the install prompt already works.
     also applies to the new nav-3D view (#9) — needs a real Mapbox/MapLibre style URL and
     actual navigation to verify at all; the browser-automation click tool has also been
     unreliable this session, so live verification leans on the user's own testing.
+
+## Wind & Gusts map layer (Flutter-only, no PWA equivalent)
+
+Step 1 is in (`lib/widgets/wind_layer.dart` + rail button + Wind & Gusts card in the collapsed sheet):
+forecast wind/gust colour map from an Open-Meteo 6x7 point grid, erased over land (NJ/NY land file).
+
+- [ ] **Step 2:** gust value labels on the map at grid points; Gale Warning / too-rough banner styling pass.
+- [ ] Animated wind streaks inside the colour map (and masking FxCanvas's wind/gust streaks to water —
+      rain and snow stay full screen, per the user).
+- [ ] Optional: NOAA station "measured" wind labels (e.g. Sandy Hook) next to the forecast.
+- [ ] Never compiled or seen running locally (no Flutter SDK in that session) — first real check is the
+      Netlify build, then a phone.
