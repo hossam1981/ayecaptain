@@ -86,3 +86,4 @@ forecast wind/gust colour map from an Open-Meteo 6x7 point grid, erased over lan
 - [ ] Optional: NOAA station "measured" wind labels (e.g. Sandy Hook) next to the forecast.
 - [ ] Never compiled or seen running locally (no Flutter SDK in that session) — first real check is the
       Netlify build, then a phone.
+- [x] Route progress bar on the left edge during a trip (by distance; start at the bottom, destination on top).

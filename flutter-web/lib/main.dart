@@ -1243,6 +1243,26 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
   final GlobalKey _bottomPanelsKey = GlobalKey();
   double _bottomPanelsH = 0;
+  // Where the current trip was started — the bottom end of the route progress bar.
+  LatLng? _rideStart;
+  // Route progress for the left-side bar, by DISTANCE (not time): [how far along 0..1, then the
+  // 0..1 position of every waypoint]. The route is start -> waypoint 1 -> 2 ... in straight
+  // legs; "left to go" is the boat to the next waypoint plus the legs after it. So the marker
+  // stops when the boat stops and slides back if the boat moves away from the next waypoint.
+  // Null when there is nothing to show.
+  List<double>? _routeProgress() {
+    if (_waypoints.isEmpty || _legIdx >= _waypoints.length) return null;
+    final start = _rideStart ?? _me ?? _homeCenter;
+    final cum = <double>[_haversineM(start, _waypoints[0])];
+    for (var i = 1; i < _waypoints.length; i++) {
+      cum.add(cum[i - 1] + _haversineM(_waypoints[i - 1], _waypoints[i]));
+    }
+    final total = cum.last;
+    if (total < 1) return null;
+    final left = _haversineM(_me ?? start, _waypoints[_legIdx]) + (total - cum[_legIdx]);
+    final done = math.min(1.0, math.max(0.0, 1 - left / total));
+    return [done, for (final c in cum) c / total];
+  }
   void _measureBottomPanels() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _sheetExpanded) return;
@@ -1916,7 +1936,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   // ---------- Start Ride ----------
   Future<void> _startRide() async {
     if (_waypoints.isEmpty) return;
-    setState(() { _navigating = true; _follow = true; _picking = false; _legIdx = 0; });
+    setState(() { _navigating = true; _follow = true; _picking = false; _legIdx = 0; _rideStart = _me ?? _homeCenter; });
     try { await WakelockPlus.enable(); } catch (_) {}
     if (_me != null && (_mapStyleUrl.isEmpty || _mobPoint != null || _anchorPoint != null)) {
       _controller.move(_me!, math.max(_controller.camera.zoom, 16));
@@ -2280,6 +2300,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 onPlus: () => _bumpAnchor(25), onMinus: () => _bumpAnchor(-25), onStop: _toggleAnchor),
             ],
           ])),
+          // Route progress bar — left edge, only during a trip (not in MOB mode, which replaces the
+          // nav panel). Sits just above the bottom panels like the rail does; hidden if the
+          // screen is too short to fit it under the top HUD.
+          if (_navigating && _mobPoint == null && !_sheetExpanded)
+            Builder(builder: (context) {
+              final rp = _routeProgress();
+              final barBottom = math.max(140.0, _bottomPanelsH + 24.0);
+              final barH = math.min(260.0, screenSize.height - barBottom - 230.0);
+              if (rp == null || barH < 120) return const SizedBox.shrink();
+              return Positioned(left: 14, bottom: barBottom,
+                child: _RouteProgressBar(progress: rp[0], stops: rp.sublist(1), height: barH));
+            }),
           // Tap-catcher — a transparent full-screen layer that closes the sheet when the user
           // taps outside it. Rendered ONLY while the sheet is expanded AND we're not in
           // waypoint-picking mode (Goto). When picking, taps must go through to the map so
@@ -3402,6 +3434,89 @@ class _RightRail extends StatelessWidget {
           ),
         ),
       );
+}
+
+// Route progress bar (left edge, during a trip). Bottom = where the trip started, top = the
+// destination, a dot per waypoint, and a boat marker at how far along the route the boat is by
+// distance. Flutter-only (the PWA has no equivalent). Glass like the rail buttons.
+class _RouteProgressBar extends StatelessWidget {
+  final double progress;        // 0..1
+  final List<double> stops;     // 0..1 position of each waypoint; the last one is the destination
+  final double height;
+  const _RouteProgressBar({required this.progress, required this.stops, required this.height});
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: SizedBox(
+      width: 34, height: height,
+      child: _GlassSurface(
+        severity: GlassSeverity.nav, borderRadius: 17,
+        child: CustomPaint(
+          painter: _RouteProgressPainter(progress: progress, stops: stops),
+          child: const SizedBox.expand(),
+        ),
+      ),
+    ),
+  );
+}
+
+class _RouteProgressPainter extends CustomPainter {
+  final double progress;
+  final List<double> stops;
+  const _RouteProgressPainter({required this.progress, required this.stops});
+  @override
+  void paint(Canvas canvas, Size size) {
+    const pad = 18.0;
+    const cyan = Color(0xFF19C8FF);
+    final x = size.width / 2;
+    final bottom = size.height - pad, len = size.height - pad * 2;
+    double yOf(double p) => bottom - len * math.min(1.0, math.max(0.0, p));
+    final track = Paint()
+      ..color = const Color(0x38FFFFFF)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final done = Paint()
+      ..color = cyan
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(x, pad), Offset(x, bottom), track);
+    canvas.drawLine(Offset(x, bottom), Offset(x, yOf(progress)), done);
+    canvas.drawCircle(Offset(x, bottom), 3, Paint()..color = cyan);   // start
+    final ring = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    for (var i = 0; i < stops.length; i++) {
+      final isDest = i == stops.length - 1;
+      final c = Offset(x, yOf(stops[i]));
+      final r = isDest ? 5.5 : 4.0;
+      final passed = progress >= stops[i] - 1e-6;
+      canvas.drawCircle(c, r, Paint()..color = passed ? cyan : const Color(0xFF0B2A44));
+      canvas.drawCircle(c, r, ring);
+    }
+    // boat marker: a small white arrowhead pointing up the bar
+    final y = yOf(progress);
+    final boat = ui.Path()
+      ..moveTo(x, y - 8)
+      ..lineTo(x - 6.5, y + 6)
+      ..lineTo(x, y + 2.5)
+      ..lineTo(x + 6.5, y + 6)
+      ..close();
+    canvas.drawPath(boat, Paint()..color = const Color(0x66000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+    canvas.drawPath(boat, Paint()..color = Colors.white);
+    canvas.drawPath(boat, Paint()
+      ..color = cyan
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..strokeJoin = StrokeJoin.round);
+  }
+  @override
+  bool shouldRepaint(covariant _RouteProgressPainter old) {
+    if (old.progress != progress || old.stops.length != stops.length) return true;
+    for (var i = 0; i < stops.length; i++) {
+      if (old.stops[i] != stops[i]) return true;
+    }
+    return false;
+  }
 }
 
 // Batch A.5: bottom-sheet popover with 5 toggles — matches the PWA's More tools sheet.
