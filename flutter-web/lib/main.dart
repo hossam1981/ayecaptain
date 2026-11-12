@@ -2306,7 +2306,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           if (_navigating && _mobPoint == null && !_sheetExpanded)
             Builder(builder: (context) {
               final rp = _routeProgress();
-              final barBottom = math.max(140.0, _bottomPanelsH + 24.0);
+              // In the 3D trip view the map's credit "i" sits in this corner, just above the
+              // panels — the bar starts 44 px higher there so the two never overlap.
+              final barBottom = math.max(140.0, _bottomPanelsH + 24.0) + (useNav3D ? 44.0 : 0.0);
               final barH = math.min(260.0, screenSize.height - barBottom - 230.0);
               if (rp == null || barH < 120) return const SizedBox.shrink();
               return Positioned(left: 14, bottom: barBottom,
@@ -3438,7 +3440,8 @@ class _RightRail extends StatelessWidget {
 
 // Route progress bar (left edge, during a trip). Bottom = where the trip started, top = the
 // destination, a dot per waypoint, and a boat marker at how far along the route the boat is by
-// distance. Flutter-only (the PWA has no equivalent). Glass like the rail buttons.
+// distance. Flutter-only (the PWA has no equivalent). No panel behind it (the user asked for the
+// background to go) — the line and dots carry their own dark edge so they read on any map.
 class _RouteProgressBar extends StatelessWidget {
   final double progress;        // 0..1
   final List<double> stops;     // 0..1 position of each waypoint; the last one is the destination
@@ -3448,12 +3451,9 @@ class _RouteProgressBar extends StatelessWidget {
   Widget build(BuildContext context) => IgnorePointer(
     child: SizedBox(
       width: 34, height: height,
-      child: _GlassSurface(
-        severity: GlassSeverity.nav, borderRadius: 17,
-        child: CustomPaint(
-          painter: _RouteProgressPainter(progress: progress, stops: stops),
-          child: const SizedBox.expand(),
-        ),
+      child: CustomPaint(
+        painter: _RouteProgressPainter(progress: progress, stops: stops),
+        child: const SizedBox.expand(),
       ),
     ),
   );
@@ -3470,17 +3470,25 @@ class _RouteProgressPainter extends CustomPainter {
     final x = size.width / 2;
     final bottom = size.height - pad, len = size.height - pad * 2;
     double yOf(double p) => bottom - len * math.min(1.0, math.max(0.0, p));
+    const navy = Color(0xFF0B2A44);
+    // dark edge first (there is no panel behind the bar), then the light track, then progress
+    final edge = Paint()
+      ..color = const Color(0xCC0B2A44)
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round;
     final track = Paint()
-      ..color = const Color(0x38FFFFFF)
+      ..color = const Color(0xB3FFFFFF)
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round;
     final done = Paint()
       ..color = cyan
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(x, pad), Offset(x, bottom), edge);
     canvas.drawLine(Offset(x, pad), Offset(x, bottom), track);
     canvas.drawLine(Offset(x, bottom), Offset(x, yOf(progress)), done);
-    canvas.drawCircle(Offset(x, bottom), 3, Paint()..color = cyan);   // start
+    canvas.drawCircle(Offset(x, bottom), 4.5, Paint()..color = navy);   // start
+    canvas.drawCircle(Offset(x, bottom), 3, Paint()..color = cyan);
     final ring = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
@@ -3490,7 +3498,8 @@ class _RouteProgressPainter extends CustomPainter {
       final c = Offset(x, yOf(stops[i]));
       final r = isDest ? 5.5 : 4.0;
       final passed = progress >= stops[i] - 1e-6;
-      canvas.drawCircle(c, r, Paint()..color = passed ? cyan : const Color(0xFF0B2A44));
+      canvas.drawCircle(c, r + 2, Paint()..color = navy);   // dark edge around the white ring
+      canvas.drawCircle(c, r, Paint()..color = passed ? cyan : navy);
       canvas.drawCircle(c, r, ring);
     }
     // boat marker: a small white arrowhead pointing up the bar
@@ -3502,12 +3511,12 @@ class _RouteProgressPainter extends CustomPainter {
       ..lineTo(x + 6.5, y + 6)
       ..close();
     canvas.drawPath(boat, Paint()..color = const Color(0x66000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-    canvas.drawPath(boat, Paint()..color = Colors.white);
     canvas.drawPath(boat, Paint()
-      ..color = cyan
+      ..color = navy
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
+      ..strokeWidth = 3.5
       ..strokeJoin = StrokeJoin.round);
+    canvas.drawPath(boat, Paint()..color = Colors.white);
   }
   @override
   bool shouldRepaint(covariant _RouteProgressPainter old) {
