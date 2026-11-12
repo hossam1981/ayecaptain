@@ -3436,24 +3436,37 @@ class _RightRail extends StatelessWidget {
 }
 
 // Route progress bar (left edge, during a trip). Bottom = where the trip started, top = the
-// destination, a dot per waypoint, and a boat marker at how far along the route the boat is by
-// distance. Flutter-only (the PWA has no equivalent). No panel behind it (the user asked for the
-// background to go) — the line and dots carry their own dark edge so they read on any map.
+// destination, a dot per waypoint, and a small copy of the boat at how far along the route the
+// boat is by distance. Flutter-only (the PWA has no equivalent).
+// Look ("glowing route line", picked by the user over the first plain version): no panel behind
+// it; the part already travelled is a bright cyan line with a neon glow like the rail buttons'
+// rims, the part ahead is the same line dimmed; waypoints are small glowing dots.
 class _RouteProgressBar extends StatelessWidget {
   final double progress;        // 0..1
   final List<double> stops;     // 0..1 position of each waypoint; the last one is the destination
   final double height;
   const _RouteProgressBar({required this.progress, required this.stops, required this.height});
+  static const double pad = 22;       // room above/below the line for the boat and the end dots
+  static const double barW = 34, boatW = 13, boatH = 32;
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    child: SizedBox(
-      width: 34, height: height,
-      child: CustomPaint(
-        painter: _RouteProgressPainter(progress: progress, stops: stops),
-        child: const SizedBox.expand(),
+  Widget build(BuildContext context) {
+    final p = math.min(1.0, math.max(0.0, progress));
+    final y = (height - pad) - (height - pad * 2) * p;
+    return IgnorePointer(
+      child: SizedBox(
+        width: barW, height: height,
+        child: Stack(clipBehavior: Clip.none, children: [
+          Positioned.fill(child: CustomPaint(painter: _RouteProgressPainter(progress: p, stops: stops))),
+          // the app's own top-down boat (bow up), centred on the line at the current progress
+          Positioned(
+            left: (barW - boatW) / 2, top: y - boatH / 2,
+            child: Image.asset('assets/icons/boat_small.png', width: boatW, height: boatH,
+              filterQuality: FilterQuality.medium),
+          ),
+        ]),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _RouteProgressPainter extends CustomPainter {
@@ -3462,58 +3475,60 @@ class _RouteProgressPainter extends CustomPainter {
   const _RouteProgressPainter({required this.progress, required this.stops});
   @override
   void paint(Canvas canvas, Size size) {
-    const pad = 18.0;
+    const pad = _RouteProgressBar.pad;
     const cyan = Color(0xFF19C8FF);
+    const bright = Color(0xFFC9F3FF);
+    const navy = Color(0xFF0B2A44);
     final x = size.width / 2;
     final bottom = size.height - pad, len = size.height - pad * 2;
     double yOf(double p) => bottom - len * math.min(1.0, math.max(0.0, p));
-    const navy = Color(0xFF0B2A44);
-    // dark edge first (there is no panel behind the bar), then the light track, then progress
-    final edge = Paint()
-      ..color = const Color(0xCC0B2A44)
-      ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-    final track = Paint()
-      ..color = const Color(0xB3FFFFFF)
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    final done = Paint()
-      ..color = cyan
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(x, pad), Offset(x, bottom), edge);
-    canvas.drawLine(Offset(x, pad), Offset(x, bottom), track);
-    canvas.drawLine(Offset(x, bottom), Offset(x, yOf(progress)), done);
-    canvas.drawCircle(Offset(x, bottom), 4.5, Paint()..color = navy);   // start
-    canvas.drawCircle(Offset(x, bottom), 3, Paint()..color = cyan);
-    final ring = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
+    final yNow = yOf(progress);
+    // thin dark edge under the whole line so it reads on light water / land without a panel
+    canvas.drawLine(Offset(x, pad), Offset(x, bottom), Paint()
+      ..color = const Color(0x800B2A44)
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round);
+    // ahead: the dimmed line
+    canvas.drawLine(Offset(x, pad), Offset(x, yNow), Paint()
+      ..color = const Color(0x7319C8FF)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round);
+    // travelled: neon glow + bright core
+    if (bottom - yNow > 0.5) {
+      canvas.drawLine(Offset(x, bottom), Offset(x, yNow), Paint()
+        ..color = const Color(0xB319C8FF)
+        ..strokeWidth = 7
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+      canvas.drawLine(Offset(x, bottom), Offset(x, yNow), Paint()
+        ..color = bright
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round);
+    }
+    final glow = Paint()
+      ..color = const Color(0x9919C8FF)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+    // start of the trip
+    canvas.drawCircle(Offset(x, bottom), 5, glow);
+    canvas.drawCircle(Offset(x, bottom), 3, Paint()..color = bright);
+    // waypoints (the last one is the destination, drawn larger)
     for (var i = 0; i < stops.length; i++) {
       final isDest = i == stops.length - 1;
       final c = Offset(x, yOf(stops[i]));
-      final r = isDest ? 5.5 : 4.0;
+      final r = isDest ? 5.5 : 3.5;
       final passed = progress >= stops[i] - 1e-6;
-      canvas.drawCircle(c, r + 2, Paint()..color = navy);   // dark edge around the white ring
-      canvas.drawCircle(c, r, Paint()..color = passed ? cyan : navy);
-      canvas.drawCircle(c, r, ring);
+      if (passed || isDest) canvas.drawCircle(c, r + 3, glow);
+      canvas.drawCircle(c, r + 1.5, Paint()..color = navy);
+      canvas.drawCircle(c, r, Paint()..color = passed ? bright : navy);
+      canvas.drawCircle(c, r, Paint()
+        ..color = passed ? bright : cyan
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5);
     }
-    // boat marker: a small white arrowhead pointing up the bar
-    final y = yOf(progress);
-    final boat = ui.Path()
-      ..moveTo(x, y - 8)
-      ..lineTo(x - 6.5, y + 6)
-      ..lineTo(x, y + 2.5)
-      ..lineTo(x + 6.5, y + 6)
-      ..close();
-    canvas.drawPath(boat, Paint()..color = const Color(0x66000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-    canvas.drawPath(boat, Paint()
-      ..color = navy
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
-      ..strokeJoin = StrokeJoin.round);
-    canvas.drawPath(boat, Paint()..color = Colors.white);
+    // soft glow behind the boat marker (the boat image itself is a widget on top)
+    canvas.drawCircle(Offset(x, yNow), 11, Paint()
+      ..color = const Color(0x6619C8FF)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
   }
   @override
   bool shouldRepaint(covariant _RouteProgressPainter old) {
