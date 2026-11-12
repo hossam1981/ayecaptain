@@ -12,6 +12,7 @@
 // before writing this — not guessed — per this session's established practice for
 // unfamiliar interop. Code-reviewed against the live docs a second time; nothing flagged.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -19,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:web/web.dart' as web;
 
 import 'widgets/wind_layer.dart';
 
@@ -45,6 +47,9 @@ class Nav3DView extends StatefulWidget {
   // layer under the route. No value tags in this view.
   final bool windOn, windGusts;
   final List<List<ll.LatLng>>? Function()? landWays;
+  // Height (px) of the app's bottom panels. The map's credit "i" button is lifted by this much
+  // so it sits just above the panels instead of on top of them.
+  final double bottomInset;
   const Nav3DView({
     super.key,
     required this.styleUrl,
@@ -58,6 +63,7 @@ class Nav3DView extends StatefulWidget {
     this.windOn = false,
     this.windGusts = true,
     this.landWays,
+    this.bottomInset = 0,
   });
 
   @override
@@ -82,6 +88,39 @@ class _Nav3DViewState extends State<Nav3DView> {
   String _windShown = ''; // what is on the map now: grid time | wind-or-gust | land loaded
   int _windSeq = 0;
   String? _windLayerId, _windSourceId;
+
+  // The map's own on-page controls. maplibre_gl's web build cannot set the credit button's
+  // margins ("setAttributionButtonMargins not available in web" in its source), so the corner
+  // box that holds it is nudged up directly, and the credit text — which MapLibre opens by
+  // default on a narrow screen — is closed once so only the "i" shows. Tapping the "i" still
+  // opens it. The credit itself must stay: it is the map data's licence condition.
+  bool _creditClosed = false;
+  Timer? _tidyTimer;
+  void _tidyMapControls() {
+    try {
+      final corners = web.document.querySelectorAll('.maplibregl-ctrl-bottom-left');
+      for (var i = 0; i < corners.length; i++) {
+        final el = corners.item(i) as web.Element?;
+        el?.setAttribute('style', 'margin-bottom: ${widget.bottomInset.round()}px');
+      }
+      if (_creditClosed) return;
+      final credits = web.document.querySelectorAll('.maplibregl-ctrl-attrib');
+      for (var i = 0; i < credits.length; i++) {
+        final el = credits.item(i) as web.Element?;
+        final cls = el?.getAttribute('class') ?? '';
+        if (el == null || !cls.contains('maplibregl-compact-show')) continue;
+        el.setAttribute('class', cls.replaceAll('maplibregl-compact-show', '').trim());
+        el.removeAttribute('open');
+        _creditClosed = true;
+      }
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _tidyTimer?.cancel();
+    super.dispose();
+  }
 
   // MapLibre takes a complete style, not a flutter_map TileLayer. The selected
   // basemap needs a matching raster style while the navigation view is mounted.
@@ -124,6 +163,7 @@ class _Nav3DViewState extends State<Nav3DView> {
   @override
   void didUpdateWidget(covariant Nav3DView old) {
     super.didUpdateWidget(old);
+    if (old.bottomInset != widget.bottomInset || !_creditClosed) _tidyMapControls();
     if (_ready) _syncMap();
   }
 
@@ -149,6 +189,10 @@ class _Nav3DViewState extends State<Nav3DView> {
     _windLayerId = null;
     _windSourceId = null;
     _windShown = '';
+    _tidyMapControls();
+    // the credit box is filled in a moment after the style loads — tidy once more then
+    _tidyTimer?.cancel();
+    _tidyTimer = Timer(const Duration(milliseconds: 900), () { if (mounted) _tidyMapControls(); });
     _ready = true;
     await _syncMap();
   }
@@ -379,6 +423,11 @@ class _Nav3DViewState extends State<Nav3DView> {
         bearing: widget.headingDeg,
         tilt: 60,
       ),
+      // No compass box: this view always turns the map to the boat's heading, so the button did
+      // nothing useful and sat on top of the Map/Chart/Sat/Dark switcher.
+      compassEnabled: false,
+      // Credit "i" bottom-left, lifted above the app's panels by _tidyMapControls().
+      attributionButtonPosition: AttributionButtonPosition.bottomLeft,
       onMapCreated: _onMapCreated,
       onStyleLoadedCallback: _onStyleLoaded,
       onCameraIdle: _syncWind,

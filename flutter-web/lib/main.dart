@@ -2002,6 +2002,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               waypoints: _waypoints,
               windOn: _windLayerOn, windGusts: _windLayerGusts,
               landWays: () => _land?.ways,
+              bottomInset: _bottomPanelsH + 16,
             )
           else
           // The map itself, wrapped in a Transform that tilts to ~45° during active nav (matches the
