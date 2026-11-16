@@ -15,6 +15,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -42,6 +43,8 @@ class Nav3DView extends StatefulWidget {
   final bool follow;
   final List<Nav3DRouteSegment> routeSegments;
   final List<ll.LatLng> waypoints;
+  // "4.3 NM • 10 min" per waypoint (same length as waypoints; '' = no bubble, e.g. already passed).
+  final List<String> waypointDetails;
   // Wind & Gusts colour map (same data and colours as WindFieldLayer on the 2D map). Here it
   // is one pre-rendered image with the land already cut out, added to the map as an image
   // layer under the route. No value tags in this view.
@@ -57,6 +60,7 @@ class Nav3DView extends StatefulWidget {
     required this.follow,
     required this.routeSegments,
     required this.waypoints,
+    this.waypointDetails = const [],
     this.windOn = false,
     this.windGusts = true,
     this.landWays,
@@ -73,6 +77,12 @@ class _Nav3DViewState extends State<Nav3DView> {
   Symbol? _boatSymbol;
   final List<Line> _routeAnnotations = [];
   final Map<int, Circle> _waypointCircles = {};
+  // Info bubble above each waypoint: a small picture drawn in code (no map fonts needed) and shown
+  // as a symbol. _labelImages = pictures already added to this style; _labelNow = which one each
+  // waypoint is showing, so it is only swapped when the text actually changes.
+  final Map<int, Symbol> _labelSymbols = {};
+  final Map<int, String> _labelNow = {};
+  final Set<String> _labelImages = {};
   bool _ready = false;
   bool _syncing = false;
   bool _needsSync = false;
@@ -189,6 +199,9 @@ class _Nav3DViewState extends State<Nav3DView> {
     _boatSymbol = null;
     _routeAnnotations.clear();
     _waypointCircles.clear();
+    _labelSymbols.clear();
+    _labelNow.clear();
+    _labelImages.clear();
     // a new style has none of the old layers
     _windLayerId = null;
     _windSourceId = null;
@@ -401,6 +414,8 @@ class _Nav3DViewState extends State<Nav3DView> {
       _waypointCircles.remove(i);
     }
 
+    try { await _syncLabels(controller); } catch (_) {}
+
     // Camera follow — course-up bearing (mirrors the existing flutter_map
     // _controller.rotate(-heading) behavior) with a real pitch instead of the CSS-tilt hack.
     if (!widget.follow) return;
@@ -415,6 +430,62 @@ class _Nav3DViewState extends State<Nav3DView> {
       ),
       duration: const Duration(milliseconds: 400),
     );
+  }
+
+  Future<void> _syncLabels(MapLibreMapController controller) async {
+    for (var i = 0; i < widget.waypoints.length; i++) {
+      final detail = i < widget.waypointDetails.length ? widget.waypointDetails[i] : '';
+      final existing = _labelSymbols[i];
+      if (detail.isEmpty) {
+        if (existing != null) { await controller.removeSymbol(existing); _labelSymbols.remove(i); _labelNow.remove(i); }
+        continue;
+      }
+      final name = 'wp-label-${i + 1}-$detail';
+      if (_labelNow[i] == name && existing != null) continue;
+      if (_labelImages.add(name)) {
+        await controller.addImage(name, await _renderLabel('Waypoint ${i + 1}', detail));
+      }
+      final o = SymbolOptions(
+        geometry: _toMlLatLng(widget.waypoints[i]),
+        iconImage: name, iconSize: 0.5, iconAnchor: 'bottom', iconOffset: const Offset(0, -14),
+      );
+      if (existing == null) { _labelSymbols[i] = await controller.addSymbol(o); }
+      else { await controller.updateSymbol(existing, o); }
+      _labelNow[i] = name;
+    }
+    for (final i in _labelSymbols.keys.where((i) => i >= widget.waypoints.length).toList()) {
+      await controller.removeSymbol(_labelSymbols[i]!);
+      _labelSymbols.remove(i); _labelNow.remove(i);
+    }
+  }
+
+  // Dark glass bubble, cyan rim, little pointer down — drawn at 2x and shown at half size.
+  Future<Uint8List> _renderLabel(String title, String detail) async {
+    const s = 2.0, fill = Color(0xEB081A2C), rim = Color(0xFF3FB8F0);
+    TextPainter tp(String t, double size, FontWeight w) => TextPainter(
+      text: TextSpan(text: t, style: TextStyle(color: Colors.white, fontSize: size * s, fontWeight: w)),
+      textDirection: TextDirection.ltr)..layout();
+    final a = tp(title, 13, FontWeight.w700), b = tp(detail, 12.5, FontWeight.w600);
+    final padX = 10 * s, padY = 6 * s, tail = 7 * s;
+    final w = math.max(a.width, b.width) + padX * 2, bodyH = a.height + b.height + padY * 2;
+    final h = bodyH + tail + 2 * s;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    final body = RRect.fromRectAndRadius(Rect.fromLTWH(1 * s, 1 * s, w - 2 * s, bodyH), Radius.circular(10 * s));
+    final tailPath = ui.Path()
+      ..moveTo(w / 2 - 7 * s, bodyH + 1 * s)..lineTo(w / 2, bodyH + tail + 1 * s)..lineTo(w / 2 + 7 * s, bodyH + 1 * s)..close();
+    c.drawRRect(body, Paint()..color = fill);
+    c.drawPath(tailPath, Paint()..color = fill);
+    final stroke = Paint()..color = rim..style = PaintingStyle.stroke..strokeWidth = 1.3 * s;
+    c.drawRRect(body, stroke);
+    c.drawPath(ui.Path()..moveTo(w / 2 - 7 * s, bodyH + 1 * s)..lineTo(w / 2, bodyH + tail + 1 * s)..lineTo(w / 2 + 7 * s, bodyH + 1 * s), stroke);
+    // cover the rim line where the pointer joins the body
+    c.drawLine(Offset(w / 2 - 6 * s, bodyH + 1 * s), Offset(w / 2 + 6 * s, bodyH + 1 * s), Paint()..color = fill..strokeWidth = 2 * s);
+    a.paint(c, Offset(padX, padY));
+    b.paint(c, Offset(padX, padY + a.height));
+    final img = await rec.endRecording().toImage(w.ceil(), h.ceil());
+    final data = await img.toByteData(format: ui.ImageByteFormat.png);
+    return data!.buffer.asUint8List();
   }
 
   @override

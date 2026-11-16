@@ -2053,6 +2053,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               follow: _follow,
               routeSegments: route3DSegments,
               waypoints: _waypoints,
+              // bubble text per waypoint ('' = passed, no bubble) — same numbers as the 2D map
+              waypointDetails: [for (var i = 0; i < _waypoints.length; i++) _wpLabelDetail(i)],
               windOn: _windLayerOn, windGusts: _windLayerGusts,
               landWays: () => _land?.ways,
             )
