@@ -5388,6 +5388,16 @@ class _TidesSheetState extends State<TidesSheet> {
     } catch (_) { return null; }
   }
 
+  DateTime? _probe;   // time under the finger while dragging the tide chart; null = at "Now"
+  void _probeAt(double dx, double width, DateTime t0, DateTime t1) {
+    const mL = 30.0, mR = 10.0;
+    final plotW = width - mL - mR;
+    if (plotW <= 0) return;
+    final f = ((dx - mL) / plotW).clamp(0.0, 1.0).toDouble();
+    final ms = (t1.difference(t0).inMilliseconds * f).round();
+    setState(() => _probe = t0.add(Duration(milliseconds: ms)));
+  }
+
   void _setUnit(String u) {
     setState(() => _unit = u);
     widget.onUnitChanged?.call(u);
@@ -5430,9 +5440,17 @@ class _TidesSheetState extends State<TidesSheet> {
             // Clamp range bumped slightly (was 165-280) to give the now-larger chart
             // annotations room without distorting the real 360:220 ratio above.
             height: (box.maxWidth * 220 / 360).clamp(175.0, 300.0).toDouble(),
-            child: CustomPaint(painter: _TidePainter(
+            // Drag along the chart to read the tide at another time; letting go snaps back to now.
+            // Plot margins here mirror _TidePainter's mL=30 / mR=10.
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (d) => _probeAt(d.localPosition.dx, box.maxWidth, t0, t1),
+              onHorizontalDragUpdate: (d) => _probeAt(d.localPosition.dx, box.maxWidth, t0, t1),
+              onHorizontalDragEnd: (_) => setState(() => _probe = null),
+              onHorizontalDragCancel: () => setState(() => _probe = null),
+              child: CustomPaint(painter: _TidePainter(
               curve: windowCurve, hilo: windowHilo,
-              t0: t0, t1: t1, now: now,
+              t0: t0, t1: t1, now: now, probe: _probe,
               sunrises: [widget.sunrise, widget.tomorrowSunrise].whereType<DateTime>().toList(),
               sunsets: [widget.sunset, widget.tomorrowSunset].whereType<DateTime>().toList(),
               sunriseImg: _sunrise, sunsetImg: _sunset, oceanImg: _ocean,
@@ -5441,7 +5459,7 @@ class _TidesSheetState extends State<TidesSheet> {
               // widget scales under system text-scaling automatically, but canvas-drawn text
               // doesn't unless the scale factor is read here and threaded through explicitly.
               textScale: MediaQuery.textScalerOf(context).scale(1.0),
-            )),
+            ))),
           )),
           const SizedBox(height: 10),
           _hiLoCards(nextFour),
@@ -5590,8 +5608,9 @@ class _TidePainter extends CustomPainter {
   final ui.Image? sunriseImg, sunsetImg, oceanImg;
   final String unit;
   final double textScale;
+  final DateTime? probe;   // time under the finger while dragging; null = show "Now"
   _TidePainter({required this.curve, required this.hilo, required this.t0, required this.t1, required this.now,
-    required this.sunrises, required this.sunsets,
+    this.probe, required this.sunrises, required this.sunsets,
     this.sunriseImg, this.sunsetImg, this.oceanImg, required this.unit, required this.textScale});
 
   double _u(double v) => unit == 'm' ? v * 0.3048 : v;
@@ -5742,15 +5761,28 @@ class _TidePainter extends CustomPainter {
     }
 
     // 8) Now indicator — dashed vertical + circle + pill (only if now is inside window).
-    if (!now.isBefore(t0) && !now.isAfter(t1)) {
-      final nx = x(now).clamp(mL + 8, mL + plotW - 8);
-      // find sample nearest now
-      _TideSample nearest = curve.first;
-      var bestDt = curve.first.t.difference(now).abs();
-      for (final s in curve) {
-        final dt = s.t.difference(now).abs();
-        if (dt < bestDt) { bestDt = dt; nearest = s; }
+    // While the finger is dragging (probe != null) this SAME single marker follows the finger and
+    // reads that time instead of "Now"; on release probe goes back to null and it snaps to now.
+    // One marker only, so nothing is left behind on the chart.
+    final markT = probe ?? now;
+    if (!markT.isBefore(t0) && !markT.isAfter(t1)) {
+      final nx = x(markT).clamp(mL + 8, mL + plotW - 8);
+      // Interpolate the curve at the marker time (samples are every 30 min).
+      var markV = curve.first.v;
+      for (int i = 0; i < curve.length; i++) {
+        if (!curve[i].t.isBefore(markT)) {
+          if (i == 0) { markV = curve[0].v; }
+          else {
+            final a = curve[i - 1], b = curve[i];
+            final span = b.t.difference(a.t).inMilliseconds;
+            final f = span <= 0 ? 0.0 : markT.difference(a.t).inMilliseconds / span;
+            markV = a.v + (b.v - a.v) * f;
+          }
+          break;
+        }
+        markV = curve[i].v;
       }
+      final nearest = _TideSample(markT, markV);
       final ny = y(nearest.v);
       // dashed vertical line
       final dash = Paint()..color = const Color(0xFFD7EFFF).withOpacity(.7)..strokeWidth = 1;
@@ -5768,7 +5800,8 @@ class _TidePainter extends CustomPainter {
       // value text was wider than the hardcoded 52-66px pill and drew outside it uncontained).
       const nowSize = 10.0, valSize = 12.5;
       final valueStr = _fv(nearest.v);
-      final nowW = _measureWidth('Now', nowSize, FontWeight.w700);
+      final topStr = probe == null ? 'Now' : _fmtTime(probe!);
+      final nowW = _measureWidth(topStr, nowSize, FontWeight.w700);
       final valW = _measureWidth(valueStr, valSize, FontWeight.w800);
       final pillW = math.max(nowW, valW) + 20;
       final pillH = (nowSize + valSize) * textScale + 18;
@@ -5782,13 +5815,15 @@ class _TidePainter extends CustomPainter {
       canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF1271E7));
       canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF58A7FF)
         ..style = PaintingStyle.stroke..strokeWidth = 1.2);
-      _text(canvas, 'Now', Offset(tipX, tipY - pillH * .22), nowSize, FontWeight.w700, Colors.white, center: true);
+      _text(canvas, topStr, Offset(tipX, tipY - pillH * .22), nowSize, FontWeight.w700, Colors.white, center: true);
       _text(canvas, valueStr, Offset(tipX, tipY + pillH * .22), valSize, FontWeight.w800, Colors.white, center: true);
     }
 
     // 9) Y-axis label and x-tick times.
     _text(canvas, 'Tide Height ($unit)', Offset(mL - 22, mT + plotH / 2), 11, FontWeight.w600, const Color(0xFFCFE3F2), center: true, rotate: -math.pi / 2);
-    var tt = DateTime(t0.year, t0.month, t0.day, t0.hour < 12 ? 0 : 12);
+    // Labels every 6 hours (12 AM, 6 AM, 12 PM, 6 PM) — was every 12 h. 3-hourly would crowd
+    // the ~300px axis, so 6 h; the tickGap check below still drops labels if text-scale needs room.
+    var tt = DateTime(t0.year, t0.month, t0.day, (t0.hour ~/ 6) * 6);
     double? lastTickX;
     // Spacing requirement scales with textScale for the same reason the hi/lo gap above does —
     // a bigger label needs more room before the next one would collide with it.
@@ -5802,7 +5837,7 @@ class _TidePainter extends CustomPainter {
           lastTickX = gx;
         }
       }
-      tt = tt.add(const Duration(hours: 12));
+      tt = tt.add(const Duration(hours: 6));
     }
   }
 
@@ -5840,7 +5875,7 @@ class _TidePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _TidePainter old) => old.curve != curve || old.now != now
+  bool shouldRepaint(covariant _TidePainter old) => old.curve != curve || old.now != now || old.probe != probe
     || old.sunrises.length != sunrises.length || old.sunsets.length != sunsets.length
     || old.unit != unit || old.sunriseImg != sunriseImg || old.sunsetImg != sunsetImg || old.oceanImg != oceanImg
     || old.textScale != textScale;
