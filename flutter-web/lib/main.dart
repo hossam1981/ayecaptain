@@ -1921,6 +1921,28 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     return m / 1852.0;
   }
 
+  // "4.3 NM • 10 min" for the bubble over waypoint [i]: distance from the boat along the route up
+  // to that waypoint, and the time at the same speed _etaMin() uses. Straight legs; when planning
+  // they're scaled so the LAST waypoint matches the route total shown in the panel (which may
+  // follow a smart-routed path around land).
+  String _wpLabelDetail(int i) {
+    final start = _me ?? _homeCenter;
+    final from = _navigating ? _legIdx : 0;
+    if (i < from || i >= _waypoints.length) return '';
+    double m = _haversineM(start, _waypoints[from]);
+    for (int k = from + 1; k <= i; k++) { m += _haversineM(_waypoints[k - 1], _waypoints[k]); }
+    if (!_navigating) {
+      double total = _haversineM(start, _waypoints[0]);
+      for (int k = 1; k < _waypoints.length; k++) { total += _haversineM(_waypoints[k - 1], _waypoints[k]); }
+      final routeM = _routeNm() * 1852.0;
+      if (total > 0 && routeM > 0) m *= routeM / total;
+    }
+    final nm = m / 1852.0;
+    final cruise = _speedKt > 1.5 ? _speedKt : _profile.cruise;
+    final min = cruise > 0 ? (nm / cruise * 60).round() : 0;
+    return '${nm.toStringAsFixed(1)} NM • $min min';
+  }
+
   int _etaMin() {
     final nm = _routeNm();
     if (nm <= 0) return 0;
@@ -2173,6 +2195,20 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       child: Align(alignment: Alignment.bottomCenter,
                         child: _WaypointPin(isDest: i == _waypoints.length - 1,
                           grade: _gradeAt(_waypoints[i]))),
+                    ),
+                  // Info bubble above each waypoint pin ("Waypoint 1 / 4.3 NM • 10 min"): distance
+                  // and ETA from the boat along the route. Separate marker (own box) so the pin
+                  // itself is untouched; waypoints already passed while navigating get no bubble.
+                  for (int i = _navigating ? _legIdx : 0; i < _waypoints.length; i++)
+                    Marker(
+                      point: _waypoints[i],
+                      width: 170, height: 96,
+                      alignment: Alignment.topCenter,   // box bottom sits on the waypoint (see pin above)
+                      rotate: true,
+                      child: IgnorePointer(child: Align(alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: EdgeInsets.only(bottom: (i == _waypoints.length - 1 ? 46.0 : 38.0) + 2),
+                          child: _WaypointLabel(title: 'Waypoint ${i + 1}', detail: _wpLabelDetail(i))))),
                     ),
                   if (_mobPoint != null) ...[
                     // Smoke drifts with live wind, layered beneath the pulsing buoy so the
@@ -3058,6 +3094,42 @@ class _WaypointPin extends StatelessWidget {
       child: CustomPaint(size: Size(w, h),
         painter: _TeardropPinPainter(color: _gradeColors[grade] ?? const Color(0xFFF2A93B))));
   }
+}
+
+// Dark glass bubble with a cyan rim and a small pointer toward the pin below it.
+class _WaypointLabel extends StatelessWidget {
+  final String title, detail;
+  const _WaypointLabel({required this.title, required this.detail});
+  @override
+  Widget build(BuildContext context) {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xEB081A2C),
+          border: Border.all(color: const Color(0xFF3FB8F0), width: 1.3),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: const [BoxShadow(color: Color(0x663FB8F0), blurRadius: 10)]),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, maxLines: 1, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700, height: 1.15)),
+          if (detail.isNotEmpty) Text(detail, maxLines: 1,
+            style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600, height: 1.2)),
+        ])),
+      CustomPaint(size: const Size(14, 7), painter: _BubbleTailPainter()),
+    ]);
+  }
+}
+
+class _BubbleTailPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = ui.Path()..moveTo(0, 0)..lineTo(size.width / 2, size.height)..lineTo(size.width, 0)..close();
+    canvas.drawPath(p, Paint()..color = const Color(0xEB081A2C));
+    canvas.drawPath(ui.Path()..moveTo(0, 0)..lineTo(size.width / 2, size.height)..lineTo(size.width, 0),
+      Paint()..color = const Color(0xFF3FB8F0)..style = PaintingStyle.stroke..strokeWidth = 1.3);
+  }
+  @override
+  bool shouldRepaint(covariant _BubbleTailPainter old) => false;
 }
 
 class _TeardropPinPainter extends CustomPainter {
