@@ -103,7 +103,7 @@ const _esriImageryUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Wo
 const _esriDarkBaseUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
 const _esriDarkRefUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
 String _cartoUrl(String style, String key) =>
-  'https://{s}.basemaps.cartocdn.com/rastertiles/$style/{z}/{x}/{y}.png?key=$key';
+  'https://{s}.basemaps.cartocdn.com/rastertiles/$style/{z}/{x}/{y}{r}.png?key=$key';
 const _cartoSubdomains = ['a', 'b', 'c', 'd'];
 
 // PWA index.html:507-533 — an optional CARTO key gives the cleanest street/place labels on
@@ -111,7 +111,11 @@ const _cartoSubdomains = ['a', 'b', 'c', 'd'];
 // a layered Dark_Gray_Base+Reference pair for Dark — never a broken/watermarked Carto tile).
 // Chart reuses the same base as Map (the NOAA ENC overlay is what makes it "Chart", added by
 // the caller) — it was wrongly pointed at a different OSM tile entirely.
-List<TileLayer> _baseLayers(Basemap b, String cartoKey) {
+// retina: true on high-density phone screens — flutter_map then asks Carto for its sharp "@2x"
+// tiles ({r}), and for Esri (which has no @2x) fetches the next zoom level and shrinks it, so
+// labels and roads are drawn with real pixels instead of a stretched 256px picture.
+List<TileLayer> _baseLayers(Basemap b, String cartoKey, {bool retina = false}) {
+  final rm = retina ? RetinaMode.retina : RetinaMode.disabled;
   final hasKey = cartoKey.trim().isNotEmpty;
   switch (b) {
     case Basemap.map:
@@ -119,17 +123,20 @@ List<TileLayer> _baseLayers(Basemap b, String cartoKey) {
       return [TileLayer(
         urlTemplate: hasKey ? _cartoUrl('voyager', cartoKey) : _esriStreetUrl,
         subdomains: hasKey ? _cartoSubdomains : const [],
+        retinaMode: rm,
         userAgentPackageName: 'net.bayside.flutter')];
     case Basemap.sat:
-      return [TileLayer(urlTemplate: _esriImageryUrl, userAgentPackageName: 'net.bayside.flutter')];
+      return [TileLayer(urlTemplate: _esriImageryUrl, retinaMode: rm, userAgentPackageName: 'net.bayside.flutter')];
     case Basemap.dark:
       if (hasKey) {
         return [TileLayer(urlTemplate: _cartoUrl('dark_all', cartoKey),
-          subdomains: _cartoSubdomains, userAgentPackageName: 'net.bayside.flutter')];
+          subdomains: _cartoSubdomains, retinaMode: rm, userAgentPackageName: 'net.bayside.flutter')];
       }
+      // Esri Dark Gray tiles stop at zoom 16 — maxNativeZoom keeps flutter_map from asking for
+      // 17+ (blank tiles) and stretches the last real level instead.
       return [
-        TileLayer(urlTemplate: _esriDarkBaseUrl, userAgentPackageName: 'net.bayside.flutter'),
-        TileLayer(urlTemplate: _esriDarkRefUrl, userAgentPackageName: 'net.bayside.flutter'),
+        TileLayer(urlTemplate: _esriDarkBaseUrl, retinaMode: rm, maxNativeZoom: 16, userAgentPackageName: 'net.bayside.flutter'),
+        TileLayer(urlTemplate: _esriDarkRefUrl, retinaMode: rm, maxNativeZoom: 16, userAgentPackageName: 'net.bayside.flutter'),
       ];
   }
 }
@@ -2080,7 +2087,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
               ),
               children: [
-                ..._baseLayers(_base, _cartoKey),
+                ..._baseLayers(_base, _cartoKey, retina: MediaQuery.devicePixelRatioOf(context) > 1.0),
                 // Sat has no baked-in labels (unlike the street/dark bases) — PWA always
                 // shows roads + place names over it (index.html:519-521, 544).
                 if (_base == Basemap.sat) ...[
