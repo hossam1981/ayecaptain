@@ -115,7 +115,7 @@ const _cartoSubdomains = ['a', 'b', 'c', 'd'];
 // tiles ({r}), and for Esri (which has no @2x) fetches the next zoom level and shrinks it, so
 // labels and roads are drawn with real pixels instead of a stretched 256px picture.
 List<TileLayer> _baseLayers(Basemap b, String cartoKey, {bool retina = false}) {
-  final rm = retina ? RetinaMode.retina : RetinaMode.disabled;
+  final rm = retina;   // flutter_map 7.x: retinaMode is a plain bool
   final hasKey = cartoKey.trim().isNotEmpty;
   switch (b) {
     case Basemap.map:
